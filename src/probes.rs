@@ -7,12 +7,12 @@ pub struct UProbe {
 
 }
 
-pub trait Probe {
+pub trait Probe<'a> {
     fn new();
     fn name(&self);
 }
 
-impl Probe for KProbe {
+impl Probe<'_> for KProbe {
     fn new() {
         unimplemented!()
     }
@@ -32,7 +32,7 @@ impl KProbe {
     }
 }
 
-impl Probe for UProbe {
+impl Probe<'_> for UProbe {
     fn new() {
         todo!()
     }

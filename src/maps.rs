@@ -1,50 +1,60 @@
 use std::marker::PhantomData;
-
-pub struct Map {
-
-}
+use std::error::Error;
 
 pub struct PerfMap<T> {
-    base: Map,
+    base: Map<T>,
     _t: PhantomData<T>,
 }
 
 pub struct ArrayMap<T> {
-    base: Map,
+    base: Map<T>,
     _t: PhantomData<T>,
 }
 
-impl Map {
+pub struct Map<T> {
+    _t: PhantomData<T>,
+}
 
+pub trait RWMap<T> {
+    fn read() -> Result<T, Box<dyn Error>>;
+    fn write() -> Result<(), Box<dyn Error>>;
 }
 
 impl<T> PerfMap<T> {
+    pub fn new() -> PerfMap<T> {
+    // add the loop-handler as an arg here, have perfmap spin up thread to handle
+    // events?
+    unimplemented!()
+    }
+
     pub fn bind() {
+    unimplemented!()
+    }
+}
+
+impl<T> RWMap<T> for PerfMap<T> {
+    fn read() -> Result<T, Box<dyn Error>> {
         unimplemented!()
     }
 
-    pub fn read() -> T {
-        unimplemented!()
-    }
-
-    pub fn write() {
+    fn write() -> Result<(), Box<dyn Error>>{
         unimplemented!()
     }
 }
 
 impl<T> ArrayMap<T> {
-    pub fn read() -> T {
-        unimplemented!()
-    }
-
-    pub fn write() {
+    pub fn new() -> ArrayMap<T> {
         unimplemented!()
     }
 }
 
-impl Drop for Map {
-    fn drop(&mut self) {
-        todo!()
+impl<T> RWMap<T> for ArrayMap<T> {
+    fn read() -> Result<T, Box<dyn Error>> {
+        unimplemented!()
+    }
+
+    fn write() -> Result<(), Box<dyn Error>> {
+        unimplemented!()
     }
 }
 
