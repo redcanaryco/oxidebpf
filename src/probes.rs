@@ -1,53 +1,45 @@
+use std::os::unix::io::RawFd;
 
 pub struct KProbe {
-
+    fd: RawFd,
 }
 
 pub struct UProbe {
-
-}
-
-pub trait Probe<'a> {
-    fn new();
-    fn name(&self);
-}
-
-impl Probe<'_> for KProbe {
-    fn new() {
-        unimplemented!()
-    }
-
-    fn name(&self) {
-        unimplemented!()
-    }
+    fd: RawFd,
 }
 
 impl KProbe {
-    fn attach_kprobe(&self) {
+    pub fn new() {
         unimplemented!()
     }
 
-    fn detach_kprobe(&self) {
+    pub fn name(&self) {
         unimplemented!()
     }
-}
 
-impl Probe<'_> for UProbe {
-    fn new() {
-        todo!()
+    pub(crate) fn attach_kprobe(&self) {
+        unimplemented!()
     }
 
-    fn name(&self) {
-        todo!()
+    pub(crate) fn detach_kprobe(&self) {
+        unimplemented!()
     }
 }
 
 impl UProbe {
-    fn attach_uprobe(&self) {
+    pub fn new() {
+        todo!()
+    }
+
+    pub fn name(&self) {
+        todo!()
+    }
+
+    pub(crate) fn attach_uprobe(&self) {
         unimplemented!()
     }
 
-    fn detach_uprobe(&self) {
+    pub(crate) fn detach_uprobe(&self) {
         unimplemented!()
     }
 }

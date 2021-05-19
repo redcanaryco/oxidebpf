@@ -1,54 +1,103 @@
-use crate::probes::Probe;
-use crate::maps::Map;
+use crate::probes::{KProbe, UProbe};
+use crate::maps::{Map, RWMap, ProgramMap, PerfMap};
+use std::marker::PhantomData;
+use std::borrow::Borrow;
+use std::rc::Rc;
+use std::os::unix::io::RawFd;
 
 pub mod maps;
 pub mod probes;
+mod bpf;
 
-pub struct Module {
 
+// TODO: this is the public interface, needs docstrings
+
+pub struct ProgramBlueprint {
+    // TODO: ELF parser goes here
 }
 
-// Looks like I'm using Program where cwp-ebpf uses ProgramGroup and ProgramGroup
-// where cwp-ebpf uses ProgramGroupVersion
-pub struct Program<'a, T: Probe<'a>> {
-    group: ProgramGroup<'a, T>,
+pub struct ProgramGroup {
+    // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
+    program_versions: Vec<ProgramVersion>,
 }
 
-pub struct ProgramData {
-
+struct AttachPoint {
+    // TODO: do we need to differentiate AttachPoints? I don't think so.
+    // When the ProgramVersion ends/fails we can just close all the AttachPoints indiscriminately
+    // i.e., successfully loading a program/map adds to attach_points, unsuccesfully loading halts
+    // and rolls back, unless optional in which case it chugs on through
+    // Alternatively: maps and programs close themselves when dropped, and ProgramVersions are
+    // simply loaded and dropped as a set.
+    fd: RawFd,
 }
 
-pub enum Event {
-
+pub struct ProgramVersion {
+    programs: Vec<Program>,
+    maps: Vec<Box<dyn ProgramMap>>,
+    perf_maps: Vec<PerfMap>,
+    attach_points: Vec<AttachPoint>,
 }
 
-pub struct ProgramGroup<'a, T: Probe<'a>> {
-    probes: Vec<T>,
-    map: Vec<&'a str>,
+pub enum Program {
+    KProbe{
+        kprobe: KProbe,
+        optional: bool,
+    },
+    UProbe{
+        uprobe: UProbe,
+        optional: bool,
+    },
 }
 
-impl Module {
-    pub fn parse() -> Module {
+impl ProgramBlueprint {
+    // TODO: ELF parser impl goes here
+    pub fn new() -> ProgramBlueprint {
         unimplemented!()
     }
 }
 
-impl<'a, T: Probe<'a>> Program<'a, T> {
-    // do we want to put the logic for try-load-unload-try here?
-    pub fn new() -> Program<'a, T> {
+impl Program {
+    // TODO: Figure out what's inside Program, load/unload, manage fd, drop, etc
+    pub fn new() -> Program {
         unimplemented!()
     }
 
-    pub fn data() {
+    pub fn data(&self) {
         unimplemented!()
     }
 
-    pub fn data_mut() {
+    pub fn data_mut(&self) {
         unimplemented!()
     }
 
-    pub fn load() {
+    pub fn load(&self) -> RawFd {
+        match self {
+            Program::KProbe{kprobe, ..} => {
+                unimplemented!()
+            },
+            Program::UProbe {uprobe, ..} => {
+                unimplemented!()
+            }
+        };
+    }
+
+    fn get_fd() -> RawFd {
         unimplemented!()
+    }
+}
+
+impl ProgramGroup {
+    // TODO: try-load-fail-try-next logic goes here
+}
+
+impl ProgramVersion {
+    // TODO: try-load-fail-bail logic goes here
+}
+
+impl Drop for ProgramVersion {
+    fn drop(&mut self) {
+        // Detach everything, close remaining attachpoints
+        todo!()
     }
 }
 
