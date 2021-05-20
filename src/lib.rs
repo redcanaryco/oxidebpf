@@ -21,21 +21,10 @@ pub struct ProgramGroup {
     program_versions: Vec<ProgramVersion>,
 }
 
-struct AttachPoint {
-    // TODO: do we need to differentiate AttachPoints? I don't think so.
-    // When the ProgramVersion ends/fails we can just close all the AttachPoints indiscriminately
-    // i.e., successfully loading a program/map adds to attach_points, unsuccesfully loading halts
-    // and rolls back, unless optional in which case it chugs on through
-    // Alternatively: maps and programs close themselves when dropped, and ProgramVersions are
-    // simply loaded and dropped as a set.
-    fd: RawFd,
-}
-
 pub struct ProgramVersion {
-    programs: Vec<Program>,
-    maps: Vec<Box<dyn ProgramMap>>,
-    perf_maps: Vec<PerfMap>,
-    attach_points: Vec<AttachPoint>,
+    programs: Vec<Rc<Program>>,
+    maps: Vec<Rc<Box<dyn ProgramMap>>>,
+    perf_maps: Vec<Rc<PerfMap>>,
 }
 
 pub enum Program {

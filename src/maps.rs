@@ -5,7 +5,8 @@ use std::any::Any;
 
 pub struct PerfMap {
     // TODO: perfmap functions
-    pub fd: RawFd,
+    name: String,
+    fd: RawFd,
 }
 
 pub struct ArrayMap<'a, T: 'a> {
