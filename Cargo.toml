@@ -1,0 +1,12 @@
+[package]
+name = "oxidebpf"
+version = "0.1.0"
+authors = [
+    "rc-grey <carl.petty@redcanary.com>",
+    "bjackson41 <brandon.jackson@redcanary.com>",
+    "RafaelOrtizRC <rafael.ortiz@redcanary.com"
+]
+edition = "2018"
+
+
+[dependencies]
