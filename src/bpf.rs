@@ -2,73 +2,14 @@ use libc::syscall;
 use nix::errno::errno;
 use std::borrow::Borrow;
 use std::error::Error;
-use std::os::raw::{c_int, c_uint, c_ulong};
 use std::os::unix::io::RawFd;
+use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 use syscalls::SYS_bpf;
 use std::mem::MaybeUninit;
-
-pub enum BpfMapType {
-    BPF_MAP_TYPE_UNSPEC = 0, /* Reserve 0 as invalid map type */
-    BPF_MAP_TYPE_HASH = 1,
-    BPF_MAP_TYPE_ARRAY = 2,
-    BPF_MAP_TYPE_PROG_ARRAY = 3,
-    BPF_MAP_TYPE_PERF_EVENT_ARRAY = 4,
-    BPF_MAP_TYPE_PERCPU_HASH = 5,
-    BPF_MAP_TYPE_PERCPU_ARRAY = 6,
-    BPF_MAP_TYPE_STACK_TRACE = 7,
-    BPF_MAP_TYPE_CGROUP_ARRAY = 8,
-    BPF_MAP_TYPE_LRU_HASH = 9,
-    BPF_MAP_TYPE_LRU_PERCPU_HASH = 10,
-    BPF_MAP_TYPE_LPM_TRIE = 11,
-    BPF_MAP_TYPE_ARRAY_OF_MAPS = 12,
-    BPF_MAP_TYPE_HASH_OF_MAPS = 13,
-    BPF_MAP_TYPE_DEVMAP = 14,
-    BPF_MAP_TYPE_SOCKMAP = 15,
-    BPF_MAP_TYPE_CPUMAP = 16,
-}
-use libc::{syscall, SYS_bpf};
 use std::convert::{From, TryFrom};
-use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
-
 use crate::error::*;
 
-// TODO: bpf_attr struct
-// union bpf_attr {
-//     struct {    /* Used by BPF_MAP_CREATE */
-//     __u32         map_type;
-//     __u32         key_size;    /* size of key in bytes */
-//     __u32         value_size;  /* size of value in bytes */
-//     __u32         max_entries; /* maximum number of entries
-//                                                  in a map */
-//     };
-//
-//     struct {    /* Used by BPF_MAP_*_ELEM and BPF_MAP_GET_NEXT_KEY
-//                               commands */
-//     __u32         map_fd;
-//     __aligned_u64 key;
-//     union {
-//     __aligned_u64 value;
-//     __aligned_u64 next_key;
-//     };
-//     __u64         flags;
-//     };
-//
-//     struct {    /* Used by BPF_PROG_LOAD */
-//     __u32         prog_type;
-//     __u32         insn_cnt;
-//     __aligned_u64 insns;      /* 'const struct bpf_insn *' */
-//     __aligned_u64 license;    /* 'const char *' */
-//     __u32         log_level;  /* verbosity level of verifier */
-//     __u32         log_size;   /* size of user buffer */
-//     __aligned_u64 log_buf;    /* user supplied 'char *'
-//                                                 buffer */
-//     __u32         kern_version;
-//     /* checked when prog_type=kprobe
-//        (since Linux 4.1) */
-//     };
-// } __attribute__((aligned(8)));
-
-// TODO: guaranteed alignment crate
+type BpfMapType = u32;
 
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
@@ -220,7 +161,7 @@ impl From<ObjectProgramType> for u32 {
             | ObjectProgramType::Uretprobe => bpf_prog_type::BPF_PROG_TYPE_KPROBE,
             ObjectProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
             ObjectProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
-            ObjectProgramType::Unspec => bpf_map_type::BPF_PROG_TYPE_UNSPEC,
+            ObjectProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
         }
     }
 }
@@ -424,7 +365,7 @@ pub(crate) fn bpf_map_create(
 
 #[cfg(test)]
 mod tests {
-    use crate::bpf::BpfMapType::BPF_MAP_TYPE_ARRAY;
+    use crate::bpf::bpf_map_type::BPF_MAP_TYPE_ARRAY;
     use std::os::raw::c_uint;
     use std::os::unix::io::RawFd;
 

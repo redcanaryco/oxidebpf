@@ -56,7 +56,7 @@ fn get_section_by_name<'a>(elf: &'a Elf, name: &str) -> Option<&'a SectionHeader
 fn get_license(data: &[u8], elf: &Elf) -> String {
     get_section_by_name(elf, "license")
         .map(|sh| CStr::from_bytes_with_nul(get_section_data(data, sh)))
-        .map(|s| s.to_str().unwrap_or_default())
+        .map(|s| s.unwrap_or_default().to_str().unwrap_or_default())
         .map(|s| s.to_string())
         .unwrap_or_default()
 }
@@ -91,21 +91,33 @@ fn program_section_filter(
         return None;
     }
 
-    let mut name_split = get_section_name(elf, sh).to_string().splitn(1, '/');
+    let section_name = match get_section_name(elf, sh) {
+        None => { return None }
+        Some(s) => { s }
+    }.to_string();
+
+    let mut name_split = section_name.splitn(1, '/');
     let first = name_split.next().unwrap_or_default();
+
+    // @TODO: this looks incomplete?
+    None
 }
 
 fn map_section_filter(data: &[u8], elf: &Elf, sh: &SectionHeader) -> Option<MapObject> {
     if sh.sh_type != section_header::SHT_PROGBITS || sh.sh_size == 0 {
         return None;
     }
-    let mut name_split = get_section_name(elf, sh).to_string().splitn(1, '/');
+    let section_name = match get_section_name(elf, sh) {
+        None => { return None }
+        Some(s) => { s }
+    }.to_string();
+    let mut name_split = section_name.splitn(1, '/');
     let first = name_split.next().unwrap_or_default();
 
-    match ObjectMapType::try_from(&first).ok()? {
+    match ObjectMapType::try_from(first).ok()? {
         ObjectMapType::Map => {
             let name = name_split.next().unwrap_or_default().to_string();
-            let definition = BpfMapDef::try_from(get_section_data(data, sh))?;
+            let definition = BpfMapDef::try_from(get_section_data(data, sh)).ok()?;
             Some(MapObject {
                 name,
                 definition,
@@ -148,9 +160,10 @@ impl ProgramBlueprint {
             });
 
         // create program objects
+        // @TODO: double check this license.clone()
         elf.section_headers
             .iter()
-            .filter_map(|sh| program_section_filter(data, &elf, sh, license, version))
+            .filter_map(|sh| program_section_filter(data, &elf, sh, license.clone(), version))
             .for_each(|prog_object| {
                 blueprint.programs.push(prog_object);
             });
