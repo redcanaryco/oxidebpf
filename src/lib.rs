@@ -5,22 +5,15 @@ use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
 
+mod blueprint;
 mod bpf;
+mod error;
 pub mod maps;
 pub mod probes;
-
-/* 21MAY2021
-- BPF syscalls and related working, incl perf_event_open
-- Vagrantfiles for testing locally
-- fill out map details and get loading stubbed
-- tests
-*/
+mod sys;
 
 // TODO: this is the public interface, needs docstrings
-
-pub struct ProgramBlueprint {
-    // TODO: ELF parser goes here
-}
+pub use blueprint::ProgramBlueprint;
 
 pub struct ProgramGroup {
     // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
@@ -36,13 +29,6 @@ pub struct ProgramVersion {
 pub enum Program {
     KProbe { kprobe: KProbe, optional: bool },
     UProbe { uprobe: UProbe, optional: bool },
-}
-
-impl ProgramBlueprint {
-    // TODO: ELF parser impl goes here
-    pub fn new() -> ProgramBlueprint {
-        unimplemented!()
-    }
 }
 
 impl Program {

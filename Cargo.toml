@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 libc = "0.2.94"
+goblin = "0.4.0"
 nix = "0.20.0"
 syscalls = "0.3.3"
 hex = "0.4.3"
