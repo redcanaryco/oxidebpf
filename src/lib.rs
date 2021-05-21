@@ -1,14 +1,20 @@
+use crate::maps::{Map, PerfMap, ProgramMap, RWMap};
 use crate::probes::{KProbe, UProbe};
-use crate::maps::{Map, RWMap, ProgramMap, PerfMap};
-use std::marker::PhantomData;
 use std::borrow::Borrow;
-use std::rc::Rc;
+use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 
+mod bpf;
 pub mod maps;
 pub mod probes;
-mod bpf;
 
+/* 21MAY2021
+- BPF syscalls and related working, incl perf_event_open
+- Vagrantfiles for testing locally
+- fill out map details and get loading stubbed
+- tests
+*/
 
 // TODO: this is the public interface, needs docstrings
 
@@ -28,14 +34,8 @@ pub struct ProgramVersion {
 }
 
 pub enum Program {
-    KProbe{
-        kprobe: KProbe,
-        optional: bool,
-    },
-    UProbe{
-        uprobe: UProbe,
-        optional: bool,
-    },
+    KProbe { kprobe: KProbe, optional: bool },
+    UProbe { uprobe: UProbe, optional: bool },
 }
 
 impl ProgramBlueprint {
@@ -61,10 +61,10 @@ impl Program {
 
     pub fn load(&self) -> RawFd {
         match self {
-            Program::KProbe{kprobe, ..} => {
+            Program::KProbe { kprobe, .. } => {
                 unimplemented!()
-            },
-            Program::UProbe {uprobe, ..} => {
+            }
+            Program::UProbe { uprobe, .. } => {
                 unimplemented!()
             }
         };
@@ -87,13 +87,5 @@ impl Drop for ProgramVersion {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
         todo!()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
     }
 }

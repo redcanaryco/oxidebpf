@@ -1,12 +1,13 @@
-use std::marker::PhantomData;
-use std::error::Error;
-use std::os::unix::io::RawFd;
 use std::any::Any;
+use std::error::Error;
+use std::marker::PhantomData;
+use std::os::unix::io::RawFd;
 
 pub struct PerfMap {
     // TODO: perfmap functions
     name: String,
-    fd: RawFd,
+    ev_fds: Vec<RawFd>,
+    ev_names: Vec<String>,
 }
 
 pub struct ArrayMap<'a, T: 'a> {
