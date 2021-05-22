@@ -2,11 +2,18 @@
 name = "oxidebpf"
 version = "0.1.0"
 authors = [
-    "rc-grey <carl.petty@redcanary.com>",
-    "bjackson41 <brandon.jackson@redcanary.com>",
-    "RafaelOrtizRC <rafael.ortiz@redcanary.com"
+    "Carl Petty <carl.petty@redcanary.com>",
+    "Brandon Jackson <brandon.jackson@redcanary.com>",
+    "Rafael Ortiz <rafael.ortiz@redcanary.com>",
 ]
 edition = "2018"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+libc = "0.2.94"
+goblin = "0.4.0"
+nix = "0.20.0"
+syscalls = "0.3.3"
+hex = "0.4.3"
+
