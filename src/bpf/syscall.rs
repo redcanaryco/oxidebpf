@@ -138,7 +138,7 @@ pub(crate) fn bpf_prog_load(
     prog_type: u32,
     insns: Vec<BpfInsn>,
     license: String,
-) -> Result<(), EbpfSyscallError> {
+) -> Result<RawFd, EbpfSyscallError> {
     let insn_cnt = insns.len();
     let insns = Box::new(insns);
     let license = match CString::new(license.as_bytes()) {
@@ -160,8 +160,8 @@ pub(crate) fn bpf_prog_load(
     });
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
-        sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
-        Ok(())
+        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
+        Ok(fd as RawFd)
     }
 }
 
