@@ -9,8 +9,14 @@ use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 use std::os::unix::io::RawFd;
 use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
-use crate::bpf::{constant::perf_ioctls, BpfAttr, KeyVal, MapConfig, MapElem, PerfEventAttr};
+use crate::bpf::constant::bpf_cmd::{
+    BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
+};
+use crate::bpf::{
+    constant::perf_ioctls, BpfAttr, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
+};
 use crate::error::*;
+use std::ffi::{CStr, CString};
 
 type BpfMapType = u32;
 
@@ -120,7 +126,7 @@ ioctl_none!(
     perf_ioctls::PERF_EVENT_IOC_MAGIC,
     perf_ioctls::PERF_EVENT_IOC_DISABLE
 );
-fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
+pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
     match unsafe { u_perf_event_ioc_disable(perf_fd) } {
         Ok(i) => Ok(i),
         Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
@@ -128,8 +134,35 @@ fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
 }
 
 // syscall( BPF_PROG_LOAD )
-fn bpf_prog_load() {
-    unimplemented!()
+pub(crate) fn bpf_prog_load(
+    prog_type: u32,
+    insns: Vec<BpfInsn>,
+    license: String,
+) -> Result<(), EbpfSyscallError> {
+    let insn_cnt = insns.len();
+    let insns = Box::new(insns);
+    let license = match CString::new(license.as_bytes()) {
+        Ok(s) => s,
+        Err(e) => return Err(EbpfSyscallError::CStringConversionError(e)),
+    };
+    let mut bpf_prog_load = BpfProgLoad {
+        prog_type,
+        insn_cnt: insn_cnt as u32,
+        insns: insns.as_ref() as *const _ as u64,
+        license: &license as *const _ as u64,
+        log_level: 0,
+        log_size: 0,
+        log_buf: 0,
+    };
+
+    let mut bpf_attr = Box::new(BpfAttr {
+        BpfProgLoad: bpf_prog_load,
+    });
+    let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
+    unsafe {
+        sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
+        Ok(())
+    }
 }
 
 /// Caller is responsible for ensuring T is the correct type for this map
@@ -146,7 +179,7 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Ebpf
     let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
-        sys_bpf(1, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
         Ok(buf.assume_init())
     }
 }
@@ -167,7 +200,7 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
-        sys_bpf(2, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
     }
     Ok(())
 }
@@ -190,7 +223,7 @@ pub(crate) fn bpf_map_create(
     let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
     unsafe {
-        let fd = sys_bpf(0, bpf_attr, bpf_attr_size)?;
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
         Ok(fd as RawFd)
     }
 }
@@ -220,6 +253,9 @@ mod tests {
             }
             EbpfSyscallError::PerfIoctlError(e) => {
                 panic!("perf IOCTL error: {:?}", e);
+            }
+            EbpfSyscallError::CStringConversionError(e) => {
+                panic!("could not convert string: {:?}", e)
             }
         }
     }
@@ -348,6 +384,11 @@ mod tests {
 
     #[test]
     fn test_perf_event_ioc_disable() {
+        todo!()
+    }
+
+    #[test]
+    fn test_bpf_prog_load() {
         todo!()
     }
 }

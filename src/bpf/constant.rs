@@ -63,7 +63,20 @@ pub(crate) mod bpf_map_type {
     pub const BPF_MAP_TYPE_DEVMAP_HASH: u32 = 25;
 }
 
+pub(crate) mod bpf_cmd {
+    #![allow(unused)]
+    pub const BPF_MAP_CREATE: u32 = 0;
+    pub const BPF_MAP_LOOKUP_ELEM: u32 = 1;
+    pub const BPF_MAP_UPDATE_ELEM: u32 = 2;
+    pub const BPF_MAP_DELETE_ELEM: u32 = 3;
+    pub const BPF_MAP_GET_NEXT_KEY: u32 = 4;
+    pub const BPF_PROG_LOAD: u32 = 5;
+    pub const BPF_OBJ_PIN: u32 = 6;
+    pub const BPF_OBJ_GET: u32 = 7;
+}
+
 pub(crate) mod perf_ioctls {
+    #![allow(unused)]
     pub const PERF_EVENT_IOC_MAGIC: u8 = b'$';
     /// _IO ('$', 0)
     pub const PERF_EVENT_IOC_ENABLE: u8 = 0;
