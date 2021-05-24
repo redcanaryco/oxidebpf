@@ -1,3 +1,4 @@
+use libc::pid_t;
 use libc::syscall;
 use nix::errno::errno;
 use std::borrow::Borrow;
@@ -6,10 +7,10 @@ use std::error::Error;
 use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 use std::os::unix::io::RawFd;
-use syscalls::SYS_bpf;
+use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
+use crate::bpf::{BpfAttr, KeyVal, MapConfig, MapElem, PerfEventAttr};
 use crate::error::*;
-use crate::bpf::{MapElem, KeyVal, BpfAttr, MapConfig};
 
 type BpfMapType = u32;
 
@@ -23,7 +24,11 @@ type BpfMapType = u32;
 // make a system call, the caller might need to handle architecture-
 // dependent details; this requirement is most commonly encountered
 // on certain 32-bit architectures.
-unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, i32> {
+unsafe fn sys_bpf(
+    cmd: u32,
+    bpf_attr: Box<BpfAttr>,
+    size: usize,
+) -> Result<usize, EbpfSyscallError> {
     let ret = syscall(
         (SYS_bpf as i32).into(),
         cmd,
@@ -31,7 +36,7 @@ unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize
         size,
     );
     if ret < 0 {
-        return Err(errno());
+        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
 }
@@ -44,13 +49,24 @@ unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize
 // The official way of knowing if perf_event_open() support is
 // enabled is checking for the existence of the file
 // /proc/sys/kernel/perf_event_paranoid.
-fn perf_event_open() {
+fn perf_event_open(
+    attr: PerfEventAttr,
+    pid: pid_t,
+    cpu: i32,
+    group_fd: RawFd,
+    flags: c_ulong,
+) -> Result<usize, i32> {
+    // TODO: check /proc/sys/kernel/perf_event_paranoid exists
     unimplemented!()
 }
 
 // setns
-fn setns() {
-    unimplemented!()
+fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
+    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
+    if ret < 0 {
+        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
+    }
+    Ok(ret as usize)
 }
 
 // ioctl( PERF_EVENT_IOC_SET_BPF )
@@ -74,7 +90,7 @@ fn bpf_prog_load() {
 }
 
 /// Caller is responsible for ensuring T is the correct type for this map
-pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, i32> {
+pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, EbpfSyscallError> {
     let mut buf = MaybeUninit::zeroed();
     let mut map_elem = MapElem {
         map_fd: map_fd as u32,
@@ -92,14 +108,18 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, i32>
     }
 }
 
-pub(crate) fn bpf_map_update_elem<K, V>(map_fd: RawFd, key: K, val: V) -> Result<(), i32> {
+pub(crate) fn bpf_map_update_elem<K, V>(
+    map_fd: RawFd,
+    key: K,
+    val: V,
+) -> Result<(), EbpfSyscallError> {
     let mut map_elem = MapElem {
         map_fd: map_fd as u32,
         key: &key as *const K as u64,
         keyval: KeyVal {
             value: &val as *const V as u64,
         },
-        flags: 0
+        flags: 0,
     };
     let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
@@ -114,7 +134,7 @@ pub(crate) fn bpf_map_create(
     key_size: c_uint,
     value_size: c_uint,
     max_entries: u32,
-) -> Result<RawFd, i32> {
+) -> Result<RawFd, EbpfSyscallError> {
     let mut map_config = MapConfig {
         map_type: map_type as u32,
         key_size: key_size,
@@ -129,5 +149,83 @@ pub(crate) fn bpf_map_create(
     unsafe {
         let fd = sys_bpf(0, bpf_attr, bpf_attr_size)?;
         Ok(fd as RawFd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::raw::c_uint;
+    use std::os::unix::io::RawFd;
+
+    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
+    use crate::bpf::syscall::bpf_map_lookup_elem;
+    use crate::error::EbpfSyscallError;
+    use nix::errno::Errno;
+
+    fn bpf_panic_error(err: EbpfSyscallError) {
+        match err {
+            EbpfSyscallError::LinuxError(e) => {
+                panic!("code: {:?}", (e as Errno).to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn bpf_map_create() {
+        match crate::bpf::syscall::bpf_map_create(
+            BPF_MAP_TYPE_ARRAY,
+            std::mem::size_of::<u32>() as c_uint,
+            std::mem::size_of::<u32>() as c_uint,
+            20,
+        ) {
+            Err(e) => bpf_panic_error(e),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn bpf_map_create_and_read() {
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
+            BPF_MAP_TYPE_ARRAY,
+            std::mem::size_of::<u32>() as c_uint,
+            std::mem::size_of::<u32>() as c_uint,
+            20,
+        )
+        .unwrap();
+
+        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
+            Ok(val) => {
+                assert_eq!(val, 0);
+            }
+            Err(e) => bpf_panic_error(e),
+        }
+    }
+
+    #[test]
+    fn bpf_map_create_and_write_and_read() {
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
+            BPF_MAP_TYPE_ARRAY,
+            std::mem::size_of::<u32>() as c_uint,
+            std::mem::size_of::<u32>() as c_uint,
+            20,
+        )
+        .unwrap();
+
+        match crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50) {
+            Ok(_) => {}
+            Err(e) => bpf_panic_error(e),
+        };
+
+        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
+            Ok(val) => {
+                assert_eq!(val, 50);
+            }
+            Err(e) => bpf_panic_error(e),
+        }
+    }
+
+    #[test]
+    fn test_setns() {
+        todo!()
     }
 }
