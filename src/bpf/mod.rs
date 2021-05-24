@@ -6,7 +6,51 @@ use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 pub(crate) mod constant;
 pub(crate) mod syscall;
 
-struct PerfEventAttr {}
+#[repr(C)]
+union PerfSample {
+    sample_period: c_ulong,
+    sample_freq: c_ulong,
+}
+
+#[repr(C)]
+union PerfWakeup {
+    wakeup_events: c_uint,
+    wakeup_watermark: c_uint,
+}
+
+#[repr(C)]
+union PerfBpAddr {
+    bp_addr: c_ulong,
+    config1: c_ulong,
+}
+
+#[repr(C)]
+union PerfBpLen {
+    bp_len: c_ulong,
+    config2: c_ulong,
+}
+
+#[repr(C)]
+struct PerfEventAttr {
+    p_type: c_uint,
+    size: c_uint,
+    config: c_ulong,
+    sample_union: PerfSample,
+    sample_type: c_ulong,
+    read_format: c_ulong,
+    flags: c_ulong,
+    wakeup_union: PerfWakeup,
+    bp_type: c_uint,
+    bp_addr_union: PerfBpAddr,
+    bp_len_union: PerfBpLen,
+    branch_sample_type: c_ulong, // enum perf_branch_sample_type
+    sample_regs_user: c_ulong,
+    sample_stack_user: c_uint,
+    clockid: c_int,
+    sample_regs_intr: c_ulong,
+    aux_watermark: c_uint,
+    __reserved_2: c_uint, // align to __u64 (manually?) consider align(8)
+}
 
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]

@@ -55,9 +55,24 @@ fn perf_event_open(
     cpu: i32,
     group_fd: RawFd,
     flags: c_ulong,
-) -> Result<usize, i32> {
-    // TODO: check /proc/sys/kernel/perf_event_paranoid exists
-    unimplemented!()
+) -> Result<usize, EbpfSyscallError> {
+    if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
+        return Err(EbpfSyscallError::PerfEventDoesNotExist);
+    }
+    let ret = unsafe {
+        syscall(
+            (SYS_perf_event_open as i32).into(),
+            attr,
+            pid,
+            cpu,
+            group_fd,
+            flags,
+        )
+    };
+    if ret < 0 {
+        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
+    }
+    Ok(ret as usize)
 }
 
 // setns
@@ -158,14 +173,22 @@ mod tests {
     use std::os::unix::io::RawFd;
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-    use crate::bpf::syscall::bpf_map_lookup_elem;
+    use crate::bpf::syscall::{bpf_map_lookup_elem, perf_event_open};
+    use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::EbpfSyscallError;
     use nix::errno::Errno;
 
     fn bpf_panic_error(err: EbpfSyscallError) {
         match err {
             EbpfSyscallError::LinuxError(e) => {
-                panic!("code: {:?}", (e as Errno).to_string());
+                panic!(
+                    "System error [{:?}]: {:?}",
+                    (e as Errno),
+                    (e as Errno).to_string()
+                );
+            }
+            EbpfSyscallError::PerfEventDoesNotExist => {
+                panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system")
             }
         }
     }
@@ -185,47 +208,99 @@ mod tests {
 
     #[test]
     fn bpf_map_create_and_read() {
-        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = match crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        )
-        .unwrap();
+        ) {
+            Ok(fd) => fd,
+            Err(e) => {
+                bpf_panic_error(e);
+                panic!()
+            }
+        };
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
             Ok(val) => {
                 assert_eq!(val, 0);
             }
-            Err(e) => bpf_panic_error(e),
+            Err(e) => {
+                bpf_panic_error(e);
+                panic!()
+            }
         }
     }
 
     #[test]
     fn bpf_map_create_and_write_and_read() {
-        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = match crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        )
-        .unwrap();
+        ) {
+            Ok(fd) => fd,
+            Err(e) => {
+                bpf_panic_error(e);
+                panic!()
+            }
+        };
 
         match crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50) {
             Ok(_) => {}
-            Err(e) => bpf_panic_error(e),
+            Err(e) => {
+                bpf_panic_error(e);
+                panic!()
+            }
         };
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
             Ok(val) => {
                 assert_eq!(val, 50);
             }
-            Err(e) => bpf_panic_error(e),
+            Err(e) => {
+                bpf_panic_error(e);
+                panic!()
+            }
         }
     }
 
     #[test]
     fn test_setns() {
         todo!()
+    }
+
+    #[test]
+    fn test_perf_event_open() {
+        match perf_event_open(
+            PerfEventAttr {
+                p_type: 0,
+                size: 0,
+                config: 0,
+                sample_union: PerfSample { sample_freq: 0 },
+                sample_type: 0,
+                read_format: 0,
+                flags: 0,
+                wakeup_union: PerfWakeup { wakeup_events: 0 },
+                bp_type: 0,
+                bp_addr_union: PerfBpAddr { bp_addr: 0 },
+                bp_len_union: PerfBpLen { bp_len: 0 },
+                branch_sample_type: 0,
+                sample_regs_user: 0,
+                sample_stack_user: 0,
+                clockid: 0,
+                sample_regs_intr: 0,
+                aux_watermark: 0,
+                __reserved_2: 0,
+            },
+            0,
+            0,
+            0,
+            0,
+        ) {
+            Ok(_) => {}
+            Err(e) => bpf_panic_error(e),
+        }
     }
 }

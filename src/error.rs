@@ -11,4 +11,5 @@ pub enum EbpfParserError {
 #[derive(Debug, PartialEq, Clone)]
 pub enum EbpfSyscallError {
     LinuxError(Errno),
+    PerfEventDoesNotExist,
 }
