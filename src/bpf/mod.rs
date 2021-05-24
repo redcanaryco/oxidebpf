@@ -1,5 +1,5 @@
 use crate::bpf::constant::bpf_prog_type;
-use crate::error::EbpfParserError;
+use crate::error::OxidebpfError;
 use std::convert::TryFrom;
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
@@ -101,13 +101,13 @@ union BpfAttr {
 pub(crate) struct BpfCode(pub Vec<BpfInsn>);
 
 impl TryFrom<&[u8]> for BpfCode {
-    type Error = EbpfParserError;
+    type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         println!("{} {}", raw.len(), std::mem::size_of::<BpfInsn>());
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
-            return Err(EbpfParserError::InvalidElf);
+            return Err(OxidebpfError::InvalidElf);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
         for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
@@ -129,10 +129,10 @@ pub(crate) struct BpfInsn {
 }
 
 impl TryFrom<&[u8]> for BpfInsn {
-    type Error = EbpfParserError;
+    type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(EbpfParserError::InvalidElf);
+            return Err(OxidebpfError::InvalidElf);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }
@@ -152,10 +152,10 @@ pub(crate) struct BpfMapDef {
 }
 
 impl TryFrom<&[u8]> for BpfMapDef {
-    type Error = EbpfParserError;
+    type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfMapDef>() {
-            return Err(EbpfParserError::InvalidElf);
+            return Err(OxidebpfError::InvalidElf);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }

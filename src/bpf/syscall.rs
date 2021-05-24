@@ -18,12 +18,8 @@ use std::ffi::CString;
 
 type BpfMapType = u32;
 
-/// Performs `bpf()` syscalls and returns a formatted `EbpfSyscallError`
-unsafe fn sys_bpf(
-    cmd: u32,
-    bpf_attr: Box<BpfAttr>,
-    size: usize,
-) -> Result<usize, EbpfSyscallError> {
+/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`
+unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, OxidebpfError> {
     // https://man7.org/linux/man-pages/man2/syscall.2.html
     // Architecture-specific requirements
     // Each architecture ABI has its own requirements on how system call
@@ -42,7 +38,7 @@ unsafe fn sys_bpf(
         size,
     );
     if ret < 0 {
-        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
 }
@@ -54,10 +50,10 @@ pub(crate) fn perf_event_open(
     cpu: i32,
     group_fd: RawFd,
     flags: c_ulong,
-) -> Result<RawFd, EbpfSyscallError> {
+) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
-        return Err(EbpfSyscallError::PerfEventDoesNotExist);
+        return Err(OxidebpfError::PerfEventDoesNotExist);
     }
     let ret = unsafe {
         syscall(
@@ -70,17 +66,17 @@ pub(crate) fn perf_event_open(
         )
     };
     if ret < 0 {
-        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as RawFd)
 }
 
 /// Calls the `setns` syscall on the given `fd` with the given `nstype`.
-pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
+pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
-        return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
 }
@@ -93,7 +89,7 @@ ioctl_write_int!(
 );
 
 /// Safe wrapper around `u_perf_event_ioc_set_bpf()`
-pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, EbpfSyscallError> {
+pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let data_unwrapped = match data.try_into() {
         Ok(d) => d,
@@ -101,7 +97,7 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, E
     };
     unsafe {
         u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped)
-            .map_err(|e| EbpfSyscallError::PerfIoctlError(e))
+            .map_err(|e| OxidebpfError::PerfIoctlError(e))
     }
 }
 
@@ -113,8 +109,8 @@ ioctl_none!(
 );
 
 /// Safe wrapper around `u_perf_event_ioc_enable()`
-pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
-    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| EbpfSyscallError::PerfIoctlError(e)) }
+pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
+    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
 // unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
@@ -125,8 +121,8 @@ ioctl_none!(
 );
 
 /// Safe wrapper around `u_perf_event_ioc_disable()`
-pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
-    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| EbpfSyscallError::PerfIoctlError(e)) }
+pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
+    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
@@ -135,11 +131,11 @@ pub(crate) fn bpf_prog_load(
     prog_type: u32,
     insns: Vec<BpfInsn>,
     license: String,
-) -> Result<RawFd, EbpfSyscallError> {
+) -> Result<RawFd, OxidebpfError> {
     let insn_cnt = insns.len();
     let insns = Box::new(insns);
-    let license = CString::new(license.as_bytes())
-        .map_err(|e| EbpfSyscallError::CStringConversionError(e))?;
+    let license =
+        CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -161,7 +157,7 @@ pub(crate) fn bpf_prog_load(
 /// Look up an element of type `V` with key of type `K` from a given map. Specific behavior depends
 /// on the type of map.
 /// Caller is responsible for ensuring K and V are the correct types for this map.
-pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, EbpfSyscallError> {
+pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, OxidebpfError> {
     let mut buf = MaybeUninit::zeroed();
     let map_elem = MapElem {
         map_fd: map_fd as u32,
@@ -185,7 +181,7 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     map_fd: RawFd,
     key: K,
     val: V,
-) -> Result<(), EbpfSyscallError> {
+) -> Result<(), OxidebpfError> {
     let map_elem = MapElem {
         map_fd: map_fd as u32,
         key: &key as *const K as u64,
@@ -210,7 +206,7 @@ pub(crate) fn bpf_map_create(
     key_size: c_uint,
     value_size: c_uint,
     max_entries: u32,
-) -> Result<RawFd, EbpfSyscallError> {
+) -> Result<RawFd, OxidebpfError> {
     let map_config = MapConfig {
         map_type: map_type as u32,
         key_size,
@@ -238,27 +234,28 @@ mod tests {
         bpf_map_lookup_elem, bpf_prog_load, perf_event_ioc_set_bpf, perf_event_open,
     };
     use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
-    use crate::error::EbpfSyscallError;
+    use crate::error::OxidebpfError;
     use nix::errno::Errno;
 
-    fn bpf_panic_error(err: EbpfSyscallError) {
+    fn bpf_panic_error(err: OxidebpfError) {
         match err {
-            EbpfSyscallError::LinuxError(e) => {
+            OxidebpfError::LinuxError(e) => {
                 panic!(
                     "System error [{:?}]: {:?}",
                     (e as Errno),
                     (e as Errno).to_string()
                 );
             }
-            EbpfSyscallError::PerfEventDoesNotExist => {
+            OxidebpfError::PerfEventDoesNotExist => {
                 panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system");
             }
-            EbpfSyscallError::PerfIoctlError(e) => {
+            OxidebpfError::PerfIoctlError(e) => {
                 panic!("perf IOCTL error: {:?}", e);
             }
-            EbpfSyscallError::CStringConversionError(e) => {
+            OxidebpfError::CStringConversionError(e) => {
                 panic!("could not convert string: {:?}", e)
             }
+            _ => {}
         }
     }
 
@@ -270,7 +267,8 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e));
+        .map_err(|e| bpf_panic_error(e))
+        .unwrap();
     }
 
     #[test]
@@ -281,7 +279,8 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e));
+        .map_err(|e| bpf_panic_error(e))
+        .unwrap();
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
             Ok(val) => {
@@ -302,10 +301,12 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e));
+        .map_err(|e| bpf_panic_error(e))
+        .unwrap();
 
         crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50)
-            .map_err(|e| bpf_panic_error(e));
+            .map_err(|e| bpf_panic_error(e))
+            .unwrap();
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
             Ok(val) => {

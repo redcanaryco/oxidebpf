@@ -14,7 +14,7 @@ pub(crate) struct ProgramBlueprint {
 }
 
 impl ProgramBlueprint {
-    pub fn new(data: &[u8]) -> Result<Self, EbpfObjectError> {
+    pub fn new(data: &[u8]) -> Result<Self, OxidebpfError> {
         let elf: Elf = parse_and_verify_elf(data)?;
         let mut blueprint = Self::default();
 
@@ -45,7 +45,7 @@ impl EbpfObject {
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
-    ) -> Result<Vec<Self>, EbpfObjectError> {
+    ) -> Result<Vec<Self>, OxidebpfError> {
         let section_name = get_section_name(&elf, sh).unwrap_or_default();
         let mut name_split = section_name.splitn(2, '/');
         let prefix = name_split.next().unwrap_or_default();
@@ -66,7 +66,7 @@ impl EbpfObject {
                 ProgramObject::from_section(ProgramType::Uretprobe, name, data, elf, sh_index, sh)?
             }
             _ => {
-                return Err(EbpfObjectError::UnknownObject(format!(
+                return Err(OxidebpfError::UnknownObject(format!(
                     "{}",
                     section_name.to_string()
                 )))
@@ -94,7 +94,7 @@ impl ProgramObject {
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
-    ) -> Result<Vec<EbpfObject>, EbpfObjectError> {
+    ) -> Result<Vec<EbpfObject>, OxidebpfError> {
         let code = BpfCode::try_from(get_section_data(data, sh))?;
         Ok(vec![EbpfObject::Program(ProgramObject {
             kind,
@@ -115,7 +115,7 @@ impl ProgramObject {
     }
 
     /// Performs relocation fixups given an array of loaded maps.
-    pub(crate) fn apply_relocations(&self, maps: &[MapObject]) -> Result<(), EbpfObjectError> {
+    pub(crate) fn apply_relocations(&self, maps: &[MapObject]) -> Result<(), OxidebpfError> {
         //@TODO
         Ok(())
     }
@@ -125,12 +125,12 @@ impl ProgramObject {
 pub(crate) struct BpfCode(pub Vec<BpfInsn>);
 
 impl TryFrom<&[u8]> for BpfCode {
-    type Error = EbpfObjectError;
+    type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
-            return Err(EbpfObjectError::InvalidElf);
+            return Err(OxidebpfError::InvalidElf);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
         for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
@@ -154,10 +154,7 @@ pub(crate) struct Reloc {
 
 impl Reloc {
     /// Retrieve the section relocations for a given program section index
-    fn get_relocs_for_program(
-        program_index: usize,
-        elf: &Elf,
-    ) -> Result<Vec<Self>, EbpfObjectError> {
+    fn get_relocs_for_program(program_index: usize, elf: &Elf) -> Result<Vec<Self>, OxidebpfError> {
         // find the relocation index
         let reloc_index = elf
             .section_headers
@@ -179,7 +176,7 @@ impl Reloc {
             .iter()
             .find(|(index, relocs)| *index == reloc_index.unwrap())
             .map(|(index, relocs)| relocs)
-            .ok_or(EbpfObjectError::InvalidElf)?;
+            .ok_or(OxidebpfError::InvalidElf)?;
 
         Ok(reloc_section
             .iter()
@@ -209,7 +206,7 @@ impl MapObject {
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
-    ) -> Result<Vec<EbpfObject>, EbpfObjectError> {
+    ) -> Result<Vec<EbpfObject>, OxidebpfError> {
         let symbol_name = elf
             .syms
             .iter()
@@ -235,10 +232,10 @@ pub(crate) struct BpfMapDef {
 }
 
 impl TryFrom<&[u8]> for BpfMapDef {
-    type Error = EbpfObjectError;
+    type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfMapDef>() {
-            return Err(EbpfObjectError::InvalidElf);
+            return Err(OxidebpfError::InvalidElf);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }
@@ -294,12 +291,12 @@ fn get_symbol_name(elf: &Elf, sym_index: usize) -> Option<String> {
     })
 }
 
-fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, EbpfObjectError> {
-    let elf = Elf::parse(data).map_err(|_e| EbpfObjectError::InvalidElf)?;
+fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
+    let elf = Elf::parse(data).map_err(|_e| OxidebpfError::InvalidElf)?;
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
-        _val => return Err(EbpfObjectError::InvalidElfMachine),
+        _val => return Err(OxidebpfError::InvalidElfMachine),
     }
 
     Ok(elf)
