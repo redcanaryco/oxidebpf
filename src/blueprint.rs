@@ -92,9 +92,10 @@ fn program_section_filter(
     }
 
     let section_name = match get_section_name(elf, sh) {
-        None => { return None }
-        Some(s) => { s }
-    }.to_string();
+        None => return None,
+        Some(s) => s,
+    }
+    .to_string();
 
     let mut name_split = section_name.splitn(1, '/');
     let first = name_split.next().unwrap_or_default();
@@ -108,9 +109,10 @@ fn map_section_filter(data: &[u8], elf: &Elf, sh: &SectionHeader) -> Option<MapO
         return None;
     }
     let section_name = match get_section_name(elf, sh) {
-        None => { return None }
-        Some(s) => { s }
-    }.to_string();
+        None => return None,
+        Some(s) => s,
+    }
+    .to_string();
     let mut name_split = section_name.splitn(1, '/');
     let first = name_split.next().unwrap_or_default();
 

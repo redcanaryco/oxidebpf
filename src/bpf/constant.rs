@@ -1,4 +1,3 @@
-
 pub(crate) mod bpf_prog_type {
     #![allow(unused)]
     pub const BPF_PROG_TYPE_UNSPEC: u32 = 0;

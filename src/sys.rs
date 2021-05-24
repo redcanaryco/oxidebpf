@@ -8,7 +8,5 @@ pub fn get_kernel_version() -> u32 {
         release.replace_range(extra_idx.., "");
     }
     let mut split = release.split('.').flat_map(str::parse);
-    (split.next().unwrap_or(0) << 16)
-        + (split.next().unwrap_or(0) << 8)
-        + split.next().unwrap_or(0)
+    (split.next().unwrap_or(0) << 16) + (split.next().unwrap_or(0) << 8) + split.next().unwrap_or(0)
 }
