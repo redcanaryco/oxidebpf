@@ -51,18 +51,18 @@ impl EbpfObject {
         let name = name_split.next();
 
         Ok(match (prefix, name) {
-            ("maps", Some(name)) => MapObject::from_section(data, elf, sh_index, sh)?,
+            ("maps", Some(name)) => MapObject::from_section(name, data, elf, sh_index, sh)?,
             ("kprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Kprobe, data, elf, sh_index, sh)?
+                ProgramObject::from_section(ProgramType::Kprobe, name, data, elf, sh_index, sh)?
             }
             ("kretprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Kretprobe, data, elf, sh_index, sh)?
+                ProgramObject::from_section(ProgramType::Kretprobe, name, data, elf, sh_index, sh)?
             }
             ("uprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Uprobe, data, elf, sh_index, sh)?
+                ProgramObject::from_section(ProgramType::Uprobe, name, data, elf, sh_index, sh)?
             }
             ("uretprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Uretprobe, data, elf, sh_index, sh)?
+                ProgramObject::from_section(ProgramType::Uretprobe, name, data, elf, sh_index, sh)?
             }
             _ => return Err(EbpfObjectError::UnknownObject(format!("{}", section_name))),
         })
@@ -83,6 +83,7 @@ pub(crate) struct ProgramObject {
 impl ProgramObject {
     fn from_section<'a>(
         kind: ProgramType,
+        name: &str,
         data: &'a [u8],
         elf: &'a Elf,
         sh_index: usize,
@@ -91,7 +92,7 @@ impl ProgramObject {
         let code = BpfCode::try_from(get_section_data(data, sh))?;
         Ok(vec![EbpfObject::Program(ProgramObject {
             kind,
-            name: String::new(),
+            name: name.to_string(),
             code,
             relocations: Reloc::get_relocs_for_program(sh_index, &elf)?,
             license: get_license(data, elf),
@@ -209,19 +210,19 @@ impl Reloc {
 pub(crate) struct MapObject {
     pub definition: BpfMapDef,
     /// The name of the map
-    pub map_name: String,
+    pub name: String,
     /// The symbol name of the map
     pub symbol_name: String,
 }
 
 impl MapObject {
     fn from_section<'a>(
+        name: &str,
         data: &'a [u8],
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
     ) -> Result<Vec<EbpfObject>, EbpfObjectError> {
-        let section_name = get_section_name(elf, sh).unwrap_or_default();
         let symbol_name = elf
             .syms
             .iter()
@@ -229,7 +230,7 @@ impl MapObject {
             .map(|sym| get_symbol_name(elf, sym.st_name).unwrap_or_default());
         Ok(vec![EbpfObject::Map(MapObject {
             definition: BpfMapDef::try_from(get_section_data(data, sh))?,
-            map_name: section_name.to_string(),
+            name: name.to_string(),
             symbol_name: symbol_name.unwrap_or_default(),
         })])
     }
