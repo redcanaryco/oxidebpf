@@ -34,6 +34,7 @@ unsafe fn sys_bpf(
     // make a system call, the caller might need to handle architecture-
     // dependent details; this requirement is most commonly encountered
     // on certain 32-bit architectures.
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let ret = syscall(
         (SYS_bpf as i32).into(),
         cmd,
@@ -54,6 +55,7 @@ pub(crate) fn perf_event_open(
     group_fd: RawFd,
     flags: c_ulong,
 ) -> Result<RawFd, EbpfSyscallError> {
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
     if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
         return Err(EbpfSyscallError::PerfEventDoesNotExist);
     }
@@ -75,6 +77,7 @@ pub(crate) fn perf_event_open(
 
 /// Calls the `setns` syscall on the given `fd` with the given `nstype`.
 pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
         return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
@@ -91,6 +94,7 @@ ioctl_write_int!(
 
 /// Safe wrapper around `u_perf_event_ioc_set_bpf()`
 pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, EbpfSyscallError> {
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let data_unwrapped = match data.try_into() {
         Ok(d) => d,
         Err(_e) => 0, // Should be infallible
@@ -154,9 +158,7 @@ pub(crate) fn bpf_prog_load(
         log_buf: 0,
     };
 
-    let bpf_attr = Box::new(BpfAttr {
-        bpf_prog_load: bpf_prog_load,
-    });
+    let bpf_attr = Box::new(BpfAttr { bpf_prog_load });
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
         let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
@@ -177,7 +179,7 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Ebpf
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem: map_elem });
+    let bpf_attr = Box::new(BpfAttr { map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
@@ -200,7 +202,7 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem: map_elem });
+    let bpf_attr = Box::new(BpfAttr { map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
@@ -219,13 +221,11 @@ pub(crate) fn bpf_map_create(
 ) -> Result<RawFd, EbpfSyscallError> {
     let map_config = MapConfig {
         map_type: map_type as u32,
-        key_size: key_size,
-        value_size: value_size,
-        max_entries: max_entries,
+        key_size,
+        value_size,
+        max_entries,
     };
-    let bpf_attr = Box::new(BpfAttr {
-        map_config: map_config,
-    });
+    let bpf_attr = Box::new(BpfAttr { map_config });
     let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
     unsafe {

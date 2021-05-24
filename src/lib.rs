@@ -20,7 +20,7 @@ pub struct ProgramGroup {
 
 pub struct ProgramVersion {
     programs: Vec<Rc<Program>>,
-    maps: Vec<Rc<Box<dyn ProgramMap>>>,
+    maps: Vec<Rc<dyn ProgramMap>>,
     perf_maps: Vec<Rc<PerfMap>>,
 }
 

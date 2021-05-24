@@ -65,7 +65,12 @@ impl EbpfObject {
             ("uretprobe", Some(name)) => {
                 ProgramObject::from_section(ProgramType::Uretprobe, name, data, elf, sh_index, sh)?
             }
-            _ => return Err(EbpfObjectError::UnknownObject(format!("{}", section_name))),
+            _ => {
+                return Err(EbpfObjectError::UnknownObject(format!(
+                    "{}",
+                    section_name.to_string()
+                )))
+            }
         })
     }
 }
