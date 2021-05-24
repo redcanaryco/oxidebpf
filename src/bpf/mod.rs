@@ -82,7 +82,7 @@ struct MapElem {
 struct BpfProgLoad {
     prog_type: c_uint,
     insn_cnt: c_uint,
-    insns: c_ulong,   // const struct bpf_insn
+    insns: c_ulong,   // Vec<BpfInsn> -  const struct bpf_insn
     license: c_ulong, // const char *
     log_level: c_uint,
     log_size: c_uint,
@@ -120,7 +120,7 @@ impl TryFrom<&[u8]> for BpfCode {
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct BpfInsn {
     pub code: c_uchar,
     pub regs: c_uchar,
@@ -161,27 +161,6 @@ impl TryFrom<&[u8]> for BpfMapDef {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub(crate) enum ObjectMapType {
-    Unspec,
-    Map,
-    Data,
-    Bss,
-    RoData,
-}
-
-impl From<&str> for ObjectMapType {
-    fn from(value: &str) -> Self {
-        match value {
-            ".bss" => ObjectMapType::Bss,
-            ".data" => ObjectMapType::Data,
-            ".rodata" => ObjectMapType::RoData,
-            "maps" => ObjectMapType::Map,
-            _ => ObjectMapType::Unspec,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProgramType {
     Unspec,
@@ -203,20 +182,6 @@ impl From<ProgramType> for u32 {
             ProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
             ProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
             ProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
-        }
-    }
-}
-
-impl From<&str> for ProgramType {
-    fn from(value: &str) -> Self {
-        match value {
-            "kprobe" => ProgramType::Kprobe,
-            "kretprobe" => ProgramType::Kretprobe,
-            "uprobe" => ProgramType::Uprobe,
-            "uretprobe" => ProgramType::Uretprobe,
-            "tracepoint" => ProgramType::Tracepoint,
-            "rawtracepoint" => ProgramType::RawTracepoint,
-            _ => ProgramType::Unspec,
         }
     }
 }

@@ -136,25 +136,6 @@ impl TryFrom<&[u8]> for BpfCode {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub(crate) struct BpfInsn {
-    pub code: u8,
-    pub regs: u8,
-    pub off: i16,
-    pub imm: i32,
-}
-
-impl TryFrom<&[u8]> for BpfInsn {
-    type Error = EbpfObjectError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(EbpfObjectError::InvalidElf);
-        }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct Reloc {
     /// Symbol name for the relocation.
