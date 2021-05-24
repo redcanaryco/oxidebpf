@@ -99,9 +99,9 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, E
         Ok(d) => d,
         Err(_e) => 0, // Should be infallible
     };
-    match unsafe { u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped) } {
-        Ok(i) => Ok(i),
-        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
+    unsafe {
+        u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped)
+            .map_err(|e| EbpfSyscallError::PerfIoctlError(e))
     }
 }
 
@@ -114,10 +114,7 @@ ioctl_none!(
 
 /// Safe wrapper around `u_perf_event_ioc_enable()`
 pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
-    match unsafe { u_perf_event_ioc_enable(perf_fd) } {
-        Ok(i) => Ok(i),
-        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
-    }
+    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| EbpfSyscallError::PerfIoctlError(e)) }
 }
 
 // unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
@@ -129,10 +126,7 @@ ioctl_none!(
 
 /// Safe wrapper around `u_perf_event_ioc_disable()`
 pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
-    match unsafe { u_perf_event_ioc_disable(perf_fd) } {
-        Ok(i) => Ok(i),
-        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
-    }
+    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| EbpfSyscallError::PerfIoctlError(e)) }
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
@@ -144,10 +138,8 @@ pub(crate) fn bpf_prog_load(
 ) -> Result<RawFd, EbpfSyscallError> {
     let insn_cnt = insns.len();
     let insns = Box::new(insns);
-    let license = match CString::new(license.as_bytes()) {
-        Ok(s) => s,
-        Err(e) => return Err(EbpfSyscallError::CStringConversionError(e)),
-    };
+    let license = CString::new(license.as_bytes())
+        .map_err(|e| EbpfSyscallError::CStringConversionError(e))?;
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -272,31 +264,24 @@ mod tests {
 
     #[test]
     fn bpf_map_create() {
-        match crate::bpf::syscall::bpf_map_create(
+        crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        ) {
-            Err(e) => bpf_panic_error(e),
-            _ => {}
-        }
+        )
+        .map_err(|e| bpf_panic_error(e));
     }
 
     #[test]
     fn bpf_map_create_and_read() {
-        let fd: RawFd = match crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        ) {
-            Ok(fd) => fd,
-            Err(e) => {
-                bpf_panic_error(e);
-                panic!()
-            }
-        };
+        )
+        .map_err(|e| bpf_panic_error(e));
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
             Ok(val) => {
@@ -311,26 +296,16 @@ mod tests {
 
     #[test]
     fn bpf_map_create_and_write_and_read() {
-        let fd: RawFd = match crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        ) {
-            Ok(fd) => fd,
-            Err(e) => {
-                bpf_panic_error(e);
-                panic!()
-            }
-        };
+        )
+        .map_err(|e| bpf_panic_error(e));
 
-        match crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50) {
-            Ok(_) => {}
-            Err(e) => {
-                bpf_panic_error(e);
-                panic!()
-            }
-        };
+        crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50)
+            .map_err(|e| bpf_panic_error(e));
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
             Ok(val) => {
