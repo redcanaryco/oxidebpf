@@ -92,9 +92,9 @@ struct BpfProgLoad {
 
 #[repr(align(8), C)]
 union BpfAttr {
-    MapConfig: MapConfig,
-    MapElem: MapElem,
-    BpfProgLoad: BpfProgLoad,
+    map_config: MapConfig,
+    map_elem: MapElem,
+    bpf_prog_load: BpfProgLoad,
 }
 
 #[derive(Clone)]

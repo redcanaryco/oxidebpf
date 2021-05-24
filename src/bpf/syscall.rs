@@ -1,11 +1,9 @@
 use libc::{pid_t, syscall};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
-use std::borrow::Borrow;
-use std::convert::{From, TryFrom, TryInto};
-use std::error::Error;
-use std::mem::{uninitialized, MaybeUninit};
-use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
+use std::convert::TryInto;
+use std::mem::MaybeUninit;
+use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
 use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
@@ -16,25 +14,26 @@ use crate::bpf::{
     constant::perf_ioctls, BpfAttr, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
 };
 use crate::error::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 type BpfMapType = u32;
 
-// https://man7.org/linux/man-pages/man2/syscall.2.html
-// Architecture-specific requirements
-// Each architecture ABI has its own requirements on how system call
-// arguments are passed to the kernel.  For system calls that have a
-// glibc wrapper (e.g., most system calls), glibc handles the
-// details of copying arguments to the right registers in a manner
-// suitable for the architecture.  However, when using syscall() to
-// make a system call, the caller might need to handle architecture-
-// dependent details; this requirement is most commonly encountered
-// on certain 32-bit architectures.
+/// Performs `bpf()` syscalls and returns a formatted `EbpfSyscallError`
 unsafe fn sys_bpf(
     cmd: u32,
     bpf_attr: Box<BpfAttr>,
     size: usize,
 ) -> Result<usize, EbpfSyscallError> {
+    // https://man7.org/linux/man-pages/man2/syscall.2.html
+    // Architecture-specific requirements
+    // Each architecture ABI has its own requirements on how system call
+    // arguments are passed to the kernel.  For system calls that have a
+    // glibc wrapper (e.g., most system calls), glibc handles the
+    // details of copying arguments to the right registers in a manner
+    // suitable for the architecture.  However, when using syscall() to
+    // make a system call, the caller might need to handle architecture-
+    // dependent details; this requirement is most commonly encountered
+    // on certain 32-bit architectures.
     let ret = syscall(
         (SYS_bpf as i32).into(),
         cmd,
@@ -47,14 +46,7 @@ unsafe fn sys_bpf(
     Ok(ret as usize)
 }
 
-// perf_event_open
-// https://man7.org/linux/man-pages/man2/perf_event_open.2.html
-// Glibc does not provide a wrapper for this system call; call it
-// using syscall(2).  See the example below.
-//
-// The official way of knowing if perf_event_open() support is
-// enabled is checking for the existence of the file
-// /proc/sys/kernel/perf_event_paranoid.
+/// Checks if `perf_event_open()` is supported and if so, calls the syscall.
 pub(crate) fn perf_event_open(
     attr: PerfEventAttr,
     pid: pid_t,
@@ -81,7 +73,7 @@ pub(crate) fn perf_event_open(
     Ok(ret as RawFd)
 }
 
-// setns
+/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
 pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
@@ -90,16 +82,18 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
     Ok(ret as usize)
 }
 
-// ioctl( PERF_EVENT_IOC_SET_BPF )
+// unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
     u_perf_event_ioc_set_bpf,
     perf_ioctls::PERF_EVENT_IOC_MAGIC,
     perf_ioctls::PERF_EVENT_IOC_SET_BPF
 );
+
+/// Safe wrapper around `u_perf_event_ioc_set_bpf()`
 pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, EbpfSyscallError> {
     let data_unwrapped = match data.try_into() {
         Ok(d) => d,
-        Err(e) => 0, // Should be infallible
+        Err(_e) => 0, // Should be infallible
     };
     match unsafe { u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped) } {
         Ok(i) => Ok(i),
@@ -107,12 +101,14 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, E
     }
 }
 
-// ioctl( PERF_EVENT_IOC_ENABLE )
+// unsafe `ioctl( PERF_EVENT_IOC_ENABLE )` function
 ioctl_none!(
     u_perf_event_ioc_enable,
     perf_ioctls::PERF_EVENT_IOC_MAGIC,
     perf_ioctls::PERF_EVENT_IOC_ENABLE
 );
+
+/// Safe wrapper around `u_perf_event_ioc_enable()`
 pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
     match unsafe { u_perf_event_ioc_enable(perf_fd) } {
         Ok(i) => Ok(i),
@@ -120,12 +116,14 @@ pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, EbpfSyscallEr
     }
 }
 
-// ioctl( PERF_EVENT_IOC_DISABLE )
+// unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
 ioctl_none!(
     u_perf_event_ioc_disable,
     perf_ioctls::PERF_EVENT_IOC_MAGIC,
     perf_ioctls::PERF_EVENT_IOC_DISABLE
 );
+
+/// Safe wrapper around `u_perf_event_ioc_disable()`
 pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
     match unsafe { u_perf_event_ioc_disable(perf_fd) } {
         Ok(i) => Ok(i),
@@ -133,7 +131,8 @@ pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallE
     }
 }
 
-// syscall( BPF_PROG_LOAD )
+/// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
+/// License should (almost) always be GPL.
 pub(crate) fn bpf_prog_load(
     prog_type: u32,
     insns: Vec<BpfInsn>,
@@ -145,7 +144,7 @@ pub(crate) fn bpf_prog_load(
         Ok(s) => s,
         Err(e) => return Err(EbpfSyscallError::CStringConversionError(e)),
     };
-    let mut bpf_prog_load = BpfProgLoad {
+    let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
         insns: insns.as_ref() as *const _ as u64,
@@ -155,8 +154,8 @@ pub(crate) fn bpf_prog_load(
         log_buf: 0,
     };
 
-    let mut bpf_attr = Box::new(BpfAttr {
-        BpfProgLoad: bpf_prog_load,
+    let bpf_attr = Box::new(BpfAttr {
+        bpf_prog_load: bpf_prog_load,
     });
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
@@ -165,10 +164,12 @@ pub(crate) fn bpf_prog_load(
     }
 }
 
-/// Caller is responsible for ensuring T is the correct type for this map
+/// Look up an element of type `V` with key of type `K` from a given map. Specific behavior depends
+/// on the type of map.
+/// Caller is responsible for ensuring K and V are the correct types for this map.
 pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, EbpfSyscallError> {
     let mut buf = MaybeUninit::zeroed();
-    let mut map_elem = MapElem {
+    let map_elem = MapElem {
         map_fd: map_fd as u32,
         key: &key as *const K as u64,
         keyval: KeyVal {
@@ -176,7 +177,7 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Ebpf
         },
         flags: 0,
     };
-    let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
+    let bpf_attr = Box::new(BpfAttr { map_elem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
@@ -184,12 +185,14 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Ebpf
     }
 }
 
+/// Update an element of type `V` with key of type `K` in a given map. Specific behavior depends on
+/// the type of map.
 pub(crate) fn bpf_map_update_elem<K, V>(
     map_fd: RawFd,
     key: K,
     val: V,
 ) -> Result<(), EbpfSyscallError> {
-    let mut map_elem = MapElem {
+    let map_elem = MapElem {
         map_fd: map_fd as u32,
         key: &key as *const K as u64,
         keyval: KeyVal {
@@ -197,7 +200,7 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
+    let bpf_attr = Box::new(BpfAttr { map_elem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
@@ -205,20 +208,23 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     Ok(())
 }
 
+/// Create a map of the given type with given key size, value size, and number of entires.
+/// The sizes should be the size of key type and value type in bytes, which can be determined
+/// with `std::mem::size_of::<T>()` where `T` is the type of the key or value.
 pub(crate) fn bpf_map_create(
     map_type: BpfMapType,
     key_size: c_uint,
     value_size: c_uint,
     max_entries: u32,
 ) -> Result<RawFd, EbpfSyscallError> {
-    let mut map_config = MapConfig {
+    let map_config = MapConfig {
         map_type: map_type as u32,
         key_size: key_size,
         value_size: value_size,
         max_entries: max_entries,
     };
-    let mut bpf_attr = Box::new(BpfAttr {
-        MapConfig: map_config,
+    let bpf_attr = Box::new(BpfAttr {
+        map_config: map_config,
     });
     let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
@@ -229,13 +235,17 @@ pub(crate) fn bpf_map_create(
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use std::os::raw::c_uint;
     use std::os::unix::io::RawFd;
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-    use crate::bpf::syscall::{bpf_map_lookup_elem, perf_event_ioc_set_bpf, perf_event_open};
-    use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
+    use crate::bpf::syscall::{
+        bpf_map_lookup_elem, bpf_prog_load, perf_event_ioc_set_bpf, perf_event_open,
+    };
+    use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::EbpfSyscallError;
     use nix::errno::Errno;
 
@@ -340,6 +350,7 @@ mod tests {
 
     #[test]
     fn test_perf_event_open() {
+        #![allow(unreachable_code)]
         todo!();
         match perf_event_open(
             PerfEventAttr {
@@ -374,6 +385,7 @@ mod tests {
 
     #[test]
     fn test_perf_event_ioc_set_bpf() {
+        #![allow(unreachable_code)]
         todo!();
         let perf_fd: RawFd = 0;
         match perf_event_ioc_set_bpf(perf_fd, 0) {
@@ -389,6 +401,21 @@ mod tests {
 
     #[test]
     fn test_bpf_prog_load() {
-        todo!()
+        #![allow(unreachable_code)]
+        // fails currently, EINVAL
+        todo!();
+        match bpf_prog_load(
+            BPF_PROG_TYPE_KPROBE,
+            vec![BpfInsn {
+                code: 0,
+                regs: 0,
+                off: 0,
+                imm: 0,
+            }],
+            "GPL".to_string(),
+        ) {
+            Ok(_fd) => {}
+            Err(e) => bpf_panic_error(e),
+        };
     }
 }

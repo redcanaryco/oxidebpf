@@ -1,3 +1,4 @@
+#![allow(unused_variables)] // @TODO: remove this
 use goblin::elf::{header, section_header, Elf, SectionHeader};
 use std::convert::TryFrom;
 use std::ffi::CStr;
@@ -293,7 +294,7 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, EbpfObjectError> {
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
-        val => return Err(EbpfObjectError::InvalidElfMachine),
+        _val => return Err(EbpfObjectError::InvalidElfMachine),
     }
 
     Ok(elf)
