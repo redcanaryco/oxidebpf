@@ -1,3 +1,4 @@
+#![allow(unused_variables)] // @TODO: remove this
 use goblin::elf::{header, section_header, Elf, SectionHeader};
 use std::convert::TryFrom;
 use std::ffi::CStr;
@@ -64,7 +65,12 @@ impl EbpfObject {
             ("uretprobe", Some(name)) => {
                 ProgramObject::from_section(ProgramType::Uretprobe, name, data, elf, sh_index, sh)?
             }
-            _ => return Err(EbpfObjectError::UnknownObject(format!("{}", section_name))),
+            _ => {
+                return Err(EbpfObjectError::UnknownObject(format!(
+                    "{}",
+                    section_name.to_string()
+                )))
+            }
         })
     }
 }
@@ -133,25 +139,6 @@ impl TryFrom<&[u8]> for BpfCode {
             )?);
         }
         Ok(BpfCode(instructions))
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub(crate) struct BpfInsn {
-    pub code: u8,
-    pub regs: u8,
-    pub off: i16,
-    pub imm: i32,
-}
-
-impl TryFrom<&[u8]> for BpfInsn {
-    type Error = EbpfObjectError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(EbpfObjectError::InvalidElf);
-        }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }
 }
 
@@ -312,7 +299,7 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, EbpfObjectError> {
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
-        val => return Err(EbpfObjectError::InvalidElfMachine),
+        _val => return Err(EbpfObjectError::InvalidElfMachine),
     }
 
     Ok(elf)

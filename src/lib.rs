@@ -1,7 +1,6 @@
-use crate::maps::{Map, PerfMap, ProgramMap, RWMap};
+#![allow(dead_code)]
+use crate::maps::{PerfMap, ProgramMap};
 use crate::probes::{KProbe, UProbe};
-use std::borrow::Borrow;
-use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
 
@@ -21,7 +20,7 @@ pub struct ProgramGroup {
 
 pub struct ProgramVersion {
     programs: Vec<Rc<Program>>,
-    maps: Vec<Rc<Box<dyn ProgramMap>>>,
+    maps: Vec<Rc<dyn ProgramMap>>,
     perf_maps: Vec<Rc<PerfMap>>,
 }
 
@@ -45,6 +44,7 @@ impl Program {
     }
 
     pub fn load(&self) -> RawFd {
+        #![allow(unused_variables)]
         match self {
             Program::KProbe { kprobe, .. } => {
                 unimplemented!()

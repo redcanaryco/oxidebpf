@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::error::Error;
 use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
