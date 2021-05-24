@@ -1,15 +1,15 @@
-use libc::pid_t;
-use libc::syscall;
+use libc::{pid_t, syscall};
 use nix::errno::errno;
+use nix::{ioctl_none, ioctl_write_int};
 use std::borrow::Borrow;
-use std::convert::{From, TryFrom};
+use std::convert::{From, TryFrom, TryInto};
 use std::error::Error;
-use std::mem::MaybeUninit;
+use std::mem::{uninitialized, MaybeUninit};
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 use std::os::unix::io::RawFd;
 use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
-use crate::bpf::{BpfAttr, KeyVal, MapConfig, MapElem, PerfEventAttr};
+use crate::bpf::{constant::perf_ioctls, BpfAttr, KeyVal, MapConfig, MapElem, PerfEventAttr};
 use crate::error::*;
 
 type BpfMapType = u32;
@@ -49,13 +49,13 @@ unsafe fn sys_bpf(
 // The official way of knowing if perf_event_open() support is
 // enabled is checking for the existence of the file
 // /proc/sys/kernel/perf_event_paranoid.
-fn perf_event_open(
+pub(crate) fn perf_event_open(
     attr: PerfEventAttr,
     pid: pid_t,
     cpu: i32,
     group_fd: RawFd,
     flags: c_ulong,
-) -> Result<usize, EbpfSyscallError> {
+) -> Result<RawFd, EbpfSyscallError> {
     if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
         return Err(EbpfSyscallError::PerfEventDoesNotExist);
     }
@@ -72,11 +72,11 @@ fn perf_event_open(
     if ret < 0 {
         return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
     }
-    Ok(ret as usize)
+    Ok(ret as RawFd)
 }
 
 // setns
-fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
+pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
         return Err(EbpfSyscallError::LinuxError(nix::errno::from_i32(errno())));
@@ -85,18 +85,46 @@ fn setns(fd: RawFd, nstype: i32) -> Result<usize, EbpfSyscallError> {
 }
 
 // ioctl( PERF_EVENT_IOC_SET_BPF )
-fn perf_event_ioc_set_bpf() {
-    unimplemented!()
+ioctl_write_int!(
+    u_perf_event_ioc_set_bpf,
+    perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    perf_ioctls::PERF_EVENT_IOC_SET_BPF
+);
+pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, EbpfSyscallError> {
+    let data_unwrapped = match data.try_into() {
+        Ok(d) => d,
+        Err(e) => 0, // Should be infallible
+    };
+    match unsafe { u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped) } {
+        Ok(i) => Ok(i),
+        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
+    }
 }
 
 // ioctl( PERF_EVENT_IOC_ENABLE )
-fn perf_event_ioc_enable() {
-    unimplemented!()
+ioctl_none!(
+    u_perf_event_ioc_enable,
+    perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    perf_ioctls::PERF_EVENT_IOC_ENABLE
+);
+pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
+    match unsafe { u_perf_event_ioc_enable(perf_fd) } {
+        Ok(i) => Ok(i),
+        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
+    }
 }
 
 // ioctl( PERF_EVENT_IOC_DISABLE )
-fn perf_event_ioc_disable() {
-    unimplemented!()
+ioctl_none!(
+    u_perf_event_ioc_disable,
+    perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    perf_ioctls::PERF_EVENT_IOC_DISABLE
+);
+fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, EbpfSyscallError> {
+    match unsafe { u_perf_event_ioc_disable(perf_fd) } {
+        Ok(i) => Ok(i),
+        Err(e) => Err(EbpfSyscallError::PerfIoctlError(e)),
+    }
 }
 
 // syscall( BPF_PROG_LOAD )
@@ -173,7 +201,7 @@ mod tests {
     use std::os::unix::io::RawFd;
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-    use crate::bpf::syscall::{bpf_map_lookup_elem, perf_event_open};
+    use crate::bpf::syscall::{bpf_map_lookup_elem, perf_event_ioc_set_bpf, perf_event_open};
     use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::EbpfSyscallError;
     use nix::errno::Errno;
@@ -188,7 +216,10 @@ mod tests {
                 );
             }
             EbpfSyscallError::PerfEventDoesNotExist => {
-                panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system")
+                panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system");
+            }
+            EbpfSyscallError::PerfIoctlError(e) => {
+                panic!("perf IOCTL error: {:?}", e);
             }
         }
     }
@@ -273,6 +304,7 @@ mod tests {
 
     #[test]
     fn test_perf_event_open() {
+        todo!();
         match perf_event_open(
             PerfEventAttr {
                 p_type: 0,
@@ -302,5 +334,20 @@ mod tests {
             Ok(_) => {}
             Err(e) => bpf_panic_error(e),
         }
+    }
+
+    #[test]
+    fn test_perf_event_ioc_set_bpf() {
+        todo!();
+        let perf_fd: RawFd = 0;
+        match perf_event_ioc_set_bpf(perf_fd, 0) {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_perf_event_ioc_disable() {
+        todo!()
     }
 }
