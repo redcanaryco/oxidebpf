@@ -1,13 +1,12 @@
 use libc::syscall;
 use nix::errno::errno;
 use std::borrow::Borrow;
+use std::convert::From;
 use std::error::Error;
-use std::os::unix::io::RawFd;
-use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
-use syscalls::SYS_bpf;
 use std::mem::MaybeUninit;
-use std::convert::{From, TryFrom};
-use crate::error::*;
+use std::os::raw::{c_uint, c_ulong};
+use std::os::unix::io::RawFd;
+use syscalls::SYS_bpf;
 
 type BpfMapType = u32;
 
@@ -56,131 +55,29 @@ union BpfAttr {
     BpfProgLoad: BpfProgLoad,
 }
 
-#[derive(Clone)]
-pub(crate) struct BpfCode(pub Vec<BpfInsn>);
-
-impl TryFrom<&[u8]> for BpfCode {
-    type Error = EbpfParserError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        println!("{} {}", raw.len(), std::mem::size_of::<BpfInsn>());
-        if raw.len() < std::mem::size_of::<BpfInsn>()
-            || raw.len() % std::mem::size_of::<BpfInsn>() != 0
-        {
-            return Err(EbpfParserError::InvalidElf);
-        }
-        let mut instructions: Vec<BpfInsn> = Vec::new();
-        for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
-            instructions.push(BpfInsn::try_from(
-                &raw[i..i + std::mem::size_of::<BpfInsn>()],
-            )?);
-        }
-        Ok(BpfCode(instructions))
-    }
-}
-
-#[repr(C)]
-#[derive(Clone)]
-pub(crate) struct BpfInsn {
-    pub code: c_uchar,
-    pub regs: c_uchar,
-    pub off: c_short,
-    pub imm: c_int,
-}
-
-impl TryFrom<&[u8]> for BpfInsn {
-    type Error = EbpfParserError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(EbpfParserError::InvalidElf);
-        }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
-    }
-}
-
-/// The map definition found in an eBPF object.
-/// Unsupported fields: `pinned` and `namespace`
-/// * @TODO: Possibly a duplicate of `MapConfig`
-#[repr(C)]
-#[derive(Clone)]
-pub(crate) struct BpfMapDef {
-    pub map_type: c_uint,
-    pub key_size: c_uint,
-    pub value_size: c_uint,
-    pub max_entries: c_uint,
-    pub map_flags: c_uint,
-}
-
-impl TryFrom<&[u8]> for BpfMapDef {
-    type Error = EbpfParserError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfMapDef>() {
-            return Err(EbpfParserError::InvalidElf);
-        }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub(crate) enum ObjectMapType {
-    Unspec,
-    Map,
-    Data,
-    Bss,
-    RoData,
-}
-
-impl From<&str> for ObjectMapType {
-    fn from(value: &str) -> Self {
-        match value {
-            ".bss" => ObjectMapType::Bss,
-            ".data" => ObjectMapType::Data,
-            ".rodata" => ObjectMapType::RoData,
-            "maps" => ObjectMapType::Map,
-            _ => ObjectMapType::Unspec,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub(crate) enum ObjectProgramType {
+#[derive(Debug, Clone)]
+pub enum ProgramType {
     Unspec,
     Kprobe,
     Kretprobe,
     Uprobe,
     Uretprobe,
-    Tracepoint,
-    RawTracepoint,
 }
 
-impl From<ObjectProgramType> for u32 {
-    fn from(value: ObjectProgramType) -> u32 {
+impl From<ProgramType> for u32 {
+    fn from(value: ProgramType) -> u32 {
         match value {
-            ObjectProgramType::Kprobe
-            | ObjectProgramType::Kretprobe
-            | ObjectProgramType::Uprobe
-            | ObjectProgramType::Uretprobe => bpf_prog_type::BPF_PROG_TYPE_KPROBE,
-            ObjectProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
-            ObjectProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
-            ObjectProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
+            ProgramType::Kprobe
+            | ProgramType::Kretprobe
+            | ProgramType::Uprobe
+            | ProgramType::Uretprobe => bpf_prog_type::BPF_PROG_TYPE_KPROBE,
+            _ => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
         }
     }
 }
 
-impl From<&str> for ObjectProgramType {
-    fn from(value: &str) -> Self {
-        match value {
-            "kprobe" => ObjectProgramType::Kprobe,
-            "kretprobe" => ObjectProgramType::Kretprobe,
-            "uprobe" => ObjectProgramType::Uprobe,
-            "uretprobe" => ObjectProgramType::Uretprobe,
-            "tracepoint" => ObjectProgramType::Tracepoint,
-            "rawtracepoint" => ObjectProgramType::RawTracepoint,
-            _ => ObjectProgramType::Unspec,
-        }
-    }
-}
-
-mod bpf_prog_type {
+#[allow(dead_code)]
+pub(crate) mod bpf_prog_type {
     pub const BPF_PROG_TYPE_UNSPEC: u32 = 0;
     pub const BPF_PROG_TYPE_SOCKET_FILTER: u32 = 1;
     pub const BPF_PROG_TYPE_KPROBE: u32 = 2;
@@ -214,7 +111,8 @@ mod bpf_prog_type {
     pub const BPF_PROG_TYPE_SK_LOOKUP: u32 = 30;
 }
 
-mod bpf_map_type {
+#[allow(dead_code)]
+pub(crate) mod bpf_map_type {
     pub const BPF_MAP_TYPE_UNSPEC: u32 = 0;
     pub const BPF_MAP_TYPE_HASH: u32 = 1;
     pub const BPF_MAP_TYPE_ARRAY: u32 = 2;
@@ -330,7 +228,7 @@ fn bpf_map_update_elem<K, V>(map_fd: RawFd, key: K, val: V) -> Result<(), i32> {
         keyval: KeyVal {
             value: &val as *const V as u64,
         },
-        flags: 0
+        flags: 0,
     };
     let mut bpf_attr = Box::new(BpfAttr { MapElem: map_elem });
     let bpf_attr_size = std::mem::size_of::<MapElem>();
@@ -392,10 +290,13 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        ).unwrap();
+        )
+        .unwrap();
 
         match crate::bpf::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
-            Ok(val) => { assert_eq!(val, 0); }
+            Ok(val) => {
+                assert_eq!(val, 0);
+            }
             Err(e) => {
                 let err = nix::errno::from_i32(e);
                 panic!("code: {:?}", err.desc());
@@ -410,7 +311,8 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
             20,
-        ).unwrap();
+        )
+        .unwrap();
 
         match crate::bpf::bpf_map_update_elem::<u32, u32>(fd, 5, 50) {
             Ok(_) => {}
@@ -421,7 +323,9 @@ mod tests {
         };
 
         match crate::bpf::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
-            Ok(val) => { assert_eq!(val, 50); }
+            Ok(val) => {
+                assert_eq!(val, 50);
+            }
             Err(e) => {
                 let err = nix::errno::from_i32(e);
                 panic!("code: {:?}", err.desc());

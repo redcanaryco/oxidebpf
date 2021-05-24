@@ -1,7 +1,6 @@
 #[derive(Debug, PartialEq, Clone)]
-pub enum EbpfParserError {
+pub enum EbpfObjectError {
     InvalidElf,
     InvalidElfMachine,
-    UnsupportedMap,
-    UnsupportedProgram,
+    UnknownObject(String),
 }

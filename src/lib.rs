@@ -13,7 +13,6 @@ pub mod probes;
 mod sys;
 
 // TODO: this is the public interface, needs docstrings
-pub use blueprint::ProgramBlueprint;
 
 pub struct ProgramGroup {
     // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
