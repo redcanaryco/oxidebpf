@@ -11,4 +11,10 @@ pub enum EbpfObjectError {
 pub enum EbpfSyscallError {
     LinuxError(Errno),
     PerfEventDoesNotExist,
+    PerfIoctlError(nix::Error),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum EbpfParserError {
+    InvalidElf,
 }

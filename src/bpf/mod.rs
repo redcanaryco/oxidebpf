@@ -31,7 +31,7 @@ union PerfBpLen {
 }
 
 #[repr(C)]
-struct PerfEventAttr {
+pub(crate) struct PerfEventAttr {
     p_type: c_uint,
     size: c_uint,
     config: c_ulong,
@@ -182,8 +182,8 @@ impl From<&str> for ObjectMapType {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub(crate) enum ObjectProgramType {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ProgramType {
     Unspec,
     Kprobe,
     Kretprobe,
@@ -193,30 +193,30 @@ pub(crate) enum ObjectProgramType {
     RawTracepoint,
 }
 
-impl From<ObjectProgramType> for u32 {
-    fn from(value: ObjectProgramType) -> u32 {
+impl From<ProgramType> for u32 {
+    fn from(value: ProgramType) -> u32 {
         match value {
-            ObjectProgramType::Kprobe
-            | ObjectProgramType::Kretprobe
-            | ObjectProgramType::Uprobe
-            | ObjectProgramType::Uretprobe => bpf_prog_type::BPF_PROG_TYPE_KPROBE,
-            ObjectProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
-            ObjectProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
-            ObjectProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
+            ProgramType::Kprobe
+            | ProgramType::Kretprobe
+            | ProgramType::Uprobe
+            | ProgramType::Uretprobe => bpf_prog_type::BPF_PROG_TYPE_KPROBE,
+            ProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
+            ProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
+            ProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
         }
     }
 }
 
-impl From<&str> for ObjectProgramType {
+impl From<&str> for ProgramType {
     fn from(value: &str) -> Self {
         match value {
-            "kprobe" => ObjectProgramType::Kprobe,
-            "kretprobe" => ObjectProgramType::Kretprobe,
-            "uprobe" => ObjectProgramType::Uprobe,
-            "uretprobe" => ObjectProgramType::Uretprobe,
-            "tracepoint" => ObjectProgramType::Tracepoint,
-            "rawtracepoint" => ObjectProgramType::RawTracepoint,
-            _ => ObjectProgramType::Unspec,
+            "kprobe" => ProgramType::Kprobe,
+            "kretprobe" => ProgramType::Kretprobe,
+            "uprobe" => ProgramType::Uprobe,
+            "uretprobe" => ProgramType::Uretprobe,
+            "tracepoint" => ProgramType::Tracepoint,
+            "rawtracepoint" => ProgramType::RawTracepoint,
+            _ => ProgramType::Unspec,
         }
     }
 }
