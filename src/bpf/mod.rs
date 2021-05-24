@@ -1,10 +1,12 @@
-use std::os::raw::{c_uint, c_ulong, c_uchar, c_short, c_int};
-use std::convert::TryFrom;
-use crate::error::EbpfParserError;
 use crate::bpf::constant::bpf_prog_type;
+use crate::error::EbpfParserError;
+use std::convert::TryFrom;
+use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
+
+struct PerfEventAttr {}
 
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
@@ -41,7 +43,7 @@ struct BpfProgLoad {
     log_level: c_uint,
     log_size: c_uint,
     log_buf: c_ulong, // 'char *' buffer
-    //kern_version: c_uint,
+                      //kern_version: c_uint,
 }
 
 #[repr(align(8), C)]
@@ -171,74 +173,6 @@ impl From<&str> for ObjectProgramType {
             "tracepoint" => ObjectProgramType::Tracepoint,
             "rawtracepoint" => ObjectProgramType::RawTracepoint,
             _ => ObjectProgramType::Unspec,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::os::raw::c_uint;
-    use std::os::unix::io::RawFd;
-
-    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-
-    #[test]
-    fn bpf_map_create() {
-        match crate::bpf::syscall::bpf_map_create(
-            BPF_MAP_TYPE_ARRAY,
-            std::mem::size_of::<u32>() as c_uint,
-            std::mem::size_of::<u32>() as c_uint,
-            20,
-        ) {
-            Err(e) => {
-                let err = nix::errno::from_i32(e);
-                panic!("code: {:?}", err.desc());
-            }
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn bpf_map_create_and_read() {
-        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
-            BPF_MAP_TYPE_ARRAY,
-            std::mem::size_of::<u32>() as c_uint,
-            std::mem::size_of::<u32>() as c_uint,
-            20,
-        ).unwrap();
-
-        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
-            Ok(val) => { assert_eq!(val, 0); }
-            Err(e) => {
-                let err = nix::errno::from_i32(e);
-                panic!("code: {:?}", err.desc());
-            }
-        }
-    }
-
-    #[test]
-    fn bpf_map_create_and_write_and_read() {
-        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
-            BPF_MAP_TYPE_ARRAY,
-            std::mem::size_of::<u32>() as c_uint,
-            std::mem::size_of::<u32>() as c_uint,
-            20,
-        ).unwrap();
-
-        match crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50) {
-            Ok(_) => {}
-            Err(e) => {
-                let err = nix::errno::from_i32(e);
-                panic!("code: {:?}", err.desc());
-            }
-        };
-
-        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
-            Ok(val) => { assert_eq!(val, 50); }
-            Err(e) => {
-                let err = nix::errno::from_i32(e);
-                panic!("code: {:?}", err.desc());
-            }
         }
     }
 }
