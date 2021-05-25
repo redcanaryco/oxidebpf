@@ -10,4 +10,5 @@ pub enum OxidebpfError {
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),
+    MapNotLoaded,
 }
