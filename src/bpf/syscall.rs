@@ -1,11 +1,10 @@
-use libc::{pid_t, syscall};
+use libc::{pid_t, syscall, SYS_bpf, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 use std::convert::TryInto;
 use std::mem::MaybeUninit;
 use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
-use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
@@ -225,7 +224,7 @@ pub(crate) fn bpf_map_create(
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use std::os::raw::c_uint;
+    use std::os::raw::{c_int, c_uint};
     use std::os::unix::io::RawFd;
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
@@ -235,7 +234,9 @@ mod tests {
     };
     use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::OxidebpfError;
-    use nix::errno::Errno;
+    use nix::errno::{errno, Errno};
+    use std::convert::TryInto;
+    use std::ffi::c_void;
 
     fn bpf_panic_error(err: OxidebpfError) {
         match err {
@@ -319,9 +320,55 @@ mod tests {
         }
     }
 
+    #[repr(C)]
+    struct Arg {
+        arg: u32,
+    }
+
+    extern "C" fn clone_child(arg: *mut c_void) -> c_int {
+        // Here be dragons.
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        unsafe {
+            let val = arg as *mut Arg;
+            let val = &mut *val;
+            if val.arg != 0x1337beef {
+                return 1;
+            }
+        }
+        0
+    }
+
     #[test]
     fn test_setns() {
-        todo!()
+        use libc::{clone, CLONE_NEWNS, SIGCHLD};
+        use memmap::MmapMut;
+        use std::os::unix::io::AsRawFd;
+
+        let mut arg = Arg { arg: 0x1337beef };
+        let mut stack = MmapMut::map_anon(1024 * 1024).unwrap();
+        unsafe {
+            let ret = clone(
+                clone_child,
+                &mut stack as *mut _ as *mut _,
+                CLONE_NEWNS,
+                &mut arg as *mut _ as *mut _,
+            );
+            if ret < 0 {
+                let errno = errno();
+                let errmsg = nix::errno::Errno::from_i32(errno);
+                panic!("could not create new mount namespace: {:?}", errmsg);
+            }
+            // read mount ns
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(format!("/proc/{}/ns/mnt", ret))
+                .expect("Could not open mount ns file");
+            let fd = file.as_raw_fd();
+            crate::bpf::syscall::setns(fd, CLONE_NEWNS)
+                .map_err(|e| bpf_panic_error(e))
+                .unwrap();
+        }
     }
 
     #[test]
