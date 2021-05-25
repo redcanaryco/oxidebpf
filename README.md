@@ -2,20 +2,22 @@
 
 `oxidebpf` is a fully MIT licensed Rust library for managing eBPF programs.
 
-# Overview
+## Motivation
 
-Motivation: 
+The motivation behind `oxidebpf` is to create a fully MIT licensed Rust library
+for managing long-running eBPF programs that run in as many places as possible.
+There are a number of fantastic libraries for interfacing with eBPF already,
+but they either have GPL dependencies, are not in Rust, or are primarily designed 
+short-running programs.
 
-*  fully MIT licensed library that will 
-*  run anywhere and 
-*  spawn long running BPF programs, 
-*  minimize dependencies, 
+## Goals
 
-Goals:
+We want `oxidebpf` to meet the following goals.
 
-*  fully MIT licensed, no GPL dependencies
-*  Pure Rust, or as much as possible
-*  Minimize dependencies, try to pull in as little as possible
+*  Fully MIT licensed with no GPL dependencies.
+*  Written in pure Rust, or as close to pure Rust as possible.
+*  Minimal dependencies, pull in the bare minimum set of dependencies
+required to achieve our desired functionality.
 
 # Requirements
 
@@ -64,7 +66,8 @@ $ cargo build
 ```
 
 If you want to build locally, check the `bootstrap.sh` file for the Vagrantfile
-most similar to your system
+most similar to your system. This file will include build and test dependencies
+for the distribution.
 
 ## Testing
 
