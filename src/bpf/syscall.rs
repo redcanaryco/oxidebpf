@@ -197,6 +197,15 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     Ok(())
 }
 
+pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
+    let bpf_attr = Box::new(BpfAttr { map_config });
+    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    unsafe {
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        Ok(fd as RawFd)
+    }
+}
+
 /// Create a map of the given type with given key size, value size, and number of entires.
 /// The sizes should be the size of key type and value type in bytes, which can be determined
 /// with `std::mem::size_of::<T>()` where `T` is the type of the key or value.

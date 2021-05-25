@@ -54,7 +54,7 @@ pub(crate) struct PerfEventAttr {
 
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
-struct MapConfig {
+pub(crate) struct MapConfig {
     map_type: c_uint,
     key_size: c_uint,
     value_size: c_uint,
