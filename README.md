@@ -37,15 +37,21 @@ during tests by running `cargo with "strace -fe bpf" -- test`.
 
 # Getting Started
 
-TODO: Quick steps to get started
+Here's some quick steps to get yu started right away.
 
-*  Add oxidebpf to your Cargo.toml
-*  Three main components: Programs/Maps (bpf objects), ProgramVersions, and ProgramGroups
-*  The idea is to run anywhere, so you can put a bunch of different bpf programs in there
-*  You create Programs and Maps and perfmaps, compose ProgramVersions from the programs
-and maps
-*  Create a ProgramGroup from ProgramVersions and it will attempt to load versions until
-one works!
+1.  Add `oxidebpf` to your `Cargo.toml`
+2.  Use the `ProgramBlueprint` to load your compiled eBPF object file with
+maps and programs.
+3.  Create a `Program` for each program you intend to load. Create a `Map`
+for each map and a `PerfMap` for any perfmap.
+4.  Create a `ProgramVersion` with your programs and maps. You may create
+multiple `ProgramVersion`s, representing different sets of
+programs and maps.
+5.  Create a `ProgramGroup` with your `ProgramVersion`s. 
+6.  Tell the `ProgramGroup` to start loading. It will attempt each `ProgramVersion`
+in order until one successfully loads on the current kernel. If it cannot
+
+TODO: Rust code snippet showing above steps goes here
 
 ## Usage
 
