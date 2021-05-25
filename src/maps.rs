@@ -1,6 +1,7 @@
-use std::error::Error;
+use crate::error::OxidebpfError;
 use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
+use crate::bpf::MapConfig;
 
 pub struct PerfMap {
     // TODO: perfmap functions
@@ -9,25 +10,28 @@ pub struct PerfMap {
     ev_names: Vec<String>,
 }
 
-pub struct ArrayMap<'a, T: 'a> {
+pub struct ArrayMap<T> {
     // TODO: read/write functions
-    base: Map<&'a T>,
-}
-
-pub struct Map<T> {
-    // TODO: Map fields
+    base: Map,
     _t: PhantomData<T>,
 }
 
+pub struct Map {
+    name: String,
+    fd: RawFd,
+    map_config: MapConfig,
+    loaded: bool,
+}
+
 pub trait ProgramMap {
-    fn load(&self) -> Result<(), Box<dyn Error>>;
-    fn unload(&self) -> Result<(), Box<dyn Error>>;
-    fn get_fd(&self) -> RawFd; // if we don't (need to) track attachpoints this doesn't need to be exposed
+    fn load(&mut self) -> Result<(), OxidebpfError>;
+    fn unload(&mut self) -> Result<(), OxidebpfError>;
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError>; // if we don't (need to) track attachpoints this doesn't need to be exposed
 }
 
 pub trait RWMap<T> {
-    fn read(&self) -> Result<T, Box<dyn Error>>;
-    fn write(&self) -> Result<(), Box<dyn Error>>;
+    fn read(&self) -> Result<T, OxidebpfError>;
+    fn write(&self) -> Result<(), OxidebpfError>;
 }
 
 pub trait PerCpu {
@@ -60,46 +64,67 @@ impl PerCpu for PerfMap {
 }
 
 impl ProgramMap for PerfMap {
-    fn load(&self) -> Result<(), Box<dyn Error>> {
+    fn load(&mut self) -> Result<(), OxidebpfError> {
         todo!()
     }
 
-    fn unload(&self) -> Result<(), Box<dyn Error>> {
+    fn unload(&mut self) -> Result<(), OxidebpfError> {
         todo!()
     }
 
-    fn get_fd(&self) -> RawFd {
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
         todo!()
     }
 }
 
-impl<'a, T: 'a> ArrayMap<'a, T> {
-    pub fn new() -> ArrayMap<'a, T> {
+impl<T> ArrayMap<T> {
+    pub fn new() -> ArrayMap<T> {
         unimplemented!()
     }
 }
 
-impl<'a, T: 'a> RWMap<T> for ArrayMap<'a, T> {
-    fn read(&self) -> Result<T, Box<dyn Error>> {
+impl<T> RWMap<T> for ArrayMap< T> {
+    fn read(&self) -> Result<T, OxidebpfError> {
         unimplemented!()
     }
 
-    fn write(&self) -> Result<(), Box<dyn Error>> {
+    fn write(&self) -> Result<(), OxidebpfError> {
         unimplemented!()
     }
 }
 
-impl<'a, T: 'a> ProgramMap for ArrayMap<'a, T> {
-    fn load(&self) -> Result<(), Box<dyn Error>> {
+impl<T> ProgramMap for ArrayMap<T> {
+    fn load(&mut self) -> Result<(), OxidebpfError> {
         todo!()
     }
 
-    fn unload(&self) -> Result<(), Box<dyn Error>> {
+    fn unload(&mut self) -> Result<(), OxidebpfError> {
         todo!()
     }
 
-    fn get_fd(&self) -> RawFd {
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
         todo!()
+    }
+}
+
+impl ProgramMap for Map {
+    fn load(&mut self) -> Result<(), OxidebpfError> {
+        let fd = crate::bpf::syscall::bpf_map_create_with_config(self.map_config)?;
+        self.fd = fd;
+        self.loaded = true;
+        Ok(())
+    }
+    fn unload(&mut self) -> std::result::Result<(), OxidebpfError> {
+        // TODO: close FD
+        self.loaded = false;
+        Ok(())
+    }
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
+        if self.loaded {
+            Ok(self.fd)
+        } else {
+            Err(OxidebpfError::MapNotLoaded)
+        }
     }
 }
 
@@ -109,7 +134,7 @@ impl Drop for PerfMap {
     }
 }
 
-impl<'a, T: 'a> Drop for ArrayMap<'a, T> {
+impl<T> Drop for ArrayMap<T> {
     fn drop(&mut self) {
         todo!()
     }
