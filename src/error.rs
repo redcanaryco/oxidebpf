@@ -2,7 +2,7 @@ use nix::errno::Errno;
 use std::any::Any;
 use std::ffi::NulError;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
     InvalidElf,
     InvalidElfMachine,
@@ -11,5 +11,4 @@ pub enum OxidebpfError {
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),
-    ThreadError(Box<dyn Any + Send>),
 }
