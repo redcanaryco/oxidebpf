@@ -340,16 +340,10 @@ mod tests {
         arg: u32,
     }
 
-    extern "C" fn clone_child(arg: *mut c_void) -> c_int {
-        // Here be dragons.
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        unsafe {
-            let val = arg as *mut Arg;
-            let val = &mut *val;
-            if val.arg != 0x1337beef {
-                return 1;
-            }
-        }
+    extern "C" fn clone_child(_: *mut c_void) -> c_int {
+        // Here be dragons. Do not deref `_`. Sleep should get scheduler to give
+        // execution back to parent process.
+        std::thread::sleep(std::time::Duration::from_millis(1));
         0
     }
 
