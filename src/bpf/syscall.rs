@@ -207,7 +207,6 @@ pub(crate) fn bpf_map_update_elem<K, V>(
 }
 
 pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
-<<<<<<< HEAD
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
     let mut bpf_attr = unsafe { bpf_attr.assume_init() };
     bpf_attr.map_config = map_config;
