@@ -1,20 +1,33 @@
-#![allow(unused_variables)] // @TODO: remove this
-use goblin::elf::{header, section_header, Elf, SectionHeader};
+use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
 use std::convert::TryFrom;
 use std::ffi::CStr;
+use std::os::unix::io::RawFd;
 
 use crate::bpf::*;
 use crate::error::*;
-use crate::sys::get_kernel_version;
 
 /// Structure that parses and holds eBPF objects from an ELF object.
-#[derive(Clone, Default)]
-pub(crate) struct ProgramBlueprint {
-    pub objects: Vec<EbpfObject>,
+#[derive(Debug, Clone, Default)]
+pub struct ProgramBlueprint {
+    pub(crate) objects: Vec<EbpfObject>,
 }
 
+/// Parses a section and produces a vector of ebpf objects.
+///
+/// Arguments:
+/// object_data - bytes of the ELF object file
+/// elf - the parsed ELF object
+/// section_index - the section index being parsed
+///
+/// Returns
+pub type SectionParser = fn(
+    object_data: &[u8],
+    elf: &Elf,
+    section_index: usize,
+) -> Result<Vec<EbpfObject>, OxidebpfError>;
+
 impl ProgramBlueprint {
-    pub fn new(data: &[u8]) -> Result<Self, OxidebpfError> {
+    pub fn new(data: &[u8], parser: Option<SectionParser>) -> Result<Self, OxidebpfError> {
         let elf: Elf = parse_and_verify_elf(data)?;
         let mut blueprint = Self::default();
 
@@ -24,9 +37,53 @@ impl ProgramBlueprint {
             .enumerate()
             .filter(|(_, sh)| sh.sh_type == section_header::SHT_PROGBITS && sh.sh_size > 0)
         {
-            blueprint
-                .objects
-                .extend(EbpfObject::from_section(data, &elf, sh_index, sh)?);
+            let section_name = get_section_name(&elf, sh).unwrap_or_default();
+            let mut name_split = section_name.splitn(2, '/');
+            let prefix = name_split.next().unwrap_or_default();
+            let name = name_split.next();
+
+            blueprint.objects.extend(match (prefix, name) {
+                ("maps", name) => MapObject::from_section(name, data, &elf, sh_index, sh)?,
+                ("kprobe", Some(name)) => ProgramObject::from_section(
+                    ProgramType::Kprobe,
+                    name,
+                    data,
+                    &elf,
+                    sh_index,
+                    sh,
+                )?,
+                ("kretprobe", Some(name)) => ProgramObject::from_section(
+                    ProgramType::Kretprobe,
+                    name,
+                    data,
+                    &elf,
+                    sh_index,
+                    sh,
+                )?,
+                ("uprobe", Some(name)) => ProgramObject::from_section(
+                    ProgramType::Uprobe,
+                    name,
+                    data,
+                    &elf,
+                    sh_index,
+                    sh,
+                )?,
+                ("uretprobe", Some(name)) => ProgramObject::from_section(
+                    ProgramType::Uretprobe,
+                    name,
+                    data,
+                    &elf,
+                    sh_index,
+                    sh,
+                )?,
+                _ => {
+                    if let Some(parser) = parser {
+                        parser(data, &elf, sh_index)?
+                    } else {
+                        Vec::new()
+                    }
+                }
+            });
         }
 
         Ok(blueprint)
@@ -34,56 +91,18 @@ impl ProgramBlueprint {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum EbpfObject {
+pub enum EbpfObject {
     Map(MapObject),
     Program(ProgramObject),
 }
 
-impl EbpfObject {
-    fn from_section<'a>(
-        data: &'a [u8],
-        elf: &'a Elf,
-        sh_index: usize,
-        sh: &'a SectionHeader,
-    ) -> Result<Vec<Self>, OxidebpfError> {
-        let section_name = get_section_name(&elf, sh).unwrap_or_default();
-        let mut name_split = section_name.splitn(2, '/');
-        let prefix = name_split.next().unwrap_or_default();
-        let name = name_split.next();
-
-        Ok(match (prefix, name) {
-            ("maps", Some(name)) => MapObject::from_section(name, data, elf, sh_index, sh)?,
-            ("kprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Kprobe, name, data, elf, sh_index, sh)?
-            }
-            ("kretprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Kretprobe, name, data, elf, sh_index, sh)?
-            }
-            ("uprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Uprobe, name, data, elf, sh_index, sh)?
-            }
-            ("uretprobe", Some(name)) => {
-                ProgramObject::from_section(ProgramType::Uretprobe, name, data, elf, sh_index, sh)?
-            }
-            _ => {
-                return Err(OxidebpfError::UnknownObject(format!(
-                    "{}",
-                    section_name.to_string()
-                )))
-            }
-        })
-    }
-}
-
-///@TODO: This will need to be merged with the struct in lib.rs
 #[derive(Debug, Clone)]
-pub(crate) struct ProgramObject {
-    pub kind: ProgramType,
-    pub name: String,
-    pub code: BpfCode,
+pub struct ProgramObject {
+    pub(crate) kind: ProgramType,
+    pub(crate) name: String,
+    code: BpfCode,
     relocations: Vec<Reloc>,
-    pub license: String,
-    pub version: u32,
+    pub(crate) license: String,
 }
 
 impl ProgramObject {
@@ -95,14 +114,14 @@ impl ProgramObject {
         sh_index: usize,
         sh: &'a SectionHeader,
     ) -> Result<Vec<EbpfObject>, OxidebpfError> {
-        let code = BpfCode::try_from(get_section_data(data, sh))?;
+        let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
+        let code = BpfCode::try_from(section_data)?;
         Ok(vec![EbpfObject::Program(ProgramObject {
             kind,
             name: name.to_string(),
             code,
-            relocations: Reloc::get_relocs_for_program(sh_index, &elf)?,
+            relocations: Reloc::get_map_relocations(sh_index, &elf)?,
             license: get_license(data, elf),
-            version: get_version(data, elf),
         })])
     }
 
@@ -114,37 +133,32 @@ impl ProgramObject {
             .collect()
     }
 
-    /// Performs relocation fixups given an array of loaded maps.
-    pub(crate) fn apply_relocations(&self, maps: &[MapObject]) -> Result<(), OxidebpfError> {
-        //@TODO
+    /// Perform fixups for loaded maps
+    pub(crate) fn fixup_map_relocation(
+        &mut self,
+        fd: RawFd,
+        map: &MapObject,
+    ) -> Result<(), OxidebpfError> {
+        if self.relocations.len() == 0 {
+            return Ok(());
+        }
+
+        let reloc = self
+            .relocations
+            .iter()
+            .find(|r| r.symbol_name == map.symbol_name)
+            .ok_or(OxidebpfError::InvalidProgramObject)?;
+
+        if let Some(insn) = self.code.0.get_mut(reloc.insn_index as usize) {
+            insn.set_src(1);
+            insn.imm = fd as i32;
+        }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct BpfCode(pub Vec<BpfInsn>);
-
-impl TryFrom<&[u8]> for BpfCode {
-    type Error = OxidebpfError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfInsn>()
-            || raw.len() % std::mem::size_of::<BpfInsn>() != 0
-        {
-            return Err(OxidebpfError::InvalidElf);
-        }
-        let mut instructions: Vec<BpfInsn> = Vec::new();
-        for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
-            instructions.push(BpfInsn::try_from(
-                &raw[i..i + std::mem::size_of::<BpfInsn>()],
-            )?);
-        }
-        Ok(BpfCode(instructions))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct Reloc {
-    /// Symbol name for the relocation.
+struct Reloc {
     pub symbol_name: String,
     /// The instruction to apply the relocation to
     pub insn_index: u64,
@@ -154,16 +168,16 @@ pub(crate) struct Reloc {
 
 impl Reloc {
     /// Retrieve the section relocations for a given program section index
-    fn get_relocs_for_program(program_index: usize, elf: &Elf) -> Result<Vec<Self>, OxidebpfError> {
+    fn get_map_relocations(program_index: usize, elf: &Elf) -> Result<Vec<Self>, OxidebpfError> {
         // find the relocation index
         let reloc_index = elf
             .section_headers
             .iter()
             .enumerate()
-            .find(|(index, sh)| {
+            .find(|(_index, sh)| {
                 sh.sh_type == section_header::SHT_REL && sh.sh_info == program_index as u32
             })
-            .map(|(reloc_index, reloc_sh)| reloc_index);
+            .map(|(reloc_index, _)| reloc_index);
 
         // If we cant find a relocation section for the program section, assume it has no relocations
         if reloc_index.is_none() {
@@ -174,70 +188,76 @@ impl Reloc {
         let reloc_section = elf
             .shdr_relocs
             .iter()
-            .find(|(index, relocs)| *index == reloc_index.unwrap())
-            .map(|(index, relocs)| relocs)
-            .ok_or(OxidebpfError::InvalidElf)?;
+            .find(|(index, _relocs)| *index == reloc_index.unwrap())
+            .map(|(_index, relocs)| relocs)
+            .ok_or(OxidebpfError::InvalidProgramObject)?;
 
         Ok(reloc_section
             .iter()
-            .map(|r| Reloc {
-                symbol_name: get_symbol_name(&elf, r.r_sym).unwrap_or_default(),
-                insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
-                kind: r.r_type,
+            .filter_map(|r| {
+                if let Some(sym) = elf.syms.get(r.r_sym) {
+                    Some(Reloc {
+                        symbol_name: get_symbol_name(&elf, &sym).unwrap_or_default(),
+                        insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
+                        kind: r.r_type,
+                    })
+                } else {
+                    None
+                }
             })
             .collect())
     }
 }
 
-///@TODO: This will need to be merged with the struct in lib.rs
 #[derive(Debug, Clone)]
-pub(crate) struct MapObject {
-    pub definition: BpfMapDef,
+pub struct MapObject {
+    /// The map definition parsed out of the eBPF ELF object
+    pub(crate) definition: MapConfig,
     /// The name of the map
-    pub name: String,
+    pub(crate) name: String,
     /// The symbol name of the map
-    pub symbol_name: String,
+    pub(crate) symbol_name: String,
 }
 
 impl MapObject {
     fn from_section<'a>(
-        name: &str,
+        section_name: Option<&str>,
         data: &'a [u8],
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
     ) -> Result<Vec<EbpfObject>, OxidebpfError> {
-        let symbol_name = elf
+        let mut objects = Vec::new();
+        let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
+
+        // Assume that all symbols in this section are map definitions.
+        for (index, sym) in elf
             .syms
             .iter()
-            .find(|sym| sym.st_shndx == sh_index)
-            .map(|sym| get_symbol_name(elf, sym.st_name).unwrap_or_default());
-        Ok(vec![EbpfObject::Map(MapObject {
-            definition: BpfMapDef::try_from(get_section_data(data, sh))?,
-            name: name.to_string(),
-            symbol_name: symbol_name.unwrap_or_default(),
-        })])
-    }
-}
+            .filter(|sym| sym.st_shndx == sh_index)
+            .enumerate()
+        {
+            let symbol_name = get_symbol_name(elf, &sym).unwrap_or_default();
+            // If a section name was provided (which does not include the "maps/" prefix)
+            // then we use that. Otherwise we use the symbol name.
+            let name = if index == 0 && section_name.is_some() {
+                section_name.unwrap_or_default().to_string()
+            } else {
+                symbol_name.clone()
+            };
 
-/// The map definition found in an eBPF object.
-/// * @TODO: Possibly a duplicate of `MapConfig`
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub(crate) struct BpfMapDef {
-    pub map_type: u32,
-    pub key_size: u32,
-    pub value_size: u32,
-    pub max_entries: u32,
-}
-
-impl TryFrom<&[u8]> for BpfMapDef {
-    type Error = OxidebpfError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfMapDef>() {
-            return Err(OxidebpfError::InvalidElf);
+            if let Some(map_data) =
+                section_data.get(sym.st_value as usize..section_data.len() as usize)
+            {
+                objects.push(EbpfObject::Map(MapObject {
+                    definition: MapConfig::try_from(map_data)?,
+                    name,
+                    symbol_name,
+                }));
+            }
         }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
+
+        Ok(objects)
     }
 }
 
@@ -245,8 +265,8 @@ fn get_section_name<'a>(elf: &'a Elf, sh: &'a SectionHeader) -> Option<&'a str> 
     elf.shdr_strtab.get_unsafe(sh.sh_name)
 }
 
-fn get_section_data<'a>(data: &'a [u8], sh: &'a SectionHeader) -> &'a [u8] {
-    &data[sh.sh_offset as usize..(sh.sh_offset + sh.sh_size) as usize]
+fn get_section_data<'a>(data: &'a [u8], sh: &'a SectionHeader) -> Option<&'a [u8]> {
+    data.get(sh.sh_offset as usize..(sh.sh_offset + sh.sh_size) as usize)
 }
 
 fn get_section_by_name<'a>(elf: &'a Elf, name: &str) -> Option<&'a SectionHeader> {
@@ -257,38 +277,17 @@ fn get_section_by_name<'a>(elf: &'a Elf, name: &str) -> Option<&'a SectionHeader
 
 fn get_license(data: &[u8], elf: &Elf) -> String {
     get_section_by_name(elf, "license")
-        .map(|sh| CStr::from_bytes_with_nul(get_section_data(data, sh)))
+        .and_then(|sh| get_section_data(data, sh))
+        .map(|section_data| CStr::from_bytes_with_nul(section_data))
         .map(|s| s.unwrap_or_default().to_str().unwrap_or_default())
         .map(|s| s.to_string())
         .unwrap_or_default()
 }
 
-fn get_version(data: &[u8], elf: &Elf) -> u32 {
-    const MAGIC_VERSION: u32 = 0xFFFFFFFE;
-    let version = get_section_by_name(elf, "version")
-        .map(|section| get_section_data(data, section))
-        .filter(|s_data| s_data.len() == 4)
-        .map(|s_data| {
-            let mut int_data: [u8; 4] = Default::default();
-            int_data.copy_from_slice(s_data);
-            u32::from_ne_bytes(int_data)
-        })
-        .unwrap_or(MAGIC_VERSION);
-
-    if version == MAGIC_VERSION {
-        get_kernel_version()
-    } else {
-        version
-    }
-}
-
-fn get_symbol_name(elf: &Elf, sym_index: usize) -> Option<String> {
-    elf.syms.get(sym_index as usize).map(|sym| {
-        elf.strtab
-            .get(sym.st_name)
-            .map(|r| r.map(str::to_owned).unwrap_or_default())
-            .unwrap_or_default()
-    })
+fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {
+    elf.strtab
+        .get(sym.st_name)
+        .map(|r| r.map(str::to_owned).unwrap_or_default())
 }
 
 fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
@@ -296,16 +295,8 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
-        _val => return Err(OxidebpfError::InvalidElfMachine),
+        _ => return Err(OxidebpfError::InvalidElf),
     }
 
     Ok(elf)
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
 }

@@ -9,7 +9,6 @@ mod bpf;
 mod error;
 pub mod maps;
 pub mod probes;
-mod sys;
 
 // TODO: this is the public interface, needs docstrings
 

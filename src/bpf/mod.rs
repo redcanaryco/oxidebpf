@@ -53,12 +53,22 @@ pub(crate) struct PerfEventAttr {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
-struct MapConfig {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MapConfig {
     map_type: c_uint,
     key_size: c_uint,
     value_size: c_uint,
     max_entries: c_uint,
+}
+
+impl TryFrom<&[u8]> for MapConfig {
+    type Error = OxidebpfError;
+    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
+        if raw.len() < std::mem::size_of::<MapConfig>() {
+            return Err(OxidebpfError::InvalidMapObject);
+        }
+        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
+    }
 }
 
 #[repr(align(8), C)]
@@ -97,17 +107,16 @@ union BpfAttr {
     bpf_prog_load: BpfProgLoad,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct BpfCode(pub Vec<BpfInsn>);
 
 impl TryFrom<&[u8]> for BpfCode {
     type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        println!("{} {}", raw.len(), std::mem::size_of::<BpfInsn>());
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
-            return Err(OxidebpfError::InvalidElf);
+            return Err(OxidebpfError::InvalidProgramObject);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
         for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
@@ -132,32 +141,27 @@ impl TryFrom<&[u8]> for BpfInsn {
     type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(OxidebpfError::InvalidElf);
+            return Err(OxidebpfError::InvalidProgramObject);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }
 }
 
-/// The map definition found in an eBPF object.
-/// Unsupported fields: `pinned` and `namespace`
-/// * @TODO: Possibly a duplicate of `MapConfig`
-#[repr(C)]
-#[derive(Clone)]
-pub(crate) struct BpfMapDef {
-    pub map_type: c_uint,
-    pub key_size: c_uint,
-    pub value_size: c_uint,
-    pub max_entries: c_uint,
-    pub map_flags: c_uint,
-}
+impl BpfInsn {
+    pub fn get_src(&self) -> u8 {
+        (self.regs >> 4) & 0xf
+    }
 
-impl TryFrom<&[u8]> for BpfMapDef {
-    type Error = OxidebpfError;
-    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
-        if raw.len() < std::mem::size_of::<BpfMapDef>() {
-            return Err(OxidebpfError::InvalidElf);
-        }
-        Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
+    pub fn set_src(&mut self, val: u8) {
+        self.regs = (self.regs & 0xf) | (val << 4);
+    }
+
+    pub fn get_dst(&self) -> u8 {
+        self.regs & 0xf
+    }
+
+    pub fn set_dst(&mut self, val: u8) {
+        self.regs = (self.regs & 0xf0) | (val & 0xf);
     }
 }
 
