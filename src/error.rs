@@ -1,5 +1,4 @@
 use nix::errno::Errno;
-use std::any::Any;
 use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
