@@ -1,11 +1,10 @@
-use libc::{pid_t, syscall};
+use libc::{pid_t, syscall, SYS_bpf, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 use std::convert::TryInto;
 use std::mem::MaybeUninit;
 use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
-use syscalls::{SYS_bpf, SYS_perf_event_open, SYS_setns};
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
@@ -18,7 +17,8 @@ use std::ffi::CString;
 
 type BpfMapType = u32;
 
-/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`
+/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed `BpfAttr`
+/// union _must_ be zero initialized before being filled and passed to this call.
 unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, OxidebpfError> {
     // https://man7.org/linux/man-pages/man2/syscall.2.html
     // Architecture-specific requirements
@@ -145,8 +145,10 @@ pub(crate) fn bpf_prog_load(
         log_size: 0,
         log_buf: 0,
     };
-
-    let bpf_attr = Box::new(BpfAttr { bpf_prog_load });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.bpf_prog_load = bpf_prog_load;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
         let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
@@ -167,7 +169,10 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Oxid
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_elem = map_elem;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
@@ -190,7 +195,10 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_elem = map_elem;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
@@ -198,7 +206,19 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     Ok(())
 }
 
-/// Create a map of the given type with given key size, value size, and number of entires.
+pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_config = map_config;
+    let bpf_attr = Box::new(bpf_attr);
+    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    unsafe {
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        Ok(fd as RawFd)
+    }
+}
+
+/// Create a map of the given type with given key size, value size, and number of entries.
 /// The sizes should be the size of key type and value type in bytes, which can be determined
 /// with `std::mem::size_of::<T>()` where `T` is the type of the key or value.
 pub(crate) fn bpf_map_create(
@@ -213,7 +233,10 @@ pub(crate) fn bpf_map_create(
         value_size,
         max_entries,
     };
-    let bpf_attr = Box::new(BpfAttr { map_config });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_config = map_config;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
     unsafe {
@@ -225,8 +248,8 @@ pub(crate) fn bpf_map_create(
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use std::os::raw::c_uint;
-    use std::os::unix::io::RawFd;
+    use std::os::raw::{c_int, c_uint};
+    use std::os::unix::io::{FromRawFd, RawFd};
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
     use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
@@ -235,7 +258,10 @@ mod tests {
     };
     use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::OxidebpfError;
-    use nix::errno::Errno;
+    use nix::errno::{errno, Errno};
+    use scopeguard::defer;
+    use std::convert::TryInto;
+    use std::ffi::c_void;
 
     fn bpf_panic_error(err: OxidebpfError) {
         match err {
@@ -261,14 +287,17 @@ mod tests {
 
     #[test]
     fn bpf_map_create() {
-        crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
-            20,
+            10,
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        defer!(unsafe {
+            libc::close(fd);
+        });
     }
 
     #[test]
@@ -281,6 +310,9 @@ mod tests {
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        defer!(unsafe {
+            libc::close(fd);
+        });
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
             Ok(val) => {
@@ -298,17 +330,20 @@ mod tests {
         let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
-            std::mem::size_of::<u32>() as c_uint,
+            std::mem::size_of::<u64>() as c_uint,
             20,
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        defer!(unsafe {
+            libc::close(fd);
+        });
 
-        crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50)
+        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50)
             .map_err(|e| bpf_panic_error(e))
             .unwrap();
 
-        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
+        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u64>(fd, 5) {
             Ok(val) => {
                 assert_eq!(val, 50);
             }
@@ -319,9 +354,51 @@ mod tests {
         }
     }
 
+    #[repr(C)]
+    struct Arg {
+        arg: u32,
+    }
+
+    extern "C" fn clone_child(_: *mut c_void) -> c_int {
+        // Here be dragons. Do not deref `_`. Sleep should get scheduler to give
+        // execution back to parent process.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        0
+    }
+
     #[test]
     fn test_setns() {
-        todo!()
+        use libc::{clone, CLONE_NEWNS, SIGCHLD};
+        use memmap::MmapMut;
+        use std::os::unix::io::AsRawFd;
+
+        let mut arg = Arg { arg: 0x1337beef };
+        let mut stack = MmapMut::map_anon(1024 * 1024).unwrap();
+        unsafe {
+            let ret = clone(
+                clone_child,
+                &mut stack as *mut _ as *mut _,
+                CLONE_NEWNS,
+                &mut arg as *mut _ as *mut _,
+            );
+            if ret < 0 {
+                let errno = errno();
+                let errmsg = nix::errno::Errno::from_i32(errno);
+                panic!("could not create new mount namespace: {:?}", errmsg);
+            }
+            // read mount ns
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(format!("/proc/{}/ns/mnt", ret))
+                .expect("Could not open mount ns file");
+            let fd = file.as_raw_fd();
+
+            // switch mnt namespace
+            crate::bpf::syscall::setns(fd, CLONE_NEWNS)
+                .map_err(|e| bpf_panic_error(e))
+                .unwrap();
+        }
     }
 
     #[test]
