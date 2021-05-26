@@ -14,6 +14,7 @@ use crate::bpf::{
 };
 use crate::error::*;
 use std::ffi::CString;
+use std::thread;
 
 type BpfMapType = u32;
 
@@ -206,26 +207,30 @@ pub(crate) fn bpf_map_create(
     value_size: c_uint,
     max_entries: u32,
 ) -> Result<RawFd, OxidebpfError> {
-    let map_config = MapConfig {
-        map_type: map_type as u32,
-        key_size,
-        value_size,
-        max_entries,
-    };
-    let bpf_attr = Box::new(BpfAttr { map_config });
-    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    thread::spawn(move || {
+        let map_config = MapConfig {
+            map_type: map_type as u32,
+            key_size,
+            value_size,
+            max_entries,
+        };
+        let bpf_attr = Box::new(BpfAttr { map_config });
+        let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
-    unsafe {
-        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
-        Ok(fd as RawFd)
-    }
+        unsafe {
+            let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+            Ok(fd as RawFd)
+        }
+    })
+    .join()
+    .map_err(|e| OxidebpfError::ThreadError(e))?
 }
 
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
     use std::os::raw::{c_int, c_uint};
-    use std::os::unix::io::RawFd;
+    use std::os::unix::io::{FromRawFd, RawFd};
 
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
     use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
@@ -262,14 +267,17 @@ mod tests {
 
     #[test]
     fn bpf_map_create() {
-        crate::bpf::syscall::bpf_map_create(
+        let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
             std::mem::size_of::<u32>() as c_uint,
-            20,
+            10,
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        unsafe {
+            libc::close(fd);
+        }
     }
 
     #[test]
@@ -292,6 +300,10 @@ mod tests {
                 panic!()
             }
         }
+
+        unsafe {
+            libc::close(fd);
+        }
     }
 
     #[test]
@@ -299,17 +311,17 @@ mod tests {
         let fd: RawFd = crate::bpf::syscall::bpf_map_create(
             BPF_MAP_TYPE_ARRAY,
             std::mem::size_of::<u32>() as c_uint,
-            std::mem::size_of::<u32>() as c_uint,
+            std::mem::size_of::<u64>() as c_uint,
             20,
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
 
-        crate::bpf::syscall::bpf_map_update_elem::<u32, u32>(fd, 5, 50)
+        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50)
             .map_err(|e| bpf_panic_error(e))
             .unwrap();
 
-        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 5) {
+        match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u64>(fd, 5) {
             Ok(val) => {
                 assert_eq!(val, 50);
             }
@@ -317,6 +329,9 @@ mod tests {
                 bpf_panic_error(e);
                 panic!()
             }
+        }
+        unsafe {
+            libc::close(fd);
         }
     }
 
@@ -327,7 +342,7 @@ mod tests {
 
     extern "C" fn clone_child(arg: *mut c_void) -> c_int {
         // Here be dragons.
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        std::thread::sleep(std::time::Duration::from_secs(1));
         unsafe {
             let val = arg as *mut Arg;
             let val = &mut *val;
@@ -359,12 +374,14 @@ mod tests {
                 panic!("could not create new mount namespace: {:?}", errmsg);
             }
             // read mount ns
-            let mut file = std::fs::OpenOptions::new()
+            let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(false)
                 .open(format!("/proc/{}/ns/mnt", ret))
                 .expect("Could not open mount ns file");
             let fd = file.as_raw_fd();
+
+            // switch mnt namespace
             crate::bpf::syscall::setns(fd, CLONE_NEWNS)
                 .map_err(|e| bpf_panic_error(e))
                 .unwrap();
