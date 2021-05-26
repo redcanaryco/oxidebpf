@@ -14,11 +14,11 @@ use crate::bpf::{
 };
 use crate::error::*;
 use std::ffi::CString;
-use std::thread;
 
 type BpfMapType = u32;
 
-/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`
+/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed `BpfAttr`
+/// union _must_ be zero initialized before being filled and passed to this call.
 unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, OxidebpfError> {
     // https://man7.org/linux/man-pages/man2/syscall.2.html
     // Architecture-specific requirements
@@ -145,8 +145,10 @@ pub(crate) fn bpf_prog_load(
         log_size: 0,
         log_buf: 0,
     };
-
-    let bpf_attr = Box::new(BpfAttr { bpf_prog_load });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.bpf_prog_load = bpf_prog_load;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
         let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
@@ -167,7 +169,10 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Oxid
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_elem = map_elem;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
@@ -190,7 +195,10 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let bpf_attr = Box::new(BpfAttr { map_elem });
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_elem = map_elem;
+    let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<MapElem>();
     unsafe {
         sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
@@ -198,7 +206,19 @@ pub(crate) fn bpf_map_update_elem<K, V>(
     Ok(())
 }
 
-/// Create a map of the given type with given key size, value size, and number of entires.
+pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_config = map_config;
+    let bpf_attr = Box::new(bpf_attr);
+    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    unsafe {
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        Ok(fd as RawFd)
+    }
+}
+
+/// Create a map of the given type with given key size, value size, and number of entries.
 /// The sizes should be the size of key type and value type in bytes, which can be determined
 /// with `std::mem::size_of::<T>()` where `T` is the type of the key or value.
 pub(crate) fn bpf_map_create(
@@ -207,23 +227,22 @@ pub(crate) fn bpf_map_create(
     value_size: c_uint,
     max_entries: u32,
 ) -> Result<RawFd, OxidebpfError> {
-    thread::spawn(move || {
-        let map_config = MapConfig {
-            map_type: map_type as u32,
-            key_size,
-            value_size,
-            max_entries,
-        };
-        let bpf_attr = Box::new(BpfAttr { map_config });
-        let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    let map_config = MapConfig {
+        map_type: map_type as u32,
+        key_size,
+        value_size,
+        max_entries,
+    };
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    bpf_attr.map_config = map_config;
+    let bpf_attr = Box::new(bpf_attr);
+    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
 
-        unsafe {
-            let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
-            Ok(fd as RawFd)
-        }
-    })
-    .join()
-    .map_err(|e| OxidebpfError::ThreadError(e))?
+    unsafe {
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        Ok(fd as RawFd)
+    }
 }
 
 #[cfg(test)]
