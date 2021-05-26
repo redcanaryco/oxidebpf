@@ -259,6 +259,7 @@ mod tests {
     use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use crate::error::OxidebpfError;
     use nix::errno::{errno, Errno};
+    use scopeguard::defer;
     use std::convert::TryInto;
     use std::ffi::c_void;
 
@@ -294,9 +295,7 @@ mod tests {
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
-        unsafe {
-            libc::close(fd);
-        }
+        defer!(unsafe { libc::close(fd) });
     }
 
     #[test]
@@ -309,6 +308,7 @@ mod tests {
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        defer!(unsafe { libc::close(fd) });
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u32>(fd, 0) {
             Ok(val) => {
@@ -318,10 +318,6 @@ mod tests {
                 bpf_panic_error(e);
                 panic!()
             }
-        }
-
-        unsafe {
-            libc::close(fd);
         }
     }
 
@@ -335,6 +331,7 @@ mod tests {
         )
         .map_err(|e| bpf_panic_error(e))
         .unwrap();
+        defer!(unsafe { libc::close(fd) });
 
         crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50)
             .map_err(|e| bpf_panic_error(e))
@@ -348,9 +345,6 @@ mod tests {
                 bpf_panic_error(e);
                 panic!()
             }
-        }
-        unsafe {
-            libc::close(fd);
         }
     }
 
