@@ -4,8 +4,8 @@ use std::ffi::NulError;
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
     InvalidElf,
-    InvalidElfMachine,
-    UnknownObject(String),
+    InvalidProgramObject,
+    InvalidMapObject,
     LinuxError(Errno),
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),
