@@ -14,6 +14,7 @@ edition = "2018"
 libc = "0.2.94"
 goblin = "0.4.0"
 nix = "0.20.0"
+crossbeam-channel = "0.5.1"
 
 [dev-dependencies]
 memmap = "0.7.0"
