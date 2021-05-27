@@ -11,4 +11,7 @@ pub enum OxidebpfError {
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),
     MapNotLoaded,
+    ProgramNotFound,
+    MapNotFound,
+    NoProgramVersionLoaded,
 }
