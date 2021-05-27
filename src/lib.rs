@@ -1,15 +1,11 @@
 #![allow(dead_code)]
-use crate::blueprint::{MapObject, ProgramBlueprint, ProgramObject};
+use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
-use crate::maps::{PerfMap, ProgramMap};
-use crate::probes::{KProbe, UProbe};
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
-use std::rc::Rc;
 
 mod blueprint;
 mod bpf;
@@ -95,7 +91,7 @@ impl<'a> ProgramGroup<'a> {
         program_version: &ProgramVersion,
     ) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
         let mut matching_blueprints = Vec::<ProgramObject>::new();
-        for mut program in program_version.programs.iter() {
+        for program in program_version.programs.iter() {
             matching_blueprints.push(
                 self.program_blueprint
                     .programs
@@ -147,14 +143,9 @@ impl<'a> ProgramGroup<'a> {
     }
 
     pub fn load(&self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
-        let mut loaded = false;
-        for mut program_version in self.program_versions.iter() {
-            match self.load_program_version(program_version) {
-                Ok(r) => {
-                    loaded = true;
-                    return Ok(r);
-                }
-                Err(_) => {}
+        for program_version in self.program_versions.iter() {
+            if let Ok(r) = self.load_program_version(program_version) {
+                return Ok(r);
             };
         }
         Err(OxidebpfError::NoProgramVersionLoaded)
