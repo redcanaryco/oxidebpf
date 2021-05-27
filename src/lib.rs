@@ -4,7 +4,8 @@ use crate::bpf::constant::bpf_map_type;
 use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::collections::HashMap;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::io::RawFd;
 
 mod blueprint;
@@ -30,6 +31,7 @@ pub struct ProgramGroup<'a> {
 
 pub struct ProgramVersion {
     programs: Vec<Program>,
+    fds: HashSet<RawFd>,
 }
 
 pub struct Program {
@@ -38,7 +40,6 @@ pub struct Program {
     optional: bool,
     program_object: ProgramObject,
     loaded: bool,
-    fd: RawFd,
 }
 
 impl Program {
@@ -69,7 +70,6 @@ impl Program {
 }
 
 impl<'a> ProgramGroup<'a> {
-    // TODO: try-load-fail-try-next logic goes here
     pub fn new(
         program_blueprint: ProgramBlueprint,
         program_versions: Vec<ProgramVersion>,
@@ -86,14 +86,32 @@ impl<'a> ProgramGroup<'a> {
         }
     }
 
+    pub fn load(&mut self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+        for program_version in self.program_versions.iter_mut() {
+            if let Ok(r) = program_version.load_program_version(self.program_blueprint.to_owned()) {
+                return Ok(r);
+            };
+        }
+        Err(OxidebpfError::NoProgramVersionLoaded)
+    }
+}
+
+impl ProgramVersion {
+    pub fn new(programs: Vec<Program>) -> ProgramVersion {
+        ProgramVersion {
+            programs,
+            fds: HashSet::<RawFd>::new(),
+        }
+    }
+
     fn load_program_version(
-        &self,
-        program_version: &ProgramVersion,
+        &mut self,
+        program_blueprint: ProgramBlueprint,
     ) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
         let mut matching_blueprints = Vec::<ProgramObject>::new();
-        for program in program_version.programs.iter() {
+        for program in self.programs.iter() {
             matching_blueprints.push(
-                self.program_blueprint
+                program_blueprint
                     .programs
                     .get(&*program.name)
                     .ok_or(OxidebpfError::ProgramNotFound)?
@@ -105,8 +123,7 @@ impl<'a> ProgramGroup<'a> {
         let mut map_fds = HashMap::<String, RawFd>::new();
         for blueprint in matching_blueprints.iter_mut() {
             for name in blueprint.required_maps().iter() {
-                let map = self
-                    .program_blueprint
+                let map = program_blueprint
                     .maps
                     .get(name)
                     .ok_or(OxidebpfError::MapNotFound)?;
@@ -128,35 +145,20 @@ impl<'a> ProgramGroup<'a> {
                 };
                 blueprint.fixup_map_relocation(map_fd, map)?;
                 map_fds.insert(map.name.clone(), map_fd);
+                self.fds.insert(map_fd);
             }
         }
 
         // load programs
         for blueprint in matching_blueprints.iter() {
-            bpf::syscall::bpf_prog_load(
+            self.fds.insert(bpf::syscall::bpf_prog_load(
                 u32::from(&blueprint.program_type),
                 &blueprint.code,
                 blueprint.license.clone(),
-            )?;
+            )?);
         }
         Ok(None)
     }
-
-    pub fn load(&self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
-        for program_version in self.program_versions.iter() {
-            if let Ok(r) = self.load_program_version(program_version) {
-                return Ok(r);
-            };
-        }
-        Err(OxidebpfError::NoProgramVersionLoaded)
-    }
-}
-
-impl ProgramVersion {
-    pub fn new(programs: Vec<Program>) -> ProgramVersion {
-        ProgramVersion { programs }
-    }
-    // TODO: try-load-fail-bail logic goes here
 }
 
 impl Drop for ProgramVersion {
