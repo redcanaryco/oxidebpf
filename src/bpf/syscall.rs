@@ -144,6 +144,20 @@ pub(crate) fn bpf_prog_load(
         log_level: 0,
         log_size: 0,
         log_buf: 0,
+        kern_version: None,
+        prog_flags: None,
+        prog_name: None,
+        prog_ifindex: None,
+        expected_attach_type: None,
+        prog_btf_fd: None,
+        func_info_rec_size: None,
+        func_info: None,
+        func_info_cnt: None,
+        line_info_rec_size: None,
+        line_info: None,
+        line_info_cnt: None,
+        attach_btf_id: None,
+        prog_attach: None,
     };
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
     let mut bpf_attr = unsafe { bpf_attr.assume_init() };
