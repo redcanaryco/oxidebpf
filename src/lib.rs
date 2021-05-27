@@ -87,12 +87,14 @@ impl ProgramGroup {
     }
 
     pub fn load(&mut self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+        let mut errors = Vec::<OxidebpfError>::new();
         for program_version in self.program_versions.iter_mut() {
-            if let Ok(r) = program_version.load_program_version(self.program_blueprint.to_owned()) {
-                return Ok(r);
+            match program_version.load_program_version(self.program_blueprint.to_owned()) {
+                Ok(r) => return Ok(r),
+                Err(e) => errors.push(e),
             };
         }
-        Err(OxidebpfError::NoProgramVersionLoaded)
+        Err(OxidebpfError::NoProgramVersionLoaded(errors))
     }
 }
 
@@ -185,23 +187,27 @@ mod program_tests {
     use crate::blueprint::ProgramBlueprint;
     use crate::bpf::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
+    use std::path::PathBuf;
 
     #[test]
     fn test_program_group() {
-        let program_blueprint = ProgramBlueprint::new(
-            &std::fs::read("./test_obj/test.o").expect("Could not open file"),
-            None,
-        )
-        .expect("Could not open test object file");
-        let program_group = ProgramGroup::new(
+        // TODO: currently fails with E2BIG
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("resources/test.o");
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(d).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+        let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![Program {
                 kind: ProgramType::Kprobe,
-                name: "".to_string(),
+                name: "sys_ptrace_write".to_string(),
                 optional: false,
                 loaded: false,
             }])],
             None,
         );
+
+        program_group.load().expect("Could not load programs");
     }
 }

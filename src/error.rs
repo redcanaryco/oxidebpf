@@ -13,5 +13,5 @@ pub enum OxidebpfError {
     MapNotLoaded,
     ProgramNotFound,
     MapNotFound,
-    NoProgramVersionLoaded,
+    NoProgramVersionLoaded(Vec<OxidebpfError>),
 }
