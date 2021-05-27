@@ -113,7 +113,7 @@ impl ProgramBlueprint {
 pub(crate) struct ProgramObject {
     pub program_type: ProgramType,
     pub name: String,
-    code: BpfCode,
+    pub(crate) code: BpfCode,
     relocations: Vec<Reloc>,
     pub license: String,
 }

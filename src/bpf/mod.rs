@@ -55,7 +55,7 @@ pub(crate) struct PerfEventAttr {
 #[repr(align(8), C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MapConfig {
-    map_type: c_uint,
+    pub(crate) map_type: c_uint,
     key_size: c_uint,
     value_size: c_uint,
     max_entries: c_uint,
@@ -176,8 +176,8 @@ pub(crate) enum ProgramType {
     RawTracepoint,
 }
 
-impl From<ProgramType> for u32 {
-    fn from(value: ProgramType) -> u32 {
+impl From<&ProgramType> for u32 {
+    fn from(value: &ProgramType) -> u32 {
         match value {
             ProgramType::Kprobe
             | ProgramType::Kretprobe

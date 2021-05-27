@@ -1,10 +1,13 @@
 #![allow(dead_code)]
-use crate::blueprint::{EbpfObject, ProgramBlueprint, ProgramObject};
+use crate::blueprint::{MapObject, ProgramBlueprint, ProgramObject};
+use crate::bpf::constant::bpf_map_type;
 use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
 use crate::maps::{PerfMap, ProgramMap};
 use crate::probes::{KProbe, UProbe};
 use crossbeam_channel::{bounded, Receiver, Sender};
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
 
@@ -37,15 +40,14 @@ pub struct Program {
     kind: ProgramType,
     name: String,
     optional: bool,
-    // TODO: add kprobe/uprobe
+    program_object: ProgramObject,
+    loaded: bool,
+    fd: RawFd,
 }
 
 impl Program {
-    fn get_name(&self) -> String {
-        match self {
-            Program::KProbe { name, .. } => name.clone(),
-            Program::UProbe { name, .. } => name.clone(),
-        }
+    fn get_name(&self) -> &String {
+        &self.name
     }
     // TODO: Figure out what's inside Program, load/unload, manage fd, drop, etc
     pub fn new() -> Program {
@@ -60,16 +62,9 @@ impl Program {
         unimplemented!()
     }
 
-    pub fn load(&self) -> RawFd {
-        #![allow(unused_variables)]
-        match self {
-            Program::KProbe { kprobe, .. } => {
-                unimplemented!()
-            }
-            Program::UProbe { uprobe, .. } => {
-                unimplemented!()
-            }
-        };
+    fn load(&self) {
+        todo!()
+        //bpf::syscall::bpf_prog_load(self.program_object.program_type as u32)
     }
 
     fn get_fd() -> RawFd {
@@ -95,50 +90,74 @@ impl<'a> ProgramGroup<'a> {
         }
     }
 
-    pub fn load(&self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
-        for program_version in self.program_versions.iter() {
-            let matching_blueprints: Vec<Vec<&EbpfObject>> = program_version
-                .programs
-                .iter()
-                .map(|program| {
-                    let matching_objects: Vec<&EbpfObject> = self
-                        .program_blueprint
-                        .objects
-                        .iter()
-                        .filter(|object| match object {
-                            EbpfObject::Program(p) => {
-                                p.name == program.name && p.kind == program.kind
-                            }
-                            _ => false,
-                        })
-                        .collect();
-                    matching_objects
-                })
-                .collect();
-            let matching_blueprints: Vec<&ProgramObject> = {
-                let mut tmp = Vec::new();
-                for blueprint in matching_blueprints {
-                    for obj in blueprint {
-                        match obj {
-                            EbpfObject::Map(_) => {}
-                            EbpfObject::Program(p) => tmp.push(p),
+    fn load_program_version(
+        &self,
+        program_version: &ProgramVersion,
+    ) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+        let mut matching_blueprints = Vec::<ProgramObject>::new();
+        for mut program in program_version.programs.iter() {
+            matching_blueprints.push(
+                self.program_blueprint
+                    .programs
+                    .get(&*program.name)
+                    .ok_or(OxidebpfError::ProgramNotFound)?
+                    .to_owned(),
+            );
+        }
+
+        // load maps and save fds and apply relocations
+        let mut map_fds = HashMap::<String, RawFd>::new();
+        for blueprint in matching_blueprints.iter_mut() {
+            for name in blueprint.required_maps().iter() {
+                let map = self
+                    .program_blueprint
+                    .maps
+                    .get(name)
+                    .ok_or(OxidebpfError::MapNotFound)?;
+                let map_fd = match map.definition.map_type {
+                    bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
+                        // TODO load perfmap and make/save channel to return
+                        0
+                    }
+                    _ => {
+                        if map_fds.contains_key(&map.name.clone()) {
+                            map_fds
+                                .get(&map.name.clone())
+                                .ok_or(OxidebpfError::MapNotFound)?
+                                .to_owned()
+                        } else {
+                            bpf::syscall::bpf_map_create_with_config(map.definition)?
                         }
                     }
-                }
-                tmp
-            };
-            // find associated maps by section_name
-            let mut required_maps = Vec::<&String>::new();
-            matching_blueprints.iter().for_each(|blueprint| {
-                blueprint
-                    .required_maps()
-                    .iter()
-                    .for_each(|name| required_maps.push(name))
-            });
+                };
+                blueprint.fixup_map_relocation(map_fd, map)?;
+                map_fds.insert(map.name.clone(), map_fd);
+            }
+        }
 
-            // load associated maps
+        // load programs
+        for blueprint in matching_blueprints.iter() {
+            bpf::syscall::bpf_prog_load(
+                u32::from(&blueprint.program_type),
+                &blueprint.code,
+                blueprint.license.clone(),
+            )?;
         }
         Ok(None)
+    }
+
+    pub fn load(&self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+        let mut loaded = false;
+        for mut program_version in self.program_versions.iter() {
+            match self.load_program_version(program_version) {
+                Ok(r) => {
+                    loaded = true;
+                    return Ok(r);
+                }
+                Err(_) => {}
+            };
+        }
+        Err(OxidebpfError::NoProgramVersionLoaded)
     }
 }
 

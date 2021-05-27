@@ -10,7 +10,8 @@ use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{
-    constant::perf_ioctls, BpfAttr, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
+    constant::perf_ioctls, BpfAttr, BpfCode, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem,
+    PerfEventAttr,
 };
 use crate::error::*;
 use std::ffi::CString;
@@ -129,17 +130,17 @@ pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfErro
 /// License should (almost) always be GPL.
 pub(crate) fn bpf_prog_load(
     prog_type: u32,
-    insns: Vec<BpfInsn>,
+    insns: &BpfCode,
     license: String,
 ) -> Result<RawFd, OxidebpfError> {
-    let insn_cnt = insns.len();
-    let insns = Box::new(insns);
+    let insn_cnt = insns.0.len();
+    let insns = &insns.0;
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
-        insns: insns.as_ref() as *const _ as u64,
+        insns: insns as *const _ as u64,
         license: &license as *const _ as u64,
         log_level: 0,
         log_size: 0,
@@ -256,7 +257,9 @@ mod tests {
     use crate::bpf::syscall::{
         bpf_map_lookup_elem, bpf_prog_load, perf_event_ioc_set_bpf, perf_event_open,
     };
-    use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use crate::bpf::{
+        BpfCode, BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup,
+    };
     use crate::error::OxidebpfError;
     use nix::errno::{errno, Errno};
     use scopeguard::defer;
@@ -459,12 +462,7 @@ mod tests {
         todo!();
         match bpf_prog_load(
             BPF_PROG_TYPE_KPROBE,
-            vec![BpfInsn {
-                code: 0,
-                regs: 0,
-                off: 0,
-                imm: 0,
-            }],
+            &BpfCode { 0: vec![] },
             "GPL".to_string(),
         ) {
             Ok(_fd) => {}
