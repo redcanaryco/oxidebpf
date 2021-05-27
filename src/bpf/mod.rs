@@ -189,3 +189,17 @@ impl From<ProgramType> for u32 {
         }
     }
 }
+
+impl From<&str> for ProgramType {
+    fn from(value: &str) -> ProgramType {
+        match value {
+            "kprobe" => ProgramType::Kprobe,
+            "kretprobe" => ProgramType::Kretprobe,
+            "uprobe" => ProgramType::Uprobe,
+            "uretprobe" => ProgramType::Uretprobe,
+            "tracepoint" => ProgramType::Tracepoint,
+            "rawtracepoint" => ProgramType::RawTracepoint,
+            _ => ProgramType::Unspec,
+        }
+    }
+}

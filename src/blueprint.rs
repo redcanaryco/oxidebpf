@@ -1,4 +1,6 @@
 use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
+use itertools::Itertools;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
@@ -6,28 +8,42 @@ use std::os::unix::io::RawFd;
 use crate::bpf::*;
 use crate::error::*;
 
-/// Structure that parses and holds eBPF objects from an ELF object.
+/// Structure that parses eBPF objects from an ELF object.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramBlueprint {
-    pub(crate) objects: Vec<EbpfObject>,
+    pub(crate) maps: HashMap<String, MapObject>,
+    pub(crate) programs: HashMap<String, ProgramObject>,
 }
 
-/// Parses a section and produces a vector of ebpf objects.
-///
-/// Arguments:
-/// object_data - bytes of the ELF object file
-/// elf - the parsed ELF object
-/// section_index - the section index being parsed
-///
-/// Returns
-pub type SectionParser = fn(
-    object_data: &[u8],
-    elf: &Elf,
-    section_index: usize,
-) -> Result<Vec<EbpfObject>, OxidebpfError>;
+/// This enum lets the ProgramBlueprint know how to parse sections not covered in our eBPF ABI.
+#[derive(Debug, Clone)]
+pub enum SectionType<'a> {
+    Map {
+        /// The name of the section prefix.
+        section_prefix: &'a str,
+    },
+    Program {
+        /// The name of the section prefix.
+        section_prefix: &'a str,
+        /// The type of program ("kprobe", "kretprobe", "uprobe",...)
+        program_type: &'a str,
+    },
+}
+
+impl<'a> SectionType<'a> {
+    fn prefix_matches(&self, other: &str) -> bool {
+        match self {
+            Self::Map { section_prefix, .. } => *section_prefix == other,
+            Self::Program { section_prefix, .. } => *section_prefix == other,
+        }
+    }
+}
 
 impl ProgramBlueprint {
-    pub fn new(data: &[u8], parser: Option<SectionParser>) -> Result<Self, OxidebpfError> {
+    pub fn new(
+        data: &[u8],
+        section_types: Option<Vec<SectionType>>,
+    ) -> Result<Self, OxidebpfError> {
         let elf: Elf = parse_and_verify_elf(data)?;
         let mut blueprint = Self::default();
 
@@ -42,48 +58,51 @@ impl ProgramBlueprint {
             let prefix = name_split.next().unwrap_or_default();
             let name = name_split.next();
 
-            blueprint.objects.extend(match (prefix, name) {
-                ("maps", name) => MapObject::from_section(name, data, &elf, sh_index, sh)?,
-                ("kprobe", Some(name)) => ProgramObject::from_section(
-                    ProgramType::Kprobe,
-                    name,
-                    data,
-                    &elf,
-                    sh_index,
-                    sh,
-                )?,
-                ("kretprobe", Some(name)) => ProgramObject::from_section(
-                    ProgramType::Kretprobe,
-                    name,
-                    data,
-                    &elf,
-                    sh_index,
-                    sh,
-                )?,
-                ("uprobe", Some(name)) => ProgramObject::from_section(
-                    ProgramType::Uprobe,
-                    name,
-                    data,
-                    &elf,
-                    sh_index,
-                    sh,
-                )?,
-                ("uretprobe", Some(name)) => ProgramObject::from_section(
-                    ProgramType::Uretprobe,
-                    name,
-                    data,
-                    &elf,
-                    sh_index,
-                    sh,
-                )?,
-                _ => {
-                    if let Some(parser) = parser {
-                        parser(data, &elf, sh_index)?
-                    } else {
-                        Vec::new()
+            // First check to see if section name matches any of the prefixes that we expect.
+            match prefix {
+                "maps" => {
+                    for obj in MapObject::from_section(name, data, &elf, sh_index, sh)?.into_iter()
+                    {
+                        blueprint.maps.insert(obj.symbol_name.clone(), obj);
+                    }
+                    continue;
+                }
+                "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => {
+                    let obj =
+                        ProgramObject::from_section(prefix.into(), name, data, &elf, sh_index, sh)?;
+                    blueprint.programs.insert(obj.name.clone(), obj);
+                    continue;
+                }
+                _ => (),
+            }
+
+            // check to see if the section matches up with the section definitions the user passed in
+            for section_type in section_types
+                .iter()
+                .flat_map(|s| s)
+                .filter(|s| s.prefix_matches(prefix))
+            {
+                match section_type {
+                    SectionType::Map { .. } => {
+                        for obj in
+                            MapObject::from_section(name, data, &elf, sh_index, sh)?.into_iter()
+                        {
+                            blueprint.maps.insert(obj.symbol_name.clone(), obj);
+                        }
+                    }
+                    SectionType::Program { program_type, .. } => {
+                        let obj = ProgramObject::from_section(
+                            (*program_type).into(),
+                            name,
+                            data,
+                            &elf,
+                            sh_index,
+                            sh,
+                        )?;
+                        blueprint.programs.insert(obj.name.clone(), obj);
                     }
                 }
-            });
+            }
         }
 
         Ok(blueprint)
@@ -91,38 +110,42 @@ impl ProgramBlueprint {
 }
 
 #[derive(Debug, Clone)]
-pub enum EbpfObject {
-    Map(MapObject),
-    Program(ProgramObject),
-}
-
-#[derive(Debug, Clone)]
-pub struct ProgramObject {
-    pub(crate) kind: ProgramType,
-    pub(crate) name: String,
+pub(crate) struct ProgramObject {
+    pub program_type: ProgramType,
+    pub name: String,
     code: BpfCode,
     relocations: Vec<Reloc>,
-    pub(crate) license: String,
+    pub license: String,
 }
 
 impl ProgramObject {
     fn from_section<'a>(
-        kind: ProgramType,
-        name: &str,
+        program_type: ProgramType,
+        name: Option<&str>,
         data: &'a [u8],
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
-    ) -> Result<Vec<EbpfObject>, OxidebpfError> {
+    ) -> Result<Self, OxidebpfError> {
         let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
         let code = BpfCode::try_from(section_data)?;
-        Ok(vec![EbpfObject::Program(ProgramObject {
-            kind,
-            name: name.to_string(),
+
+        let symbol_name = elf
+            .syms
+            .iter()
+            .filter(|sym| sym.st_shndx == sh_index)
+            .next()
+            .map(|sym| get_symbol_name(&elf, &sym).unwrap_or_default())
+            .unwrap_or_default();
+
+        // For object naming, we prioritize the section name over the symbol name
+        Ok(Self {
+            program_type,
+            name: name.map(str::to_string).unwrap_or(symbol_name),
             code,
             relocations: Reloc::get_map_relocations(sh_index, &elf)?,
             license: get_license(data, elf),
-        })])
+        })
     }
 
     /// Returns a list of map symbol names that this program requires
@@ -130,6 +153,7 @@ impl ProgramObject {
         self.relocations
             .iter()
             .map(|r| r.symbol_name.clone())
+            .unique()
             .collect()
     }
 
@@ -163,7 +187,7 @@ struct Reloc {
     /// The instruction to apply the relocation to
     pub insn_index: u64,
     /// The type of relocation. (R_BPF_64_32, R_BPF_64_64,)
-    pub kind: u32,
+    pub reloc_type: u32,
 }
 
 impl Reloc {
@@ -199,7 +223,7 @@ impl Reloc {
                     Some(Reloc {
                         symbol_name: get_symbol_name(&elf, &sym).unwrap_or_default(),
                         insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
-                        kind: r.r_type,
+                        reloc_type: r.r_type,
                     })
                 } else {
                     None
@@ -210,13 +234,13 @@ impl Reloc {
 }
 
 #[derive(Debug, Clone)]
-pub struct MapObject {
+pub(crate) struct MapObject {
     /// The map definition parsed out of the eBPF ELF object
-    pub(crate) definition: MapConfig,
+    pub definition: MapConfig,
     /// The name of the map
-    pub(crate) name: String,
+    pub name: String,
     /// The symbol name of the map
-    pub(crate) symbol_name: String,
+    pub symbol_name: String,
 }
 
 impl MapObject {
@@ -226,34 +250,27 @@ impl MapObject {
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
-    ) -> Result<Vec<EbpfObject>, OxidebpfError> {
+    ) -> Result<Vec<Self>, OxidebpfError> {
         let mut objects = Vec::new();
         let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
 
         // Assume that all symbols in this section are map definitions.
-        for (index, sym) in elf
-            .syms
-            .iter()
-            .filter(|sym| sym.st_shndx == sh_index)
-            .enumerate()
-        {
+        for sym in elf.syms.iter().filter(|sym| sym.st_shndx == sh_index) {
             let symbol_name = get_symbol_name(elf, &sym).unwrap_or_default();
             // If a section name was provided (which does not include the "maps/" prefix)
             // then we use that. Otherwise we use the symbol name.
-            let name = if index == 0 && section_name.is_some() {
-                section_name.unwrap_or_default().to_string()
-            } else {
-                symbol_name.clone()
-            };
+            let name = section_name
+                .map(str::to_string)
+                .unwrap_or_else(|| symbol_name.clone());
 
             if let Some(map_data) =
                 section_data.get(sym.st_value as usize..section_data.len() as usize)
             {
-                objects.push(EbpfObject::Map(MapObject {
+                objects.push(Self {
                     definition: MapConfig::try_from(map_data)?,
                     name,
                     symbol_name,
-                }));
+                });
             }
         }
 
