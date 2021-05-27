@@ -56,6 +56,7 @@ pub(crate) struct PerfEventAttr {
 #[repr(align(8), C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct MapConfig {
+    // TODO: bring this up to latest kernel and make others options
     pub(crate) map_type: c_uint,
     key_size: c_uint,
     value_size: c_uint,
@@ -133,6 +134,7 @@ struct MapElem {
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
 struct BpfProgLoad {
+    // Minimal functionality set
     prog_type: c_uint,
     insn_cnt: c_uint,
     insns: c_ulong,   // Vec<BpfInsn> -  const struct bpf_insn
@@ -140,11 +142,33 @@ struct BpfProgLoad {
     log_level: c_uint,
     log_size: c_uint,
     log_buf: c_ulong, // 'char *' buffer
-                      //kern_version: c_uint,
+    // Additional functionality set, as of 5.12.7
+    kern_version: Option<c_uint>, // not used
+    prog_flags: Option<c_uint>,
+    prog_name: Option<c_ulong>, // char pointer, length BPF_OBJ_NAME_LEN
+    prog_ifindex: Option<c_uint>,
+    expected_attach_type: Option<c_uint>,
+    prog_btf_fd: Option<c_uint>,
+    func_info_rec_size: Option<c_uint>,
+    func_info: Option<c_ulong>,
+    func_info_cnt: Option<c_uint>,
+    line_info_rec_size: Option<c_uint>,
+    line_info: Option<c_ulong>,
+    line_info_cnt: Option<c_uint>,
+    attach_btf_id: Option<c_uint>,
+    prog_attach: Option<BpfProgAttach>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union BpfProgAttach {
+    attach_prog_fd: c_uint,
+    attach_btf_objc_fd: c_uint,
 }
 
 #[repr(align(8), C)]
 union BpfAttr {
+    // TODO: bring this up to latest kernel and make others options
     map_config: MapConfig,
     map_elem: MapElem,
     bpf_prog_load: BpfProgLoad,
