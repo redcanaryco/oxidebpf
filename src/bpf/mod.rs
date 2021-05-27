@@ -177,13 +177,198 @@ union BpfProgAttach {
 }
 
 #[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfMapBatch {
+    in_batch: c_ulong,
+    out_batch: c_ulong,
+    keys: c_ulong,
+    values: c_ulong,
+    count: c_uint,
+    map_fd: c_uint,
+    elem_flags: c_ulong,
+    flags: c_ulong,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfObj {
+    pathname: c_ulong,
+    bpf_fd: c_uint,
+    file_flags: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfProgTach {
+    target_fd: c_uint,
+    attach_bpf_fd: c_uint,
+    attach_type: c_uint,
+    attach_flags: c_uint,
+    replace_bpf_fd: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfProgTestRun {
+    prog_fd: c_uint,
+    retval: c_uint,
+    data_size_in: c_uint,
+    data_size_out: c_uint,
+    data_in: c_ulong,
+    data_out: c_ulong,
+    repeat: c_uint,
+    duration: c_uint,
+    ctx_size_in: c_uint,
+    ctx_size_out: c_uint,
+    ctx_in: c_ulong,
+    ctx_out: c_ulong,
+    flags: c_uint,
+    cpu: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfGetId {
+    id: GetIdUnion,
+    next_id: c_uint,
+    open_flags: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+union GetIdUnion {
+    start_id: c_uint,
+    prog_id: c_uint,
+    map_id: c_uint,
+    btf_id: c_uint,
+    link_id: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfObjGetInfoByFd {
+    bpf_fd: c_uint,
+    info_len: c_uint,
+    info: c_ulong,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfProgQuery {
+    target_fd: c_uint,
+    attach_type: c_uint,
+    query_flags: c_uint,
+    attach_flags: c_uint,
+    prog_ids: c_ulong,
+    prog_cnt: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfRawTracepointOpen {
+    name: c_ulong,
+    prog_fd: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfBtfLoad {
+    btf: c_ulong,
+    btf_log_buf: c_ulong,
+    btf_size: c_uint,
+    btf_log_size: c_uint,
+    btf_log_level: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct TaskFdQuery {
+    pid: c_uint,
+    fd: c_uint,
+    flags: c_uint,
+    buf_len: c_uint,
+    buf: c_ulong,
+    prog_id: c_uint,
+    fd_type: c_uint,
+    probe_offset: c_ulong,
+    probe_addr: c_ulong,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+union LinkTarget {
+    target_fd: c_uint,
+    target_ifindex: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct LinkTargetIterInfo {
+    iter_info: c_ulong,
+    iter_info_len: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+union LinkTargetInfo {
+    target_btf_id: c_uint,
+    info: LinkTargetIterInfo,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfLinkCreate {
+    prog_fd: c_uint,
+    target: LinkTarget,
+    attach_type: c_uint,
+    flags: c_uint,
+    link_target_info: LinkTargetInfo,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfLinkUpdate {
+    link_fd: c_uint,
+    new_prog_fd: c_uint,
+    flags: c_uint,
+    old_prog_fd: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfLinkDetach {
+    link_fd: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfEnableStats {
+    stat_type: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfIterCreate {
+    link_fd: c_uint,
+    flags: c_uint,
+}
+
+#[repr(align(8), C)]
+#[derive(Clone, Copy)]
+struct BpfProgBindMap {
+    prog_fd: c_uint,
+    map_fd: c_uint,
+    flags: c_uint,
+}
+
+#[repr(align(8), C)]
 union BpfAttr {
     // minimum functionality set
     map_config: MapConfig,      // BPF_MAP_CREATE
     map_elem: MapElem,          // BPF_MAP_*_ELEM
     bpf_prog_load: BpfProgLoad, // BPF_PROG_LOAD
     // optional as of 5.12.7
-    bpf_map_batch: BpfMapBach,                     // BPF_MAP_*_BATCH
+    bpf_map_batch: BpfMapBatch,                    // BPF_MAP_*_BATCH
     bpf_obj: BpfObj,                               // BPF_OBJ_*
     bpf_prog_tach: BpfProgTach,                    // BPF_PROG_ATTACH/DETACH
     bpf_prog_test_run: BpfProgTestRun,             // BPF_PROG_TEST_RUN
