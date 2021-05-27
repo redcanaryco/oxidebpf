@@ -241,12 +241,12 @@ pub(crate) fn bpf_map_create(
     value_size: c_uint,
     max_entries: u32,
 ) -> Result<RawFd, OxidebpfError> {
-    let map_config = MapConfig {
-        map_type: map_type as u32,
-        key_size,
-        value_size,
-        max_entries,
-    };
+    let map_config = MaybeUninit::<MapConfig>::zeroed();
+    let mut map_config = unsafe { map_config.assume_init() };
+    map_config.map_type = map_type as u32;
+    map_config.key_size = key_size;
+    map_config.value_size = value_size;
+    map_config.max_entries = max_entries;
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
     let mut bpf_attr = unsafe { bpf_attr.assume_init() };
     bpf_attr.map_config = map_config;
