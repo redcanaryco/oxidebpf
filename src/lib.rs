@@ -3,12 +3,16 @@ use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crate::maps::Event;
+use crate::maps::PerfMap;
+use crossbeam_channel::{bounded, Receiver, SendError, Sender};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
+use std::slice;
+use std::thread::JoinHandle;
 
 mod blueprint;
 mod bpf;
@@ -18,6 +22,7 @@ pub mod probes;
 
 // TODO: this is the public interface, needs docstrings
 
+#[derive(Clone)]
 struct Channel {
     tx: Sender<Vec<u8>>,
     rx: Receiver<Vec<u8>>,
@@ -86,10 +91,12 @@ impl ProgramGroup {
         }
     }
 
-    pub fn load(&mut self) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+    pub fn load(&mut self) -> Result<Option<Receiver<Vec<u8>>>, OxidebpfError> {
         let mut errors = Vec::<OxidebpfError>::new();
         for program_version in self.program_versions.iter_mut() {
-            match program_version.load_program_version(self.program_blueprint.to_owned()) {
+            match program_version
+                .load_program_version(self.program_blueprint.to_owned(), self.channel.clone())
+            {
                 Ok(r) => return Ok(r),
                 Err(e) => errors.push(e),
             };
@@ -106,11 +113,33 @@ impl ProgramVersion {
         }
     }
 
+    fn event_poller(&self, perfmaps: Vec<PerfMap>, tx: Sender<Vec<u8>>) {
+        std::thread::spawn(move || 'outer: loop {
+            for perfmap in perfmaps.iter() {
+                let event = perfmap.read();
+                let event = match event {
+                    None => continue,
+                    Some(e) => e,
+                };
+                let event = match event {
+                    Event::Some(e) => e,
+                    Event::Lost => continue,
+                };
+                match tx.send(event.data) {
+                    Ok(_) => {}
+                    Err(_) => break 'outer,
+                };
+            }
+        });
+    }
+
     fn load_program_version(
         &mut self,
         program_blueprint: ProgramBlueprint,
-    ) -> Result<Option<Receiver<&[u8]>>, OxidebpfError> {
+        channel: Channel,
+    ) -> Result<Option<Receiver<Vec<u8>>>, OxidebpfError> {
         let mut matching_blueprints = Vec::<ProgramObject>::new();
+        let mut perfmaps = Vec::<PerfMap>::new();
         for program in self.programs.iter() {
             matching_blueprints.push(
                 program_blueprint
@@ -132,7 +161,10 @@ impl ProgramVersion {
                 let map_fd = match map.definition.map_type {
                     bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                         // TODO load perfmap and make/save channel to return
-                        0
+                        let fd = bpf::syscall::bpf_map_create_with_config(map.definition)?;
+                        let perfmap = PerfMap::new(/* put in perfmap details */)?;
+                        perfmaps.push(perfmap);
+                        fd
                     }
                     _ => {
                         if map_fds.contains_key(&map.name.clone()) {
@@ -159,7 +191,15 @@ impl ProgramVersion {
                 blueprint.license.clone(),
             )?);
         }
-        Ok(None)
+
+        // start event poller, if one exists
+        // pass back channel, if it exists
+        if perfmaps.is_empty() {
+            Ok(None)
+        } else {
+            self.event_poller(perfmaps, channel.tx);
+            Ok(Some(channel.rx))
+        }
     }
 }
 

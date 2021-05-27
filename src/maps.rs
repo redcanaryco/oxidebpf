@@ -1,8 +1,16 @@
+use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
 use std::marker::PhantomData;
 use std::os::unix::io::RawFd;
-use crate::bpf::MapConfig;
 
+pub struct EventData {
+    pub data: Vec<u8>,
+}
+
+pub(crate) enum Event {
+    Some(EventData),
+    Lost,
+}
 pub struct PerfMap {
     // TODO: perfmap functions
     name: String,
@@ -41,19 +49,20 @@ pub trait PerCpu {
 
 impl PerfMap {
     // we want cpuid and give back a channel to read from
-    pub fn new() -> PerfMap {
-        unimplemented!()
+    pub fn new() -> Result<PerfMap, OxidebpfError> {
+        // new is bind
+        // open_perf_event to get fd
+        // set up stuff to read from
+        Ok(PerfMap {
+            name: "".to_string(),
+            ev_fds: vec![],
+            ev_names: vec![],
+        })
     }
 
-    pub fn bind(&self) {
-        // superseded by `load()`? - check
-        unimplemented!()
-    }
-
-    pub fn get_channel(&self) {
+    pub(crate) fn read(&self) -> Option<Event> {
         // TODO: every event out of the channel is some Event::Lost() or Event::Sample() of raw
-        // bytes, implement, we want to return events+cpuid
-        unimplemented!()
+        None
     }
 }
 
@@ -83,7 +92,7 @@ impl<T> ArrayMap<T> {
     }
 }
 
-impl<T> RWMap<T> for ArrayMap< T> {
+impl<T> RWMap<T> for ArrayMap<T> {
     fn read(&self) -> Result<T, OxidebpfError> {
         unimplemented!()
     }
