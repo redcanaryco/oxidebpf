@@ -6,6 +6,8 @@ use crate::error::OxidebpfError;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
+use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
 
 mod blueprint;
@@ -16,17 +18,17 @@ pub mod probes;
 
 // TODO: this is the public interface, needs docstrings
 
-struct Channel<'a> {
-    tx: Sender<&'a [u8]>,
-    rx: Receiver<&'a [u8]>,
+struct Channel {
+    tx: Sender<Vec<u8>>,
+    rx: Receiver<Vec<u8>>,
 }
 
-pub struct ProgramGroup<'a> {
+pub struct ProgramGroup {
     // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
     program_blueprint: ProgramBlueprint,
     program_versions: Vec<ProgramVersion>,
     event_buffer_size: Option<usize>,
-    channel: Channel<'a>,
+    channel: Channel,
 }
 
 pub struct ProgramVersion {
@@ -38,7 +40,6 @@ pub struct Program {
     kind: ProgramType,
     name: String,
     optional: bool,
-    program_object: ProgramObject,
     loaded: bool,
 }
 
@@ -61,7 +62,6 @@ impl Program {
 
     fn load(&self) {
         todo!()
-        //bpf::syscall::bpf_prog_load(self.program_object.program_type as u32)
     }
 
     fn get_fd() -> RawFd {
@@ -69,13 +69,13 @@ impl Program {
     }
 }
 
-impl<'a> ProgramGroup<'a> {
+impl ProgramGroup {
     pub fn new(
         program_blueprint: ProgramBlueprint,
         program_versions: Vec<ProgramVersion>,
         event_buffer_size: Option<usize>,
-    ) -> ProgramGroup<'a> {
-        let (tx, rx): (Sender<&'a [u8]>, Receiver<&'a [u8]>) =
+    ) -> ProgramGroup {
+        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) =
             bounded(event_buffer_size.unwrap_or(1024));
         let channel = Channel { tx, rx };
         ProgramGroup {
@@ -161,9 +161,47 @@ impl ProgramVersion {
     }
 }
 
+impl Drop for ProgramGroup {
+    fn drop(&mut self) {
+        for program_version in self.program_versions.iter_mut() {
+            std::mem::drop(program_version);
+        }
+    }
+}
+
 impl Drop for ProgramVersion {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
-        todo!()
+        for fd in self.fds.iter() {
+            unsafe {
+                libc::close(*fd as c_int);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod program_tests {
+    use crate::blueprint::ProgramBlueprint;
+    use crate::bpf::ProgramType;
+    use crate::{Program, ProgramGroup, ProgramVersion};
+
+    #[test]
+    fn test_program_group() {
+        let program_blueprint = ProgramBlueprint::new(
+            &std::fs::read("./test_obj/test.o").expect("Could not open file"),
+            None,
+        )
+        .expect("Could not open test object file");
+        let program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![Program {
+                kind: ProgramType::Kprobe,
+                name: "".to_string(),
+                optional: false,
+                loaded: false,
+            }])],
+            None,
+        );
     }
 }
