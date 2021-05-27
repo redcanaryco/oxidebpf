@@ -178,10 +178,27 @@ union BpfProgAttach {
 
 #[repr(align(8), C)]
 union BpfAttr {
-    // TODO: bring this up to latest kernel and make others options
-    map_config: MapConfig,
-    map_elem: MapElem,
-    bpf_prog_load: BpfProgLoad,
+    // minimum functionality set
+    map_config: MapConfig,      // BPF_MAP_CREATE
+    map_elem: MapElem,          // BPF_MAP_*_ELEM
+    bpf_prog_load: BpfProgLoad, // BPF_PROG_LOAD
+    // optional as of 5.12.7
+    bpf_map_batch: BpfMapBach,                     // BPF_MAP_*_BATCH
+    bpf_obj: BpfObj,                               // BPF_OBJ_*
+    bpf_prog_tach: BpfProgTach,                    // BPF_PROG_ATTACH/DETACH
+    bpf_prog_test_run: BpfProgTestRun,             // BPF_PROG_TEST_RUN
+    bpf_get_id: BpfGetId,                          // BPF_*_GET_*_ID
+    bpf_obj_get_info_by_fd: BpfObjGetInfoByFd,     // BPF_OBJ_GET_INFO_BY_FD
+    bpf_prog_query: BpfProgQuery,                  // BPF_PROG_QUERY
+    bpf_raw_tracepoint_open: BpfRawTracepointOpen, // BPF_RAW_TRACEPOINT_OPEN
+    bpf_btf_load: BpfBtfLoad,                      // BPF_BTF_LOAD,
+    task_fd_query: TaskFdQuery,
+    bpf_link_create: BpfLinkCreate, // BPF_LINK_CREATE
+    bpf_link_update: BpfLinkUpdate, // BPF_LINK_UPDATE
+    bpf_link_detach: BpfLinkDetach,
+    bpf_enable_state: BpfEnableStats,  // BPF_ENABLE_STATS
+    bpf_iter_create: BpfIterCreate,    // BPF_ITER_CREATE
+    bpf_prog_bind_map: BpfProgBindMap, // BPF_PROG_BIND_MAP
 }
 
 #[derive(Debug, Clone)]
