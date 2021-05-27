@@ -10,7 +10,8 @@ use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{
-    constant::perf_ioctls, BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
+    constant::perf_ioctls, BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal,
+    MapConfig, MapElem, PerfEventAttr,
 };
 use crate::error::*;
 use std::ffi::CString;
@@ -133,39 +134,25 @@ pub(crate) fn bpf_prog_load(
     license: String,
 ) -> Result<RawFd, OxidebpfError> {
     let insn_cnt = insns.0.len();
-    let insns = &insns.0;
+    let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
-    let bpf_prog_load = BpfProgLoad {
-        prog_type,
-        insn_cnt: insn_cnt as u32,
-        insns: insns as *const _ as u64,
-        license: &license as *const _ as u64,
-        log_level: 0,
-        log_size: 0,
-        log_buf: 0,
-        kern_version: None,
-        prog_flags: None,
-        prog_name: None,
-        prog_ifindex: None,
-        expected_attach_type: None,
-        prog_btf_fd: None,
-        func_info_rec_size: None,
-        func_info: None,
-        func_info_cnt: None,
-        line_info_rec_size: None,
-        line_info: None,
-        line_info_cnt: None,
-        attach_btf_id: None,
-        prog_attach: None,
-    };
+    let bpf_prog_load = MaybeUninit::<BpfProgLoad>::zeroed();
+    let mut bpf_prog_load = unsafe { bpf_prog_load.assume_init() };
+    bpf_prog_load.prog_type = prog_type;
+    bpf_prog_load.insn_cnt = insn_cnt as u32;
+    bpf_prog_load.insns = insns.as_ptr() as u64;
+    bpf_prog_load.license = license.as_ptr() as u64;
+    let slice =
+        unsafe { std::slice::from_raw_parts::<BpfInsn>(bpf_prog_load.insns as *const _, insn_cnt) };
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
     let mut bpf_attr = unsafe { bpf_attr.assume_init() };
     bpf_attr.bpf_prog_load = bpf_prog_load;
     let bpf_attr = Box::new(bpf_attr);
     let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
     unsafe {
-        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
+        // TODO: we want the size we actually use, hardcoded as 24 here
+        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, 24)?; //bpf_attr_size)?;
         Ok(fd as RawFd)
     }
 }
