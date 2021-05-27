@@ -10,8 +10,7 @@ use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{
-    constant::perf_ioctls, BpfAttr, BpfCode, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem,
-    PerfEventAttr,
+    constant::perf_ioctls, BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
 };
 use crate::error::*;
 use std::ffi::CString;
