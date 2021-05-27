@@ -56,11 +56,21 @@ pub(crate) struct PerfEventAttr {
 #[repr(align(8), C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct MapConfig {
-    // TODO: bring this up to latest kernel and make others options
+    // Minimum functionality set
     pub(crate) map_type: c_uint,
     key_size: c_uint,
     value_size: c_uint,
     max_entries: c_uint,
+    // Optionals as of 5.12.7
+    map_flags: Option<c_uint>,
+    inner_map_fd: Option<c_uint>,
+    numa_node: Option<c_uint>,
+    map_name: Option<c_ulong>, // pointer to char array BPF_OBJ_NAME_LEN
+    map_ifindex: Option<c_uint>,
+    btf_fd: Option<c_uint>,
+    btf_key_type_id: Option<c_uint>,
+    btf_value_type_id: Option<c_uint>,
+    btf_vmlinux_value_type_id: Option<c_uint>,
 }
 
 impl From<MapDefinition> for MapConfig {
