@@ -75,6 +75,25 @@ pub(crate) mod bpf_cmd {
     pub const BPF_OBJ_GET: u32 = 7;
 }
 
+pub(crate) mod perf_event_type {
+    #![allow(unused)]
+    pub const PERF_RECORD_MMAP: u32 = 1;
+    pub const PERF_RECORD_LOST: u32 = 2;
+    pub const PERF_RECORD_COMM: u32 = 3;
+    pub const PERF_RECORD_EXIT: u32 = 4;
+    pub const PERF_RECORD_THROTTLE: u32 = 5;
+    pub const PERF_RECORD_UNTHROTTLE: u32 = 6;
+    pub const PERF_RECORD_FORK: u32 = 7;
+    pub const PERF_RECORD_READ: u32 = 8;
+    pub const PERF_RECORD_SAMPLE: u32 = 9;
+    pub const PERF_RECORD_MMAP2: u32 = 10;
+    pub const PERF_RECORD_AUX: u32 = 11;
+    pub const PERF_RECORD_ITRACE_START: u32 = 12;
+    pub const PERF_RECORD_LOST_SAMPLES: u32 = 13;
+    pub const PERF_RECORD_SWITCH: u32 = 14;
+    pub const PERF_RECORD_SWITCH_CPU_WIDE: u32 = 15;
+}
+
 pub(crate) mod perf_ioctls {
     #![allow(unused)]
     pub const PERF_EVENT_IOC_MAGIC: u8 = b'$';
