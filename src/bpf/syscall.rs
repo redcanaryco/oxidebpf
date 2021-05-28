@@ -46,7 +46,7 @@ unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize
 
 /// Checks if `perf_event_open()` is supported and if so, calls the syscall.
 pub(crate) fn perf_event_open(
-    attr: PerfEventAttr,
+    attr: &PerfEventAttr,
     pid: pid_t,
     cpu: i32,
     group_fd: RawFd,
@@ -59,7 +59,7 @@ pub(crate) fn perf_event_open(
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
-            attr,
+            attr.clone() as *const _ as u64,
             pid,
             cpu,
             group_fd,
@@ -409,7 +409,7 @@ mod tests {
         #![allow(unreachable_code)]
         todo!();
         match perf_event_open(
-            PerfEventAttr {
+            &PerfEventAttr {
                 p_type: 0,
                 size: 0,
                 config: 0,

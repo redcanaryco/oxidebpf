@@ -14,4 +14,7 @@ pub enum OxidebpfError {
     ProgramNotFound,
     MapNotFound,
     NoProgramVersionLoaded(Vec<OxidebpfError>),
+    FileIOError,
+    Utf8StringConversionError,
+    CpuOnlineFormatError,
 }
