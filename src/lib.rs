@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::{PerfEventAttr, ProgramType};
+use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup, ProgramType};
 use crate::error::OxidebpfError;
 use crate::maps::Event;
 use crate::maps::PerfMap;
@@ -168,14 +168,14 @@ impl ProgramVersion {
                                 p_type: 0,
                                 size: 0,
                                 config: 0,
-                                sample_union: (),
+                                sample_union: PerfSample { sample_freq: 0 },
                                 sample_type: 0,
                                 read_format: 0,
                                 flags: 0,
-                                wakeup_union: (),
+                                wakeup_union: PerfWakeup { wakeup_events: 0 },
                                 bp_type: 0,
-                                bp_addr_union: (),
-                                bp_len_union: (),
+                                bp_addr_union: PerfBpAddr { bp_addr: 0 },
+                                bp_len_union: PerfBpLen { bp_len: 0 },
                                 branch_sample_type: 0,
                                 sample_regs_user: 0,
                                 sample_stack_user: 0,

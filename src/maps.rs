@@ -60,6 +60,7 @@ pub(crate) enum Event {
 // }
 
 #[repr(align(8), C)]
+#[derive(Clone, Copy)]
 struct PerfMemBitfield {
     field: c_ulong,
 }
