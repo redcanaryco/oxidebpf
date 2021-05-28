@@ -17,7 +17,7 @@ use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::{MapConfig, ProgramType};
 use crate::error::OxidebpfError;
-use crate::maps::PerfMap;
+use crate::maps::{PerCpu, PerfMap};
 use crate::maps::{PerfEvent, ProgramMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 
@@ -30,17 +30,20 @@ pub mod probes;
 
 // TODO: this is the public interface, needs docstrings
 
+// (map name, cpuid, event data)
+pub struct PerfChannelMessage(String, i32, Vec<u8>);
+
 #[derive(Clone)]
 struct Channel {
-    tx: Sender<Vec<u8>>,
-    rx: Receiver<Vec<u8>>,
+    tx: Sender<PerfChannelMessage>,
+    rx: Receiver<PerfChannelMessage>,
 }
 
 pub struct ProgramGroup {
     // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
     program_blueprint: ProgramBlueprint,
     program_versions: Vec<ProgramVersion>,
-    event_buffer_size: Option<usize>,
+    event_buffer_size: usize,
     channel: Channel,
 }
 
@@ -88,8 +91,9 @@ impl ProgramGroup {
         program_versions: Vec<ProgramVersion>,
         event_buffer_size: Option<usize>,
     ) -> ProgramGroup {
-        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) =
-            bounded(event_buffer_size.unwrap_or(1024));
+        let event_buffer_size = event_buffer_size.unwrap_or(1024);
+        let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
+            bounded(event_buffer_size);
         let channel = Channel { tx, rx };
         ProgramGroup {
             program_blueprint,
@@ -99,12 +103,14 @@ impl ProgramGroup {
         }
     }
 
-    pub fn load(&mut self) -> Result<Option<Receiver<Vec<u8>>>, OxidebpfError> {
+    pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
         let mut errors = Vec::<OxidebpfError>::new();
         for program_version in self.program_versions.iter_mut() {
-            match program_version
-                .load_program_version(self.program_blueprint.to_owned(), self.channel.clone())
-            {
+            match program_version.load_program_version(
+                self.program_blueprint.to_owned(),
+                self.channel.clone(),
+                self.event_buffer_size,
+            ) {
                 Ok(r) => return Ok(r),
                 Err(e) => errors.push(e),
             };
@@ -125,7 +131,7 @@ impl ProgramVersion {
         }
     }
 
-    fn event_poller(&self, perfmaps: Vec<PerfMap>, tx: Sender<Vec<u8>>) {
+    fn event_poller(&self, perfmaps: Vec<PerfMap>, tx: Sender<PerfChannelMessage>) {
         std::thread::spawn(move || 'outer: loop {
             for perfmap in perfmaps.iter() {
                 let event = perfmap.read();
@@ -137,8 +143,13 @@ impl ProgramVersion {
                     PerfEvent::Sample(e) => e,
                     PerfEvent::Lost(_) => continue,
                 };
+                let message = PerfChannelMessage(
+                    perfmap.name.clone(),
+                    perfmap.cpuid() as i32,
+                    Vec::from(event.data),
+                );
                 unsafe {
-                    match tx.send(Vec::from(any_as_u8_slice(&event))) {
+                    match tx.send(message) {
                         Ok(_) => {}
                         Err(_) => break 'outer,
                     };
@@ -151,7 +162,8 @@ impl ProgramVersion {
         &mut self,
         program_blueprint: ProgramBlueprint,
         channel: Channel,
-    ) -> Result<Option<Receiver<Vec<u8>>>, OxidebpfError> {
+        event_buffer_size: usize,
+    ) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
         let mut matching_blueprints = Vec::<ProgramObject>::new();
         let mut perfmaps = Vec::<PerfMap>::new();
         for program in self.programs.iter() {
@@ -190,7 +202,8 @@ impl ProgramVersion {
                                 perf_event_sample_format::PERF_SAMPLE_RAW as u64;
                             event_attr.sample_union = PerfSample { sample_period: 1 };
                             event_attr.wakeup_union = PerfWakeup { wakeup_events: 1 };
-                            let mut perfmap = PerfMap::new_group(&map.name, event_attr, 0)?;
+                            let mut perfmap =
+                                PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
                             perfmaps.append(&mut perfmap);
                             perfmap.iter().for_each(|p| {
                                 self.fds.insert(p.ev_fd as RawFd);
