@@ -271,7 +271,6 @@ mod program_tests {
 
     #[test]
     fn test_program_group() {
-        // TODO: currently fails with E2BIG
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("resources/test.o");
         let program_blueprint =
