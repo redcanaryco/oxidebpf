@@ -6,9 +6,11 @@ use libc::pid_t;
 use libc::{syscall, SYS_perf_event_open};
 use nix::errno::errno;
 
+use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
 use crate::perf::PerfEventAttr;
 use nix::{ioctl_none, ioctl_write_int};
+use std::fs::OpenOptions;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
@@ -30,6 +32,98 @@ ioctl_none!(
     crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
     crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_DISABLE
 );
+
+pub(crate) fn perf_event_open_debugfs(
+    attr: &PerfEventAttr,
+    pid: pid_t,
+    cpu: i32,
+    group_fd: RawFd,
+    flags: c_ulong,
+    event_type: ProgramType,
+    ev_name: String,
+    offset: u64,
+) -> Result<RawFd, OxidebpfError> {
+    // redbpf/bpf-sys/bcc/libbpf.c:934 create_probe_event()
+    let prefix = match event_type {
+        ProgramType::Kprobe => "kprobe",
+        ProgramType::Kretprobe => "kprobe",
+        ProgramType::Uprobe => "uprobe",
+        ProgramType::Uretprobe => "uprobe",
+        _ => return Err(OxidebpfError::UnsupportedEventType),
+    };
+
+    let event_path = format!("/sys/kernel/debug/tracing/{}_events", prefix);
+    let event_file = std::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(event_path)
+        .map_err(|e| Err(OxidebpfError::FileIOError))?;
+
+    let ev_alias = format!("{}_bcc_{}", ev_name, std::process::id());
+
+    //   if (is_kprobe) {
+    //     if (offset > 0 && attach_type == BPF_PROBE_ENTRY)
+    //       snprintf(buf, PATH_MAX, "p:kprobes/%s %s+%"PRIu64,
+    //                ev_alias, config1, offset);
+    //     else if (maxactive > 0 && attach_type == BPF_PROBE_RETURN)
+    //       snprintf(buf, PATH_MAX, "r%d:kprobes/%s %s",
+    //                maxactive, ev_alias, config1);
+    //     else
+    //       snprintf(buf, PATH_MAX, "%c:kprobes/%s %s",
+    //                attach_type == BPF_PROBE_ENTRY ? 'p' : 'r',
+    //                ev_alias, config1);
+    //   } else {
+    //     res = snprintf(buf, PATH_MAX, "%c:%ss/%s %s:0x%lx", attach_type==BPF_PROBE_ENTRY ? 'p' : 'r',
+    //                    event_type, ev_alias, config1, (unsigned long)offset);
+    //     if (res < 0 || res >= PATH_MAX) {
+    //       fprintf(stderr, "Event alias (%s) too long for buffer\n", ev_alias);
+    //       close(kfd);
+    //       return -1;
+    //     }
+    //     ns_fd = enter_mount_ns(pid);
+    //   }
+
+    let name = match event_type {
+        ProgramType::Kprobe => {
+            format!("p:kprobes/{} {}+{}", ev_alias, config, offset)
+        }
+        // no maxactive support
+        ProgramType::Kretprobe => {
+            format!("r{}:kprobes/{} {}", 0, ev_alias, config)
+        }
+        ProgramType::Uprobe => {
+            format!("p:{}/{} {}:0x{}", prefix, ev_alias, config, offset)
+            // enter mount pid?
+        }
+        ProgramType::Uretprobe => {
+            format!("r:{}/{} {}:0x{}", prefix, ev_alias, config, offset)
+            // enter mount pid?
+        }
+        _ => return Err(OxidebpfError::UnsupportedEventType),
+    };
+
+    //
+    //   if (write(kfd, buf, strlen(buf)) < 0) {
+    //     if (errno == ENOENT)
+    //       fprintf(stderr, "cannot attach %s, probe entry may not exist\n", event_type);
+    //     else
+    //       fprintf(stderr, "cannot attach %s, %s\n", event_type, strerror(errno));
+    //     close(kfd);
+    //     goto error;
+    //   }
+    //   close(kfd);
+    //   if (!is_kprobe)
+    //     exit_mount_ns(ns_fd);
+    //   snprintf(buf, PATH_MAX, "/sys/kernel/debug/tracing/events/%ss/%s",
+    //            event_type, ev_alias);
+    //   return 0;
+    // error:
+    //   if (!is_kprobe)
+    //     exit_mount_ns(ns_fd);
+    //   return -1;
+
+    Ok(0)
+}
 
 /// Checks if `perf_event_open()` is supported and if so, calls the syscall.
 pub(crate) fn perf_event_open(

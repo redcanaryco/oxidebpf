@@ -172,9 +172,13 @@ impl PerfMap {
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
         for cpuid in get_cpus()?.iter() {
-            // TODO: fallback on debugfs
             let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
-            let base_ptr = unsafe {
+            let base_ptr: *mut _;
+            if fd < 0 {
+                // fallback on debugfs
+                fd = crate::perf::syscall::perf_event_open_debugfs(&event_attr, -1, *cpuid, 1, 0)?;
+            }
+            base_ptr = unsafe {
                 libc::mmap(
                     null_mut(),
                     mmap_size,
