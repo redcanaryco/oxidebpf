@@ -10,10 +10,11 @@ use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{
-    constant::perf_ioctls, BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal,
-    MapConfig, MapElem, PerfEventAttr,
+    BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal, MapConfig, MapElem,
+    PerfEventAttr,
 };
 use crate::error::*;
+use crate::perf::constant::perf_ioctls;
 use std::ffi::CString;
 
 type BpfMapType = u32;
@@ -85,8 +86,8 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
     u_perf_event_ioc_set_bpf,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_SET_BPF
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_SET_BPF
 );
 
 /// Safe wrapper around `u_perf_event_ioc_set_bpf()`
@@ -105,8 +106,8 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, O
 // unsafe `ioctl( PERF_EVENT_IOC_ENABLE )` function
 ioctl_none!(
     u_perf_event_ioc_enable,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_ENABLE
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_ENABLE
 );
 
 /// Safe wrapper around `u_perf_event_ioc_enable()`
@@ -117,8 +118,8 @@ pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError
 // unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
 ioctl_none!(
     u_perf_event_ioc_disable,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_DISABLE
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
+    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_DISABLE
 );
 
 /// Safe wrapper around `u_perf_event_ioc_disable()`

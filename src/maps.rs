@@ -1,6 +1,7 @@
 use crate::bpf::syscall::perf_event_ioc_enable;
 use crate::bpf::{MapConfig, PerfEventAttr};
 use crate::error::OxidebpfError;
+use crate::perf::constant::perf_event_type;
 use nix::errno::errno;
 use std::borrow::Borrow;
 use std::ffi::c_void;
@@ -38,6 +39,7 @@ fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     )
     .map_err(|_| OxidebpfError::Utf8StringConversionError)?;
     let mut cpus = Vec::<i32>::new();
+    let cpu_string = cpu_string.trim();
     for sublist in cpu_string.split(",").into_iter() {
         let pair: Vec<&str> = sublist.split("-").collect();
         if pair.len() != 2 {
@@ -234,12 +236,12 @@ impl PerfMap {
             (*header).data_tail += (*event).size as u64;
 
             match (*event).type_ {
-                crate::bpf::constant::perf_event_type::PERF_RECORD_SAMPLE => Some(
-                    PerfEvent::<'a>::Sample(&*(buf.as_ptr() as *const PerfEventSample)),
-                ),
-                crate::bpf::constant::perf_event_type::PERF_RECORD_LOST => Some(
-                    PerfEvent::<'a>::Lost(&*(buf.as_ptr() as *const PerfEventLostSamples)),
-                ),
+                perf_event_type::PERF_RECORD_SAMPLE => Some(PerfEvent::<'a>::Sample(
+                    &*(buf.as_ptr() as *const PerfEventSample),
+                )),
+                perf_event_type::PERF_RECORD_LOST => Some(PerfEvent::<'a>::Lost(
+                    &*(buf.as_ptr() as *const PerfEventLostSamples),
+                )),
                 _ => None,
             }
         }
