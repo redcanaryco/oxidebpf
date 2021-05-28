@@ -1,8 +1,3 @@
-use crate::bpf::syscall::perf_event_ioc_enable;
-use crate::bpf::{MapConfig, PerfEventAttr};
-use crate::error::OxidebpfError;
-use crate::perf::constant::perf_event_type;
-use nix::errno::errno;
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -12,6 +7,14 @@ use std::ptr::null_mut;
 use std::slice;
 use std::sync::atomic;
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+use nix::errno::errno;
+
+use crate::bpf::MapConfig;
+use crate::error::OxidebpfError;
+use crate::perf::constant::perf_event_type;
+use crate::perf::syscall::perf_event_ioc_enable;
+use crate::perf::PerfEventAttr;
 
 #[repr(C)]
 struct PerfEventHeader {
@@ -166,7 +169,7 @@ impl PerfMap {
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
         for cpuid in get_cpus()?.iter() {
             // TODO: fallback on debugfs
-            let fd: RawFd = crate::bpf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
+            let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
             let base_ptr = unsafe {
                 libc::mmap(
                     null_mut(),

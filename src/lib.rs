@@ -1,12 +1,5 @@
 #![allow(dead_code)]
-use crate::blueprint::{ProgramBlueprint, ProgramObject};
-use crate::bpf::constant::bpf_map_type;
-use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup, ProgramType};
-use crate::error::OxidebpfError;
-use crate::maps::PerfEvent;
-use crate::maps::PerfMap;
-use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
-use crossbeam_channel::{bounded, Receiver, SendError, Sender};
+
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -15,6 +8,18 @@ use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
 use std::slice;
 use std::thread::JoinHandle;
+
+use crossbeam_channel::{bounded, Receiver, SendError, Sender};
+
+use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+
+use crate::blueprint::{ProgramBlueprint, ProgramObject};
+use crate::bpf::constant::bpf_map_type;
+use crate::bpf::ProgramType;
+use crate::error::OxidebpfError;
+use crate::maps::PerfEvent;
+use crate::maps::PerfMap;
+use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 
 mod blueprint;
 mod bpf;
@@ -241,10 +246,11 @@ impl Drop for ProgramVersion {
 
 #[cfg(test)]
 mod program_tests {
+    use std::path::PathBuf;
+
     use crate::blueprint::ProgramBlueprint;
     use crate::bpf::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
-    use std::path::PathBuf;
 
     #[test]
     fn test_program_group() {
