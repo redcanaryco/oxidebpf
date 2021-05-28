@@ -19,4 +19,5 @@ pub enum OxidebpfError {
     CpuOnlineFormatError,
     BadPageSize,
     BadPageCount,
+    UnsupportedEventType,
 }
