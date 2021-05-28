@@ -5,10 +5,12 @@ use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup, P
 use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 use crate::maps::PerfMap;
+use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crossbeam_channel::{bounded, Receiver, SendError, Sender};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
 use std::slice;
@@ -18,6 +20,7 @@ mod blueprint;
 mod bpf;
 mod error;
 pub mod maps;
+mod perf;
 pub mod probes;
 
 // TODO: this is the public interface, needs docstrings
@@ -168,30 +171,15 @@ impl ProgramVersion {
                     bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                         // TODO load perfmap and make/save channel to return
                         let fd = bpf::syscall::bpf_map_create_with_config(map.definition)?;
-                        let mut perfmap = PerfMap::new_group(
-                            &blueprint.name,
-                            PerfEventAttr {
-                                p_type: 0,
-                                size: 0,
-                                config: 0,
-                                sample_union: PerfSample { sample_freq: 0 },
-                                sample_type: 0,
-                                read_format: 0,
-                                flags: 0,
-                                wakeup_union: PerfWakeup { wakeup_events: 0 },
-                                bp_type: 0,
-                                bp_addr_union: PerfBpAddr { bp_addr: 0 },
-                                bp_len_union: PerfBpLen { bp_len: 0 },
-                                branch_sample_type: 0,
-                                sample_regs_user: 0,
-                                sample_stack_user: 0,
-                                clockid: 0,
-                                sample_regs_intr: 0,
-                                aux_watermark: 0,
-                                __reserved_2: 0,
-                            },
-                            0,
-                        )?;
+                        let event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
+                        let mut event_attr = unsafe { event_attr.assume_init() };
+                        event_attr.config = perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64;
+                        event_attr.size = std::mem::size_of::<PerfEventAttr>() as u32;
+                        event_attr.p_type = perf_type_id::PERF_TYPE_SOFTWARE;
+                        event_attr.sample_type = perf_event_sample_format::PERF_SAMPLE_RAW as u64;
+                        event_attr.sample_union = PerfSample { sample_period: 1 };
+                        event_attr.wakeup_union = PerfWakeup { wakeup_events: 1 };
+                        let mut perfmap = PerfMap::new_group(&blueprint.name, event_attr, 0)?;
                         perfmaps.append(&mut perfmap);
                         fd
                     }
