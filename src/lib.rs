@@ -3,7 +3,7 @@ use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup, ProgramType};
 use crate::error::OxidebpfError;
-use crate::maps::Event;
+use crate::maps::PerfEvent;
 use crate::maps::PerfMap;
 use crossbeam_channel::{bounded, Receiver, SendError, Sender};
 use std::borrow::Borrow;
@@ -105,6 +105,10 @@ impl ProgramGroup {
     }
 }
 
+unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
+}
+
 impl ProgramVersion {
     pub fn new(programs: Vec<Program>) -> ProgramVersion {
         ProgramVersion {
@@ -122,13 +126,15 @@ impl ProgramVersion {
                     Some(e) => e,
                 };
                 let event = match event {
-                    Event::Some(e) => e,
-                    Event::Lost => continue,
+                    PerfEvent::Sample(e) => e,
+                    PerfEvent::Lost(_) => continue,
                 };
-                match tx.send(event.data) {
-                    Ok(_) => {}
-                    Err(_) => break 'outer,
-                };
+                unsafe {
+                    match tx.send(Vec::from(any_as_u8_slice(&event))) {
+                        Ok(_) => {}
+                        Err(_) => break 'outer,
+                    };
+                }
             }
         });
     }

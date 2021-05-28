@@ -8,7 +8,29 @@ use std::marker::PhantomData;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
-use std::sync::atomic::AtomicPtr;
+use std::slice;
+use std::sync::atomic;
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+#[repr(C)]
+struct PerfEventHeader {
+    type_: c_uint,
+    misc: c_ushort,
+    size: c_ushort,
+}
+#[repr(C)]
+pub struct PerfEventLostSamples {
+    header: PerfEventHeader,
+    pub id: u64,
+    pub count: u64,
+}
+
+#[repr(C)]
+pub struct PerfEventSample {
+    header: PerfEventHeader,
+    pub size: u32,
+    pub data: [u8; 0],
+}
 
 fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     let cpu_string = String::from_utf8(
@@ -36,28 +58,10 @@ fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     Ok(cpus)
 }
 
-pub struct EventData {
-    pub data: Vec<u8>,
+pub(crate) enum PerfEvent<'a> {
+    Sample(&'a PerfEventSample),
+    Lost(&'a PerfEventLostSamples),
 }
-
-pub(crate) enum Event {
-    Some(EventData),
-    Lost,
-}
-
-// #[repr(C)]
-// #[derive(Copy, Clone)]
-// pub union perf_event_mmap_page__bindgen_ty_1 {
-//     pub capabilities: __u64,
-//     pub __bindgen_anon_1: perf_event_mmap_page__bindgen_ty_1__bindgen_ty_1,
-//     _bindgen_union_align: u64,
-// }
-// #[repr(C)]
-// #[derive(Debug, Copy, Clone)]
-// pub struct perf_event_mmap_page__bindgen_ty_1__bindgen_ty_1 {
-//     pub _bitfield_1: __BindgenBitfieldUnit<[u8; 8usize], u64>,
-//     pub __bindgen_align: [u64; 0usize],
-// }
 
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
@@ -105,6 +109,7 @@ pub struct PerfMap {
     name: String,
     base_ptr: AtomicPtr<PerfMem>,
     page_count: usize,
+    page_size: usize,
     mmap_size: usize,
     ev_fd: RawFd,
     ev_name: String,
@@ -178,6 +183,7 @@ impl PerfMap {
                 name: map_name.clone(),
                 base_ptr: AtomicPtr::new(base_ptr as *mut PerfMem),
                 page_count: page_count,
+                page_size: page_size,
                 mmap_size: mmap_size,
                 ev_fd: fd,
                 ev_name: "".to_string(),
@@ -186,9 +192,57 @@ impl PerfMap {
         Ok(loaded_perfmaps)
     }
 
-    pub(crate) fn read(&self) -> Option<Event> {
-        // TODO: every event out of the channel is some Event::Lost() or Event::Sample() of raw
-        None
+    pub(crate) fn read<'a>(&self) -> Option<PerfEvent<'a>> {
+        let header = self.base_ptr.load(Ordering::SeqCst);
+        let raw_size = (self.page_count * self.page_size) as u64;
+        let base: *const u8;
+        let data_head: u64;
+        let data_tail: u64;
+        let event: *const PerfEventHeader;
+        let start: usize;
+        let end: usize;
+        unsafe {
+            base = (header as *const u8).add(self.page_size);
+            data_head = (*header).data_head;
+            data_tail = (*header).data_tail;
+            start = (data_tail % raw_size) as usize;
+            event = base.add(start) as *const PerfEventHeader;
+            end = ((data_tail + (*event).size as u64) % raw_size) as usize;
+        }
+        if data_head == data_tail {
+            return None;
+        }
+
+        let mut buf = Vec::<u8>::new();
+
+        unsafe {
+            if end < start {
+                let len = (raw_size as usize - start) as usize;
+                let ptr = base.add(start);
+                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
+
+                let len = (*event).size as usize - len;
+                let ptr = base;
+                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
+            } else {
+                let ptr = base.add(start);
+                let len = (*event).size as usize;
+                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
+            }
+
+            atomic::fence(Ordering::SeqCst);
+            (*header).data_tail += (*event).size as u64;
+
+            match (*event).type_ {
+                crate::bpf::constant::perf_event_type::PERF_RECORD_SAMPLE => Some(
+                    PerfEvent::<'a>::Sample(&*(buf.as_ptr() as *const PerfEventSample)),
+                ),
+                crate::bpf::constant::perf_event_type::PERF_RECORD_LOST => Some(
+                    PerfEvent::<'a>::Lost(&*(buf.as_ptr() as *const PerfEventLostSamples)),
+                ),
+                _ => None,
+            }
+        }
     }
 }
 
