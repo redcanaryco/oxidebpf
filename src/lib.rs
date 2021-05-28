@@ -162,8 +162,8 @@ impl ProgramVersion {
                     bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                         // TODO load perfmap and make/save channel to return
                         let fd = bpf::syscall::bpf_map_create_with_config(map.definition)?;
-                        let perfmap = PerfMap::new(/* put in perfmap details */)?;
-                        perfmaps.push(perfmap);
+                        let mut perfmap = PerfMap::new(/* put in perfmap details */)?;
+                        perfmaps.append(&mut perfmap);
                         fd
                     }
                     _ => {
