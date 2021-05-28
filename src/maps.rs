@@ -111,11 +111,12 @@ struct PerfMem {
 }
 
 pub struct PerfMap {
-    name: String,
+    pub(crate) name: String,
     base_ptr: AtomicPtr<PerfMem>,
     page_count: usize,
     page_size: usize,
     mmap_size: usize,
+    cpuid: i32,
     pub(crate) ev_fd: RawFd,
     ev_name: String,
 }
@@ -146,7 +147,7 @@ pub trait RWMap<T> {
 
 pub trait PerCpu {
     // What other per-cpu maps are there that we may want to use?
-    fn cpuid(&self) -> u32;
+    fn cpuid(&self) -> i32;
 }
 
 impl PerfMap {
@@ -163,7 +164,10 @@ impl PerfMap {
             return Err(OxidebpfError::BadPageSize);
         }
         let page_size = page_size as usize;
-        let page_count = event_buffer_size / page_size;
+        let page_count = (event_buffer_size as f64 / page_size as f64).ceil() as usize;
+        if page_count == 0 {
+            return Err(OxidebpfError::BadPageCount);
+        }
         let mmap_size = page_size * (page_count + 1);
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
@@ -187,9 +191,10 @@ impl PerfMap {
             loaded_perfmaps.push(PerfMap {
                 name: map_name.clone(),
                 base_ptr: AtomicPtr::new(base_ptr as *mut PerfMem),
-                page_count: page_count,
-                page_size: page_size,
-                mmap_size: mmap_size,
+                page_count,
+                page_size,
+                mmap_size,
+                cpuid: *cpuid,
                 ev_fd: fd,
                 ev_name: "".to_string(),
             });
@@ -252,8 +257,8 @@ impl PerfMap {
 }
 
 impl PerCpu for PerfMap {
-    fn cpuid(&self) -> u32 {
-        todo!()
+    fn cpuid(&self) -> i32 {
+        self.cpuid
     }
 }
 
