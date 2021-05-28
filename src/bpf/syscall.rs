@@ -186,6 +186,7 @@ pub(crate) mod tests {
     use nix::errno::{errno, Errno};
     use scopeguard::defer;
 
+    use crate::blueprint::ProgramBlueprint;
     use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
     use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
     use crate::bpf::syscall::{bpf_map_lookup_elem, bpf_prog_load};
@@ -334,13 +335,18 @@ pub(crate) mod tests {
 
     #[test]
     fn test_bpf_prog_load() {
-        #![allow(unreachable_code)]
-        // fails currently, EINVAL
-        todo!();
+        // currently fails w/ EACCES because we are not applying relocations
+        use std::path::PathBuf;
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("resources/test.o"); // TODO: make this a MIT licensed bpf stub program that doesn't need relocations
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(d).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+        let program_object = program_blueprint.programs.get("sys_ptrace_write").unwrap();
         match bpf_prog_load(
             BPF_PROG_TYPE_KPROBE,
-            &BpfCode { 0: vec![] },
-            "GPL".to_string(),
+            &program_object.code,
+            program_object.license.clone(),
         ) {
             Ok(_fd) => {}
             Err(e) => bpf_panic_error(e),
