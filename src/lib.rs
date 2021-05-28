@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::ProgramType;
+use crate::bpf::{PerfEventAttr, ProgramType};
 use crate::error::OxidebpfError;
 use crate::maps::Event;
 use crate::maps::PerfMap;
@@ -162,7 +162,30 @@ impl ProgramVersion {
                     bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                         // TODO load perfmap and make/save channel to return
                         let fd = bpf::syscall::bpf_map_create_with_config(map.definition)?;
-                        let mut perfmap = PerfMap::new(/* put in perfmap details */)?;
+                        let mut perfmap = PerfMap::new_group(
+                            &blueprint.name,
+                            PerfEventAttr {
+                                p_type: 0,
+                                size: 0,
+                                config: 0,
+                                sample_union: (),
+                                sample_type: 0,
+                                read_format: 0,
+                                flags: 0,
+                                wakeup_union: (),
+                                bp_type: 0,
+                                bp_addr_union: (),
+                                bp_len_union: (),
+                                branch_sample_type: 0,
+                                sample_regs_user: 0,
+                                sample_stack_user: 0,
+                                clockid: 0,
+                                sample_regs_intr: 0,
+                                aux_watermark: 0,
+                                __reserved_2: 0,
+                            },
+                            0,
+                        )?;
                         perfmaps.append(&mut perfmap);
                         fd
                     }

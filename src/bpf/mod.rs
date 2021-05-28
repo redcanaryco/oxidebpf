@@ -49,7 +49,7 @@ pub(crate) struct PerfEventAttr {
     clockid: c_int,
     sample_regs_intr: c_ulong,
     aux_watermark: c_uint,
-    __reserved_2: c_uint, // align to __u64 (manually?) consider align(8)
+    __reserved_2: c_uint, // align to __u64
 }
 
 #[repr(align(8), C)]

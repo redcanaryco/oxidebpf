@@ -17,4 +17,5 @@ pub enum OxidebpfError {
     FileIOError,
     Utf8StringConversionError,
     CpuOnlineFormatError,
+    BadPageSize,
 }
