@@ -1,21 +1,21 @@
-use libc::{pid_t, syscall, SYS_bpf, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
-use nix::errno::errno;
-use nix::{ioctl_none, ioctl_write_int};
 use std::convert::TryInto;
+use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
+
+use libc::{pid_t, syscall, SYS_bpf, SYS_setns, CLONE_NEWNS};
+use nix::errno::errno;
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{
     BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal, MapConfig, MapElem,
-    PerfEventAttr,
 };
 use crate::error::*;
 use crate::perf::constant::perf_ioctls;
-use std::ffi::CString;
+use crate::perf::PerfEventAttr;
 
 type BpfMapType = u32;
 
@@ -45,34 +45,6 @@ unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize
     Ok(ret as usize)
 }
 
-/// Checks if `perf_event_open()` is supported and if so, calls the syscall.
-pub(crate) fn perf_event_open(
-    attr: &PerfEventAttr,
-    pid: pid_t,
-    cpu: i32,
-    group_fd: RawFd,
-    flags: c_ulong,
-) -> Result<RawFd, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
-        return Err(OxidebpfError::PerfEventDoesNotExist);
-    }
-    let ret = unsafe {
-        syscall(
-            (SYS_perf_event_open as i32).into(),
-            attr.clone() as *const _ as u64,
-            pid,
-            cpu,
-            group_fd,
-            flags,
-        )
-    };
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-    }
-    Ok(ret as RawFd)
-}
-
 /// Calls the `setns` syscall on the given `fd` with the given `nstype`.
 pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
@@ -81,50 +53,6 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
-ioctl_write_int!(
-    u_perf_event_ioc_set_bpf,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_SET_BPF
-);
-
-/// Safe wrapper around `u_perf_event_ioc_set_bpf()`
-pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let data_unwrapped = match data.try_into() {
-        Ok(d) => d,
-        Err(_e) => 0, // Should be infallible
-    };
-    unsafe {
-        u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped)
-            .map_err(|e| OxidebpfError::PerfIoctlError(e))
-    }
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_ENABLE )` function
-ioctl_none!(
-    u_perf_event_ioc_enable,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_ENABLE
-);
-
-/// Safe wrapper around `u_perf_event_ioc_enable()`
-pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
-ioctl_none!(
-    u_perf_event_ioc_disable,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_DISABLE
-);
-
-/// Safe wrapper around `u_perf_event_ioc_disable()`
-pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
@@ -249,25 +177,24 @@ pub(crate) fn bpf_map_create(
 
 #[cfg(test)]
 #[allow(unused_imports)]
-mod tests {
+pub(crate) mod tests {
+    use std::convert::TryInto;
+    use std::ffi::c_void;
     use std::os::raw::{c_int, c_uint};
     use std::os::unix::io::{FromRawFd, RawFd};
 
-    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
-    use crate::bpf::syscall::{
-        bpf_map_lookup_elem, bpf_prog_load, perf_event_ioc_set_bpf, perf_event_open,
-    };
-    use crate::bpf::{
-        BpfCode, BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup,
-    };
-    use crate::error::OxidebpfError;
     use nix::errno::{errno, Errno};
     use scopeguard::defer;
-    use std::convert::TryInto;
-    use std::ffi::c_void;
 
-    fn bpf_panic_error(err: OxidebpfError) {
+    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
+    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
+    use crate::bpf::syscall::{bpf_map_lookup_elem, bpf_prog_load};
+    use crate::bpf::{BpfCode, BpfInsn};
+    use crate::error::OxidebpfError;
+    use crate::perf::syscall::{perf_event_ioc_set_bpf, perf_event_open};
+    use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+
+    pub(crate) fn bpf_panic_error(err: OxidebpfError) {
         match err {
             OxidebpfError::LinuxError(e) => {
                 panic!(
@@ -403,57 +330,6 @@ mod tests {
                 .map_err(|e| bpf_panic_error(e))
                 .unwrap();
         }
-    }
-
-    #[test]
-    fn test_perf_event_open() {
-        #![allow(unreachable_code)]
-        todo!();
-        match perf_event_open(
-            &PerfEventAttr {
-                p_type: 0,
-                size: 0,
-                config: 0,
-                sample_union: PerfSample { sample_freq: 0 },
-                sample_type: 0,
-                read_format: 0,
-                flags: 0,
-                wakeup_union: PerfWakeup { wakeup_events: 0 },
-                bp_type: 0,
-                bp_addr_union: PerfBpAddr { bp_addr: 0 },
-                bp_len_union: PerfBpLen { bp_len: 0 },
-                branch_sample_type: 0,
-                sample_regs_user: 0,
-                sample_stack_user: 0,
-                clockid: 0,
-                sample_regs_intr: 0,
-                aux_watermark: 0,
-                __reserved_2: 0,
-            },
-            0,
-            0,
-            0,
-            0,
-        ) {
-            Ok(_) => {}
-            Err(e) => bpf_panic_error(e),
-        }
-    }
-
-    #[test]
-    fn test_perf_event_ioc_set_bpf() {
-        #![allow(unreachable_code)]
-        todo!();
-        let perf_fd: RawFd = 0;
-        match perf_event_ioc_set_bpf(perf_fd, 0) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
-    }
-
-    #[test]
-    fn test_perf_event_ioc_disable() {
-        todo!()
     }
 
     #[test]
