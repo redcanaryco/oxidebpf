@@ -15,10 +15,10 @@ use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::ProgramType;
+use crate::bpf::{MapConfig, ProgramType};
 use crate::error::OxidebpfError;
-use crate::maps::PerfEvent;
 use crate::maps::PerfMap;
+use crate::maps::{PerfEvent, ProgramMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 
 mod blueprint;
@@ -165,43 +165,47 @@ impl ProgramVersion {
         }
 
         // load maps and save fds and apply relocations
-        let mut map_fds = HashMap::<String, RawFd>::new();
-        for blueprint in matching_blueprints.iter_mut() {
-            for name in blueprint.required_maps().iter() {
+        let mut loaded_maps = HashSet::<String>::new();
+        for program_object in matching_blueprints.iter_mut() {
+            for name in program_object.required_maps().iter() {
                 let map = program_blueprint
                     .maps
                     .get(name)
                     .ok_or(OxidebpfError::MapNotFound)?;
-                let map_fd = match map.definition.map_type {
-                    bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
-                        // TODO load perfmap and make/save channel to return
-                        let fd = bpf::syscall::bpf_map_create_with_config(map.definition)?;
-                        let event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
-                        let mut event_attr = unsafe { event_attr.assume_init() };
-                        event_attr.config = perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64;
-                        event_attr.size = std::mem::size_of::<PerfEventAttr>() as u32;
-                        event_attr.p_type = perf_type_id::PERF_TYPE_SOFTWARE;
-                        event_attr.sample_type = perf_event_sample_format::PERF_SAMPLE_RAW as u64;
-                        event_attr.sample_union = PerfSample { sample_period: 1 };
-                        event_attr.wakeup_union = PerfWakeup { wakeup_events: 1 };
-                        let mut perfmap = PerfMap::new_group(&blueprint.name, event_attr, 0)?;
-                        perfmaps.append(&mut perfmap);
-                        fd
-                    }
-                    _ => {
-                        if map_fds.contains_key(&map.name.clone()) {
-                            map_fds
-                                .get(&map.name.clone())
-                                .ok_or(OxidebpfError::MapNotFound)?
-                                .to_owned()
-                        } else {
-                            bpf::syscall::bpf_map_create_with_config(map.definition)?
+
+                if !loaded_maps.contains(&map.name.clone()) {
+                    match map.definition.map_type {
+                        bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
+                            let fd = bpf::syscall::bpf_map_create_with_config(MapConfig::from(
+                                map.definition,
+                            ))?;
+                            program_object.fixup_map_relocation(fd, map)?;
+
+                            let event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
+                            let mut event_attr = unsafe { event_attr.assume_init() };
+                            event_attr.config = perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64;
+                            event_attr.size = std::mem::size_of::<PerfEventAttr>() as u32;
+                            event_attr.p_type = perf_type_id::PERF_TYPE_SOFTWARE;
+                            event_attr.sample_type =
+                                perf_event_sample_format::PERF_SAMPLE_RAW as u64;
+                            event_attr.sample_union = PerfSample { sample_period: 1 };
+                            event_attr.wakeup_union = PerfWakeup { wakeup_events: 1 };
+                            let mut perfmap = PerfMap::new_group(&map.name, event_attr, 0)?;
+                            perfmaps.append(&mut perfmap);
+                            perfmap.iter().for_each(|p| {
+                                self.fds.insert(p.ev_fd as RawFd);
+                            });
+                        }
+                        _ => {
+                            let fd = bpf::syscall::bpf_map_create_with_config(MapConfig::from(
+                                map.definition,
+                            ))?;
+                            program_object.fixup_map_relocation(fd, map)?;
+                            self.fds.insert(fd);
                         }
                     }
-                };
-                blueprint.fixup_map_relocation(map_fd, map)?;
-                map_fds.insert(map.name.clone(), map_fd);
-                self.fds.insert(map_fd);
+                    loaded_maps.insert(map.name.clone());
+                }
             }
         }
 

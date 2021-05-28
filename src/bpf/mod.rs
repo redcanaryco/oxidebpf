@@ -4,6 +4,7 @@ use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::bpf_prog_type;
 use crate::error::OxidebpfError;
+use std::mem::MaybeUninit;
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
@@ -30,12 +31,13 @@ pub(crate) struct MapConfig {
 
 impl From<MapDefinition> for MapConfig {
     fn from(def: MapDefinition) -> MapConfig {
-        Self {
-            map_type: def.map_type,
-            key_size: def.key_size,
-            value_size: def.value_size,
-            max_entries: def.max_entries,
-        }
+        let map_config = MaybeUninit::<MapConfig>::zeroed();
+        let mut map_config = unsafe { map_config.assume_init() };
+        map_config.map_type = def.map_type;
+        map_config.key_size = def.key_size;
+        map_config.value_size = def.value_size;
+        map_config.max_entries = def.max_entries;
+        map_config
     }
 }
 

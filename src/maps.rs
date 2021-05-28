@@ -116,7 +116,7 @@ pub struct PerfMap {
     page_count: usize,
     page_size: usize,
     mmap_size: usize,
-    ev_fd: RawFd,
+    pub(crate) ev_fd: RawFd,
     ev_name: String,
 }
 
@@ -136,7 +136,7 @@ pub struct Map {
 pub trait ProgramMap {
     fn load(&mut self) -> Result<(), OxidebpfError>;
     fn unload(&mut self) -> Result<(), OxidebpfError>;
-    fn get_fd(&self) -> Result<RawFd, OxidebpfError>; // if we don't (need to) track attachpoints this doesn't need to be exposed
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError>;
 }
 
 pub trait RWMap<T> {
@@ -267,7 +267,7 @@ impl ProgramMap for PerfMap {
     }
 
     fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
-        todo!()
+        Ok(self.ev_fd)
     }
 }
 
@@ -324,7 +324,9 @@ impl ProgramMap for Map {
 
 impl Drop for PerfMap {
     fn drop(&mut self) {
-        todo!()
+        unsafe {
+            libc::close(self.ev_fd);
+        }
     }
 }
 
