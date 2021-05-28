@@ -236,7 +236,7 @@ impl Reloc {
 #[derive(Debug, Clone)]
 pub(crate) struct MapObject {
     /// The map definition parsed out of the eBPF ELF object
-    pub definition: MapConfig,
+    pub definition: MapDefinition,
     /// The name of the map
     pub name: String,
     /// The symbol name of the map
@@ -267,7 +267,7 @@ impl MapObject {
                 section_data.get(sym.st_value as usize..section_data.len() as usize)
             {
                 objects.push(Self {
-                    definition: MapConfig::try_from(map_data)?,
+                    definition: MapDefinition::try_from(map_data)?,
                     name,
                     symbol_name,
                 });
