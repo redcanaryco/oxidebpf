@@ -131,6 +131,7 @@ pub struct Map {
     name: String,
     fd: RawFd,
     map_config: MapConfig,
+    map_config_size: usize,
     loaded: bool,
 }
 
@@ -176,7 +177,7 @@ impl PerfMap {
             let base_ptr: *mut _;
             if fd < 0 {
                 // fallback on debugfs
-                fd = crate::perf::syscall::perf_event_open_debugfs(&event_attr, -1, *cpuid, 1, 0)?;
+                //fd = crate::perf::syscall::perf_event_open_debugfs(&event_attr, -1, *cpuid, 1, 0)?;
             }
             base_ptr = unsafe {
                 libc::mmap(
@@ -312,7 +313,9 @@ impl<T> ProgramMap for ArrayMap<T> {
 
 impl ProgramMap for Map {
     fn load(&mut self) -> Result<(), OxidebpfError> {
-        let fd = crate::bpf::syscall::bpf_map_create_with_config(self.map_config)?;
+        let fd = unsafe {
+            crate::bpf::syscall::bpf_map_create_with_config(self.map_config, self.map_config_size)?
+        };
         self.fd = fd;
         self.loaded = true;
         Ok(())

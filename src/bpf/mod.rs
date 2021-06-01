@@ -18,26 +18,27 @@ pub(crate) struct MapConfig {
     value_size: c_uint,
     max_entries: c_uint,
     // Optionals as of 5.12.7
-    map_flags: Option<c_uint>,
-    inner_map_fd: Option<c_uint>,
-    numa_node: Option<c_uint>,
-    map_name: Option<c_ulong>, // pointer to char array BPF_OBJ_NAME_LEN
-    map_ifindex: Option<c_uint>,
-    btf_fd: Option<c_uint>,
-    btf_key_type_id: Option<c_uint>,
-    btf_value_type_id: Option<c_uint>,
-    btf_vmlinux_value_type_id: Option<c_uint>,
+    map_flags: c_uint,
+    inner_map_fd: c_uint,
+    numa_node: c_uint,
+    map_name: c_ulong, // pointer to char array BPF_OBJ_NAME_LEN
+    map_ifindex: c_uint,
+    btf_fd: c_uint,
+    btf_key_type_id: c_uint,
+    btf_value_type_id: c_uint,
+    btf_vmlinux_value_type_id: c_uint,
 }
 
 impl From<MapDefinition> for MapConfig {
     fn from(def: MapDefinition) -> MapConfig {
-        let map_config = MaybeUninit::<MapConfig>::zeroed();
-        let mut map_config = unsafe { map_config.assume_init() };
-        map_config.map_type = def.map_type;
-        map_config.key_size = def.key_size;
-        map_config.value_size = def.value_size;
-        map_config.max_entries = def.max_entries;
-        map_config
+        Self {
+            map_type: def.map_type,
+            key_size: def.key_size,
+            value_size: def.value_size,
+            max_entries: def.max_entries,
+            map_flags: def.map_flags,
+            ..Default::default()
+        }
     }
 }
 
@@ -89,8 +90,14 @@ union KeyVal {
     next_key: c_ulong,
 }
 
+impl Default for KeyVal {
+    fn default() -> Self {
+        Self { value: 0u64 }
+    }
+}
+
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct MapElem {
     map_fd: c_uint,
     key: c_ulong,
@@ -99,7 +106,7 @@ struct MapElem {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfProgLoad {
     // Minimal functionality set
     prog_type: c_uint,
@@ -110,20 +117,20 @@ struct BpfProgLoad {
     log_size: c_uint,
     log_buf: c_ulong, // 'char *' buffer
     // Additional functionality set, as of 5.12.7
-    kern_version: Option<c_uint>, // not used
-    prog_flags: Option<c_uint>,
-    prog_name: Option<c_ulong>, // char pointer, length BPF_OBJ_NAME_LEN
-    prog_ifindex: Option<c_uint>,
-    expected_attach_type: Option<c_uint>,
-    prog_btf_fd: Option<c_uint>,
-    func_info_rec_size: Option<c_uint>,
-    func_info: Option<c_ulong>,
-    func_info_cnt: Option<c_uint>,
-    line_info_rec_size: Option<c_uint>,
-    line_info: Option<c_ulong>,
-    line_info_cnt: Option<c_uint>,
-    attach_btf_id: Option<c_uint>,
-    prog_attach: Option<BpfProgAttach>,
+    kern_version: c_uint, // not used
+    prog_flags: c_uint,
+    prog_name: c_ulong, // char pointer, length BPF_OBJ_NAME_LEN
+    prog_ifindex: c_uint,
+    expected_attach_type: c_uint,
+    prog_btf_fd: c_uint,
+    func_info_rec_size: c_uint,
+    func_info: c_ulong,
+    func_info_cnt: c_uint,
+    line_info_rec_size: c_uint,
+    line_info: c_ulong,
+    line_info_cnt: c_uint,
+    attach_btf_id: c_uint,
+    prog_attach: BpfProgAttach,
 }
 
 #[repr(C)]
@@ -133,8 +140,14 @@ union BpfProgAttach {
     attach_btf_objc_fd: c_uint,
 }
 
+impl Default for BpfProgAttach {
+    fn default() -> Self {
+        Self { attach_prog_fd: 0 }
+    }
+}
+
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfMapBatch {
     in_batch: c_ulong,
     out_batch: c_ulong,
@@ -147,7 +160,7 @@ struct BpfMapBatch {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfObj {
     pathname: c_ulong,
     bpf_fd: c_uint,
@@ -155,7 +168,7 @@ struct BpfObj {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfProgTach {
     target_fd: c_uint,
     attach_bpf_fd: c_uint,
@@ -165,7 +178,7 @@ struct BpfProgTach {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfProgTestRun {
     prog_fd: c_uint,
     retval: c_uint,
@@ -184,7 +197,7 @@ struct BpfProgTestRun {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfGetId {
     id: GetIdUnion,
     next_id: c_uint,
@@ -201,8 +214,14 @@ union GetIdUnion {
     link_id: c_uint,
 }
 
+impl Default for GetIdUnion {
+    fn default() -> Self {
+        Self { start_id: 0 }
+    }
+}
+
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfObjGetInfoByFd {
     bpf_fd: c_uint,
     info_len: c_uint,
@@ -210,7 +229,7 @@ struct BpfObjGetInfoByFd {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfProgQuery {
     target_fd: c_uint,
     attach_type: c_uint,
@@ -221,14 +240,14 @@ struct BpfProgQuery {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfRawTracepointOpen {
     name: c_ulong,
     prog_fd: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfBtfLoad {
     btf: c_ulong,
     btf_log_buf: c_ulong,
@@ -238,7 +257,7 @@ struct BpfBtfLoad {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct TaskFdQuery {
     pid: c_uint,
     fd: c_uint,
@@ -258,8 +277,14 @@ union LinkTarget {
     target_ifindex: c_uint,
 }
 
+impl Default for LinkTarget {
+    fn default() -> Self {
+        Self { target_fd: 0 }
+    }
+}
+
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct LinkTargetIterInfo {
     iter_info: c_ulong,
     iter_info_len: c_uint,
@@ -272,8 +297,14 @@ union LinkTargetInfo {
     info: LinkTargetIterInfo,
 }
 
+impl Default for LinkTargetInfo {
+    fn default() -> Self {
+        Self { target_btf_id: 0 }
+    }
+}
+
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfLinkCreate {
     prog_fd: c_uint,
     target: LinkTarget,
@@ -283,7 +314,7 @@ struct BpfLinkCreate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfLinkUpdate {
     link_fd: c_uint,
     new_prog_fd: c_uint,
@@ -292,38 +323,48 @@ struct BpfLinkUpdate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfLinkDetach {
     link_fd: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfEnableStats {
     stat_type: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfIterCreate {
     link_fd: c_uint,
     flags: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BpfProgBindMap {
     prog_fd: c_uint,
     map_fd: c_uint,
     flags: c_uint,
 }
 
+/// Holds a BpfAttr union where only the specified `size`, in bytes, is to be used for
+/// underlying bpf syscalls.
+pub(crate) struct SizedBpfAttr {
+    pub(crate) bpf_attr: BpfAttr,
+    /// The amount of used bytes of the given [`BpfAttr`]. See [`sys_bpf`](Fn@sys_bpf) for
+    /// an example.
+    pub(crate) size: usize,
+}
+
 #[repr(align(8), C)]
-union BpfAttr {
+#[derive(Clone, Copy)]
+pub(crate) union BpfAttr {
     // minimum functionality set
-    map_config: MapConfig,      // BPF_MAP_CREATE
-    map_elem: MapElem,          // BPF_MAP_*_ELEM
-    bpf_prog_load: BpfProgLoad, // BPF_PROG_LOAD
+    pub(crate) map_config: MapConfig, // BPF_MAP_CREATE
+    map_elem: MapElem,                // BPF_MAP_*_ELEM
+    bpf_prog_load: BpfProgLoad,       // BPF_PROG_LOAD
     // optional as of 5.12.7
     bpf_map_batch: BpfMapBatch,                    // BPF_MAP_*_BATCH
     bpf_obj: BpfObj,                               // BPF_OBJ_*

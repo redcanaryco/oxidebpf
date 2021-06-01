@@ -15,7 +15,7 @@ use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::{MapConfig, ProgramType};
+use crate::bpf::{BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::{PerCpu, PerfMap};
 use crate::maps::{PerfEvent, ProgramMap};
@@ -148,12 +148,10 @@ impl ProgramVersion {
                     perfmap.cpuid() as i32,
                     Vec::from(event.data),
                 );
-                unsafe {
-                    match tx.send(message) {
-                        Ok(_) => {}
-                        Err(_) => break 'outer,
-                    };
-                }
+                match tx.send(message) {
+                    Ok(_) => {}
+                    Err(_) => break 'outer,
+                };
             }
         });
     }
@@ -186,11 +184,17 @@ impl ProgramVersion {
                     .ok_or(OxidebpfError::MapNotFound)?;
 
                 if !loaded_maps.contains(&map.name.clone()) {
+                    let sized_attr = SizedBpfAttr {
+                        bpf_attr: BpfAttr {
+                            map_config: MapConfig::from(map.definition),
+                        },
+                        size: 20,
+                    };
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
-                            let fd = bpf::syscall::bpf_map_create_with_config(MapConfig::from(
-                                map.definition,
-                            ))?;
+                            let fd = unsafe {
+                                bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
+                            };
                             program_object.fixup_map_relocation(fd, map)?;
 
                             let event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
@@ -210,9 +214,9 @@ impl ProgramVersion {
                             });
                         }
                         _ => {
-                            let fd = bpf::syscall::bpf_map_create_with_config(MapConfig::from(
-                                map.definition,
-                            ))?;
+                            let fd = unsafe {
+                                bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
+                            };
                             program_object.fixup_map_relocation(fd, map)?;
                             self.fds.insert(fd);
                         }
@@ -238,14 +242,6 @@ impl ProgramVersion {
         } else {
             self.event_poller(perfmaps, channel.tx);
             Ok(Some(channel.rx))
-        }
-    }
-}
-
-impl Drop for ProgramGroup {
-    fn drop(&mut self) {
-        for program_version in self.program_versions.iter_mut() {
-            std::mem::drop(program_version);
         }
     }
 }
@@ -281,6 +277,7 @@ mod program_tests {
             vec![ProgramVersion::new(vec![Program {
                 kind: ProgramType::Kprobe,
                 name: "sys_ptrace_write".to_string(),
+                // TODO: attach points
                 optional: false,
                 loaded: false,
             }])],

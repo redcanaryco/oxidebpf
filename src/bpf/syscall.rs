@@ -10,18 +10,32 @@ use nix::errno::errno;
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
+use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY;
 use crate::bpf::{
-    BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal, MapConfig, MapElem,
+    BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr,
 };
 use crate::error::*;
 use crate::perf::constant::perf_ioctls;
 use crate::perf::PerfEventAttr;
+use std::sync::atomic::AtomicPtr;
 
 type BpfMapType = u32;
 
-/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed `BpfAttr`
-/// union _must_ be zero initialized before being filled and passed to this call.
-unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, OxidebpfError> {
+/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed [`SizedBpfAttr`] _must_
+/// indicate the amount of _bytes_ to be used by this call.
+///
+/// # Example
+/// ```no_run
+/// let arg_bpf_attr = SizedBpfAttr {
+///     bpf_atr: SomeStruct {
+///         SomeVal: 123 as u32,
+///         ..Default::default()
+///     },
+///     size: 4, // we instantiated 1 u32 of size 4 bytes
+/// };
+/// sys_bpf(BPF_MAP_CREATE, arg_bpf_atr);
+/// ```
+unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
     // https://man7.org/linux/man-pages/man2/syscall.2.html
     // Architecture-specific requirements
     // Each architecture ABI has its own requirements on how system call
@@ -33,6 +47,22 @@ unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize
     // dependent details; this requirement is most commonly encountered
     // on certain 32-bit architectures.
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
+
+    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
+    let bpf_attr: BpfAttr = bpf_attr.assume_init();
+    let mut bpf_attr = Box::new(bpf_attr);
+    let size = arg_bpf_attr.size;
+    let arg_bpf_attr = Box::new(arg_bpf_attr.bpf_attr);
+
+    // VERY UNSAFE!!!
+    let mut p = arg_bpf_attr.as_ref() as *const BpfAttr as *const u8;
+    let mut q = bpf_attr.as_mut() as *mut BpfAttr as *mut u8;
+    for _ in 0..=size {
+        *q = *p;
+        q = q.add(1);
+        p = p.add(1);
+    }
+
     let ret = syscall(
         (SYS_bpf as i32).into(),
         cmd,
@@ -66,22 +96,19 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
-    let bpf_prog_load = MaybeUninit::<BpfProgLoad>::zeroed();
-    let mut bpf_prog_load = unsafe { bpf_prog_load.assume_init() };
-    bpf_prog_load.prog_type = prog_type;
-    bpf_prog_load.insn_cnt = insn_cnt as u32;
-    bpf_prog_load.insns = insns.as_ptr() as u64;
-    bpf_prog_load.license = license.as_ptr() as u64;
-    let slice =
-        unsafe { std::slice::from_raw_parts::<BpfInsn>(bpf_prog_load.insns as *const _, insn_cnt) };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.bpf_prog_load = bpf_prog_load;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
+    let bpf_prog_load = BpfProgLoad {
+        prog_type,
+        insn_cnt: insn_cnt as u32,
+        insns: insns.as_ptr() as u64,
+        license: license.as_ptr() as u64,
+        ..Default::default()
+    };
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { bpf_prog_load },
+        size: 24,
+    };
     unsafe {
-        // TODO: we want the size we actually use, hardcoded as 24 here
-        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, 24)?; //bpf_attr_size)?;
+        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr)?;
         Ok(fd as RawFd)
     }
 }
@@ -99,13 +126,13 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Oxid
         },
         flags: 0,
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_elem = map_elem;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<MapElem>();
+
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_elem },
+        size: std::mem::size_of::<MapElem>(),
+    };
     unsafe {
-        sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr)?;
         Ok(buf.assume_init())
     }
 }
@@ -125,27 +152,35 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_elem = map_elem;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<MapElem>();
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_elem },
+        size: std::mem::size_of::<MapElem>(),
+    };
     unsafe {
-        sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr)?;
     }
     Ok(())
 }
 
-pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
+pub(crate) unsafe fn bpf_map_create_with_sized_attr(
+    bpf_attr: SizedBpfAttr,
+) -> Result<RawFd, OxidebpfError> {
+    let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
+    Ok(fd as RawFd)
+}
+
+/// The caller must provide a `size` that indicates the amount of _bytes_ used in `map_config`.
+/// See the example for [`sys_bpf`](Fn@sys_bpf).
+pub(crate) unsafe fn bpf_map_create_with_config(
+    map_config: MapConfig,
+    size: usize,
+) -> Result<RawFd, OxidebpfError> {
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    let mut bpf_attr = bpf_attr.assume_init();
     bpf_attr.map_config = map_config;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
-    unsafe {
-        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
-        Ok(fd as RawFd)
-    }
+    let bpf_attr = SizedBpfAttr { bpf_attr, size };
+    let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
+    Ok(fd as RawFd)
 }
 
 /// Create a map of the given type with given key size, value size, and number of entries.
@@ -157,20 +192,20 @@ pub(crate) fn bpf_map_create(
     value_size: c_uint,
     max_entries: u32,
 ) -> Result<RawFd, OxidebpfError> {
-    let map_config = MaybeUninit::<MapConfig>::zeroed();
-    let mut map_config = unsafe { map_config.assume_init() };
-    map_config.map_type = map_type as u32;
-    map_config.key_size = key_size;
-    map_config.value_size = value_size;
-    map_config.max_entries = max_entries;
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_config = map_config;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    let map_config = MapConfig {
+        map_type: map_type as u32,
+        key_size,
+        value_size,
+        max_entries,
+        ..Default::default()
+    };
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_config },
+        size: 16,
+    };
 
     unsafe {
-        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
         Ok(fd as RawFd)
     }
 }
