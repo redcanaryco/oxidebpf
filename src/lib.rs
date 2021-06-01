@@ -15,7 +15,8 @@ use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::{BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
+use crate::bpf::syscall::{attach_kprobe, attach_uprobe};
+use crate::bpf::{syscall, BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::{PerCpu, PerfMap};
 use crate::maps::{PerfEvent, ProgramMap};
@@ -27,6 +28,11 @@ mod error;
 pub mod maps;
 mod perf;
 pub mod probes;
+
+#[cfg(target_arch = "aarch64")]
+const ARCH_SYSCALL_PREFIX: &str = "__arm64__";
+#[cfg(target_arch = "x86_64")]
+const ARCH_SYSCALL_PREFIX: &str = "__x64__";
 
 // TODO: this is the public interface, needs docstrings
 
@@ -40,7 +46,6 @@ struct Channel {
 }
 
 pub struct ProgramGroup<'a> {
-    // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
     program_blueprint: ProgramBlueprint,
     program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
@@ -82,11 +87,62 @@ impl<'a> Program<'a> {
         }
     }
 
-    fn attach(&self) -> Result<(), OxidebpfError> {
-        Ok(())
+    fn attach_kprobe(&self) -> Result<(), OxidebpfError> {
+        let mut errs = Vec::<OxidebpfError>::new();
+        self.attach_points.iter().map(|attach_point| {
+            if let Err(e) = attach_kprobe(self.fd, attach_point, None) {
+                errs.push(e);
+                if let Err(e) = attach_kprobe(
+                    self.fd,
+                    &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
+                    None,
+                ) {
+                    errs.push(e);
+                }
+            }
+        });
+
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(OxidebpfError::MultipleErrors(errs))
+        }
     }
 
-    pub(crate) fn load(&mut self, fd: RawFd) {
+    fn attach_uprobe(&self) -> Result<(), OxidebpfError> {
+        let mut errs = Vec::<OxidebpfError>::new();
+        self.attach_points.iter().map(|attach_point| {
+            if let Err(e) = attach_uprobe(self.fd, attach_point, None) {
+                errs.push(e)
+            }
+        });
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(OxidebpfError::MultipleErrors(errs))
+        }
+    }
+
+    fn attach(&self) -> Result<(), OxidebpfError> {
+        if !self.loaded {
+            return Err(OxidebpfError::ProgramNotLoaded);
+        }
+
+        let ret = match self.kind {
+            ProgramType::Kprobe | ProgramType::Kretprobe => self.attach_kprobe(),
+            ProgramType::Uprobe | ProgramType::Uretprobe => self.attach_uprobe(),
+            _ => Err(OxidebpfError::UnsupportedProgramType),
+        };
+
+        // if we're optional, then ignore any errors
+        if self.optional {
+            Ok(())
+        } else {
+            ret
+        }
+    }
+
+    pub(crate) fn loaded_as(&mut self, fd: RawFd) {
         self.loaded = true;
         self.fd = fd;
     }
@@ -205,9 +261,8 @@ impl ProgramVersion<'_> {
                     };
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
-                            let fd = unsafe {
-                                bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
-                            };
+                            let fd =
+                                unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
                             self.fds.insert(fd);
                             program_object.fixup_map_relocation(fd, map)?;
 
@@ -228,9 +283,8 @@ impl ProgramVersion<'_> {
                             });
                         }
                         _ => {
-                            let fd = unsafe {
-                                bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
-                            };
+                            let fd =
+                                unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
                             self.fds.insert(fd);
                             program_object.fixup_map_relocation(fd, map)?;
                         }
@@ -243,16 +297,19 @@ impl ProgramVersion<'_> {
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
             self.fds.insert({
-                let fd = bpf::syscall::bpf_prog_load(
+                let fd = syscall::bpf_prog_load(
                     u32::from(&blueprint.program_type),
                     &blueprint.code,
                     blueprint.license.clone(),
                 )? as RawFd;
+                // Programs are kept separate from ProgramBlueprints to allow users to specify
+                // different blueprints/files for the same set of programs, should they choose.
+                // This means we need to do ugly filters like this.
                 self.programs
                     .iter_mut()
                     .filter(|p| p.name.eq(blueprint.name.as_str()))
                     .map(|p| {
-                        p.load(fd);
+                        p.loaded_as(fd);
                         p.attach()
                     })
                     .collect::<Result<Vec<()>, OxidebpfError>>()?;
