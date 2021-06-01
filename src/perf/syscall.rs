@@ -57,9 +57,10 @@ pub(crate) fn perf_event_open_debugfs(
         .write(true)
         .append(true)
         .open(event_path)
-        .map_err(|e| Err(OxidebpfError::FileIOError))?;
+        .map_err(|e| OxidebpfError::FileIOError)?;
 
-    let ev_alias = format!("{}_bcc_{}", ev_name, std::process::id());
+    let ev_alias = format!("{}_oxidebpf_{}", ev_name, std::process::id());
+    let config = "TODO: fix";
 
     //   if (is_kprobe) {
     //     if (offset > 0 && attach_type == BPF_PROBE_ENTRY)
