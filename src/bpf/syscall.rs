@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
+use std::sync::atomic::AtomicPtr;
 
 use libc::{pid_t, syscall, SYS_bpf, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
@@ -17,7 +18,6 @@ use crate::bpf::{
 use crate::error::*;
 use crate::perf::constant::perf_ioctls;
 use crate::perf::PerfEventAttr;
-use std::sync::atomic::AtomicPtr;
 
 type BpfMapType = u32;
 
@@ -83,22 +83,6 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
-}
-
-pub(crate) fn attach_uprobe(
-    fd: RawFd,
-    attach_point: &str,
-    offset: Option<u32>,
-) -> Result<(), OxidebpfError> {
-    Ok(())
-}
-
-pub(crate) fn attach_kprobe(
-    fd: RawFd,
-    attach_point: &str,
-    offset: Option<u32>,
-) -> Result<(), OxidebpfError> {
-    Ok(())
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.

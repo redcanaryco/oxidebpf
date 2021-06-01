@@ -11,11 +11,11 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::{bounded, Receiver, SendError, Sender};
 
+use perf::syscall::{attach_kprobe, attach_uprobe};
 use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::syscall::{attach_kprobe, attach_uprobe};
 use crate::bpf::{syscall, BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::{PerCpu, PerfMap};
@@ -89,18 +89,28 @@ impl<'a> Program<'a> {
 
     fn attach_kprobe(&self) -> Result<(), OxidebpfError> {
         let mut errs = Vec::<OxidebpfError>::new();
-        self.attach_points.iter().map(|attach_point| {
-            if let Err(e) = attach_kprobe(self.fd, attach_point, None) {
-                if let Err(s) = attach_kprobe(
+        for cpu in crate::maps::get_cpus()?.iter() {
+            self.attach_points.iter().map(|attach_point| {
+                if let Err(e) = attach_kprobe(
                     self.fd,
-                    &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
+                    attach_point,
+                    self.kind == ProgramType::Kretprobe,
                     None,
+                    *cpu,
                 ) {
-                    errs.push(e);
-                    errs.push(s);
+                    if let Err(s) = attach_kprobe(
+                        self.fd,
+                        &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
+                        self.kind == ProgramType::Kretprobe,
+                        None,
+                        *cpu,
+                    ) {
+                        errs.push(e);
+                        errs.push(s);
+                    }
                 }
-            }
-        });
+            });
+        }
 
         if errs.is_empty() {
             Ok(())
@@ -111,11 +121,19 @@ impl<'a> Program<'a> {
 
     fn attach_uprobe(&self) -> Result<(), OxidebpfError> {
         let mut errs = Vec::<OxidebpfError>::new();
-        self.attach_points.iter().map(|attach_point| {
-            if let Err(e) = attach_uprobe(self.fd, attach_point, None) {
-                errs.push(e)
-            }
-        });
+        for cpu in crate::maps::get_cpus()?.iter() {
+            self.attach_points.iter().map(|attach_point| {
+                if let Err(e) = attach_uprobe(
+                    self.fd,
+                    attach_point,
+                    self.kind == ProgramType::Uretprobe,
+                    None,
+                    *cpu,
+                ) {
+                    errs.push(e)
+                }
+            });
+        }
         if errs.is_empty() {
             Ok(())
         } else {

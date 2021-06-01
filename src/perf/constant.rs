@@ -1,4 +1,39 @@
 #![allow(unused)]
+use lazy_static::lazy_static;
+use std::path::PathBuf;
+
+lazy_static! {
+    pub(crate) static ref PERF_PATH: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/proc/sys/kernel/perf_event_paranoid");
+        p
+    };
+    pub(crate) static ref PMU_KRETPROBE_FILE: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/sys/bus/event_source/devices/kprobe/format/retprobe");
+        p
+    };
+    pub(crate) static ref PMU_URETPROBE_FILE: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/sys/bus/event_source/devices/uprobe/format/retprobe");
+        p
+    };
+    pub(crate) static ref PMU_KTYPE_FILE: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/sys/bus/event_source/devices/kprobe/type");
+        p
+    };
+    pub(crate) static ref PMU_UTYPE_FILE: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/sys/bus/event_source/devices/uprobe/type");
+        p
+    };
+    pub(crate) static ref PMU_TTYPE_FILE: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/sys/bus/event_source/devices/tracepoint/type");
+        p
+    };
+}
 
 pub(crate) mod perf_event_sample_format {
     pub const PERF_SAMPLE_IP: u32 = 1 << 0;
@@ -90,4 +125,11 @@ pub(crate) mod perf_ioctls {
     pub const PERF_EVENT_IOC_ID: u8 = 7;
     /// _IOW('$', 8, __u32)
     pub const PERF_EVENT_IOC_SET_BPF: u8 = 8;
+}
+
+pub(crate) mod perf_flag {
+    pub const PERF_FLAG_FD_NO_GROUP: u64 = 1 << 0;
+    pub const PERF_FLAG_FD_OUTPUT: u64 = 1 << 1;
+    pub const PERF_FLAG_PID_CGROUP: u64 = 1 << 2;
+    pub const PERF_FLAG_FD_CLOEXEC: u64 = 1 << 3;
 }
