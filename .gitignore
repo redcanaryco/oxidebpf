@@ -2,3 +2,4 @@
 Cargo.lock
 .idea
 .vagrant
+test_program_*
