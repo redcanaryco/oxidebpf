@@ -3,6 +3,7 @@ use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    UnsupportedProgramType,
     ProgramNotLoaded,
     InvalidElf,
     InvalidProgramObject,

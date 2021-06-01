@@ -85,6 +85,22 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     Ok(ret as usize)
 }
 
+pub(crate) fn attach_uprobe(
+    fd: RawFd,
+    attach_point: &str,
+    offset: Option<u32>,
+) -> Result<(), OxidebpfError> {
+    Ok(())
+}
+
+pub(crate) fn attach_kprobe(
+    fd: RawFd,
+    attach_point: &str,
+    offset: Option<u32>,
+) -> Result<(), OxidebpfError> {
+    Ok(())
+}
+
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
 /// License should (almost) always be GPL.
 pub(crate) fn bpf_prog_load(
