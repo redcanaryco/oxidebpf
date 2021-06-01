@@ -9,8 +9,18 @@ use nix::errno::errno;
 use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
 use crate::perf::PerfEventAttr;
+use lazy_static::lazy_static;
 use nix::{ioctl_none, ioctl_write_int};
 use std::fs::OpenOptions;
+use std::path::PathBuf;
+
+lazy_static! {
+    static ref PERF_PATH: PathBuf = {
+        let mut p = PathBuf::new();
+        p.push("/proc/sys/kernel/perf_event_paranoid");
+        p
+    };
+}
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
@@ -135,7 +145,7 @@ pub(crate) fn perf_event_open(
     flags: c_ulong,
 ) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
+    if !PERF_PATH.exists() {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
     let ret = unsafe {

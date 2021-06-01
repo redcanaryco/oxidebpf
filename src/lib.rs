@@ -132,28 +132,25 @@ impl ProgramVersion {
     }
 
     fn event_poller(&self, perfmaps: Vec<PerfMap>, tx: Sender<PerfChannelMessage>) {
-        std::thread::spawn(move || 'outer: loop {
-            for perfmap in perfmaps.iter() {
-                let event = perfmap.read();
-                let event = match event {
-                    None => continue,
-                    Some(e) => e,
-                };
-                let event = match event {
-                    PerfEvent::Sample(e) => e,
-                    PerfEvent::Lost(_) => continue,
-                };
-                let message = PerfChannelMessage(
-                    perfmap.name.clone(),
-                    perfmap.cpuid() as i32,
-                    Vec::from(event.data),
-                );
-                match tx.send(message) {
-                    Ok(_) => {}
-                    Err(_) => break 'outer,
-                };
-            }
-        });
+        std::thread::Builder::new()
+            .name("PerfMapPoller".to_string())
+            .spawn(move || 'outer: loop {
+                for perfmap in perfmaps.iter() {
+                    let message = match perfmap.read() {
+                        None => continue,
+                        Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                        Some(PerfEvent::Sample(e)) => PerfChannelMessage(
+                            perfmap.name.clone(),
+                            perfmap.cpuid() as i32,
+                            Vec::from(e.data),
+                        ),
+                    };
+                    match tx.send(message) {
+                        Ok(_) => {}
+                        Err(_) => break 'outer,
+                    };
+                }
+            });
     }
 
     fn load_program_version(
@@ -162,18 +159,20 @@ impl ProgramVersion {
         channel: Channel,
         event_buffer_size: usize,
     ) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
-        let mut matching_blueprints = Vec::<ProgramObject>::new();
-        let mut perfmaps = Vec::<PerfMap>::new();
-        for program in self.programs.iter() {
-            matching_blueprints.push(
+        let mut matching_blueprints: Vec<ProgramObject> = self
+            .programs
+            .iter()
+            .map(|p| {
                 program_blueprint
                     .programs
-                    .get(&*program.name)
-                    .ok_or(OxidebpfError::ProgramNotFound)?
-                    .to_owned(),
-            );
-        }
-
+                    .get(&*p.name)
+                    .ok_or(OxidebpfError::ProgramNotFound)
+            })
+            .collect::<Result<Vec<&ProgramObject>, OxidebpfError>>()?
+            .into_iter()
+            .map(|p| p.to_owned())
+            .collect();
+        let mut perfmaps = Vec::<PerfMap>::new();
         // load maps and save fds and apply relocations
         let mut loaded_maps = HashSet::<String>::new();
         for program_object in matching_blueprints.iter_mut() {
