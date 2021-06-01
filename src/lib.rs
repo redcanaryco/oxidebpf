@@ -39,53 +39,71 @@ struct Channel {
     rx: Receiver<PerfChannelMessage>,
 }
 
-pub struct ProgramGroup {
+pub struct ProgramGroup<'a> {
     // TODO: pass up channel from perfmap(s) (if any) so user can get raw bytes
     program_blueprint: ProgramBlueprint,
-    program_versions: Vec<ProgramVersion>,
+    program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
     channel: Channel,
 }
 
-pub struct ProgramVersion {
-    programs: Vec<Program>,
+pub struct ProgramVersion<'a> {
+    programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
 }
 
-pub struct Program {
+pub struct Program<'a> {
     kind: ProgramType,
-    name: String,
+    name: &'a str,
+    attach_points: Vec<&'a str>,
     optional: bool,
     loaded: bool,
+    fd: RawFd,
 }
 
-impl Program {
-    fn get_name(&self) -> &String {
-        &self.name
-    }
-    // TODO: Figure out what's inside Program, load/unload, manage fd, drop, etc
-    pub fn new() -> Program {
-        unimplemented!()
+impl<'a> Program<'a> {
+    fn get_name(&self) -> &'a str {
+        self.name
     }
 
-    pub fn data(&self) {
-        unimplemented!()
+    pub fn new(
+        kind: ProgramType,
+        name: &'a str,
+        attach_points: Vec<&'a str>,
+        optional: bool,
+    ) -> Program<'a> {
+        Self {
+            kind,
+            name,
+            attach_points,
+            optional,
+            loaded: false,
+            fd: 0,
+        }
     }
 
-    pub fn data_mut(&self) {
-        unimplemented!()
+    fn attach(&self) -> Result<(), OxidebpfError> {
+        Ok(())
     }
 
-    fn load(&self) {
-        todo!()
+    pub(crate) fn load(&mut self, fd: RawFd) {
+        self.loaded = true;
+        self.fd = fd;
     }
 
-    fn get_fd() -> RawFd {
-        unimplemented!()
+    fn set_fd(&mut self, fd: RawFd) {
+        self.fd = fd
+    }
+    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
+        if self.loaded {
+            Ok(self.fd)
+        } else {
+            Err(OxidebpfError::ProgramNotLoaded)
+        }
     }
 }
 
-impl ProgramGroup {
+impl ProgramGroup<'_> {
     pub fn new(
         program_blueprint: ProgramBlueprint,
         program_versions: Vec<ProgramVersion>,
@@ -119,11 +137,7 @@ impl ProgramGroup {
     }
 }
 
-unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
-}
-
-impl ProgramVersion {
+impl ProgramVersion<'_> {
     pub fn new(programs: Vec<Program>) -> ProgramVersion {
         ProgramVersion {
             programs,
@@ -194,17 +208,18 @@ impl ProgramVersion {
                             let fd = unsafe {
                                 bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
                             };
+                            self.fds.insert(fd);
                             program_object.fixup_map_relocation(fd, map)?;
 
-                            let event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
-                            let mut event_attr = unsafe { event_attr.assume_init() };
-                            event_attr.config = perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64;
-                            event_attr.size = std::mem::size_of::<PerfEventAttr>() as u32;
-                            event_attr.p_type = perf_type_id::PERF_TYPE_SOFTWARE;
-                            event_attr.sample_type =
-                                perf_event_sample_format::PERF_SAMPLE_RAW as u64;
-                            event_attr.sample_union = PerfSample { sample_period: 1 };
-                            event_attr.wakeup_union = PerfWakeup { wakeup_events: 1 };
+                            let event_attr = PerfEventAttr {
+                                config: perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64,
+                                size: std::mem::size_of::<PerfEventAttr>() as u32,
+                                p_type: perf_type_id::PERF_TYPE_SOFTWARE,
+                                sample_type: perf_event_sample_format::PERF_SAMPLE_RAW as u64,
+                                sample_union: PerfSample { sample_period: 1 },
+                                wakeup_union: PerfWakeup { wakeup_events: 1 },
+                                ..Default::default()
+                            };
                             let mut perfmap =
                                 PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
                             perfmaps.append(&mut perfmap);
@@ -225,17 +240,27 @@ impl ProgramVersion {
             }
         }
 
-        // load programs
+        // load and attach programs
         for blueprint in matching_blueprints.iter() {
-            self.fds.insert(bpf::syscall::bpf_prog_load(
-                u32::from(&blueprint.program_type),
-                &blueprint.code,
-                blueprint.license.clone(),
-            )?);
+            self.fds.insert({
+                let fd = bpf::syscall::bpf_prog_load(
+                    u32::from(&blueprint.program_type),
+                    &blueprint.code,
+                    blueprint.license.clone(),
+                )? as RawFd;
+                self.programs
+                    .iter_mut()
+                    .filter(|p| p.name.eq(blueprint.name.as_str()))
+                    .map(|p| {
+                        p.load(fd);
+                        p.attach()
+                    })
+                    .collect::<Result<Vec<()>, OxidebpfError>>()?;
+                fd
+            });
         }
 
-        // start event poller, if one exists
-        // pass back channel, if it exists
+        // start event poller and pass back channel, if one exists
         if perfmaps.is_empty() {
             Ok(None)
         } else {
@@ -245,7 +270,7 @@ impl ProgramVersion {
     }
 }
 
-impl Drop for ProgramVersion {
+impl<'a> Drop for ProgramVersion<'a> {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
         for fd in self.fds.iter() {
@@ -273,13 +298,12 @@ mod program_tests {
                 .expect("Could not open test object file");
         let mut program_group = ProgramGroup::new(
             program_blueprint,
-            vec![ProgramVersion::new(vec![Program {
-                kind: ProgramType::Kprobe,
-                name: "sys_ptrace_write".to_string(),
-                // TODO: attach points
-                optional: false,
-                loaded: false,
-            }])],
+            vec![ProgramVersion::new(vec![Program::new(
+                ProgramType::Kprobe,
+                "sys_ptrace_write",
+                vec!["sys_ptrace"],
+                false,
+            )])],
             None,
         );
 

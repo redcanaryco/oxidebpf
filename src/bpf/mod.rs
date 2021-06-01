@@ -443,7 +443,7 @@ impl BpfInsn {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ProgramType {
+pub enum ProgramType {
     Unspec,
     Kprobe,
     Kretprobe,

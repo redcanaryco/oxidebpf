@@ -3,6 +3,7 @@ use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    ProgramNotLoaded,
     InvalidElf,
     InvalidProgramObject,
     InvalidMapObject,
@@ -20,4 +21,11 @@ pub enum OxidebpfError {
     BadPageSize,
     BadPageCount,
     UnsupportedEventType,
+    MultipleErrors(Vec<OxidebpfError>),
+}
+
+impl From<Vec<OxidebpfError>> for OxidebpfError {
+    fn from(e: Vec<OxidebpfError>) -> Self {
+        Self::MultipleErrors(e)
+    }
 }

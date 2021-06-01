@@ -9,10 +9,26 @@ pub(crate) union PerfSample {
     pub(crate) sample_freq: c_ulong,
 }
 
+impl Default for PerfSample {
+    fn default() -> Self {
+        Self {
+            sample_period: 0u64,
+        }
+    }
+}
+
 #[repr(C)]
 pub(crate) union PerfWakeup {
     pub(crate) wakeup_events: c_uint,
     pub(crate) wakeup_watermark: c_uint,
+}
+
+impl Default for PerfWakeup {
+    fn default() -> Self {
+        Self {
+            wakeup_events: 0u32,
+        }
+    }
 }
 
 #[repr(C)]
@@ -21,13 +37,26 @@ pub(crate) union PerfBpAddr {
     pub(crate) config1: c_ulong,
 }
 
+impl Default for PerfBpAddr {
+    fn default() -> Self {
+        Self { bp_addr: 0u64 }
+    }
+}
+
 #[repr(C)]
 pub(crate) union PerfBpLen {
     pub(crate) bp_len: c_ulong,
     pub(crate) config2: c_ulong,
 }
 
+impl Default for PerfBpLen {
+    fn default() -> Self {
+        Self { bp_len: 0u64 }
+    }
+}
+
 #[repr(C)]
+#[derive(Default)]
 pub struct PerfEventAttr {
     pub(crate) p_type: c_uint,
     pub(crate) size: c_uint,
