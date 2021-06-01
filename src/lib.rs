@@ -91,13 +91,13 @@ impl<'a> Program<'a> {
         let mut errs = Vec::<OxidebpfError>::new();
         self.attach_points.iter().map(|attach_point| {
             if let Err(e) = attach_kprobe(self.fd, attach_point, None) {
-                errs.push(e);
-                if let Err(e) = attach_kprobe(
+                if let Err(s) = attach_kprobe(
                     self.fd,
                     &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
                     None,
                 ) {
                     errs.push(e);
+                    errs.push(s);
                 }
             }
         });
@@ -128,17 +128,10 @@ impl<'a> Program<'a> {
             return Err(OxidebpfError::ProgramNotLoaded);
         }
 
-        let ret = match self.kind {
+        match self.kind {
             ProgramType::Kprobe | ProgramType::Kretprobe => self.attach_kprobe(),
             ProgramType::Uprobe | ProgramType::Uretprobe => self.attach_uprobe(),
             _ => Err(OxidebpfError::UnsupportedProgramType),
-        };
-
-        // if we're optional, then ignore any errors
-        if self.optional {
-            Ok(())
-        } else {
-            ret
         }
     }
 
@@ -294,6 +287,7 @@ impl ProgramVersion<'_> {
             }
         }
 
+        // TODO: optionals here should just skip over, return what's left
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
             self.fds.insert({
