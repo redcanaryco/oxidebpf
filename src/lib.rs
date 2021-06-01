@@ -216,8 +216,8 @@ impl ProgramVersion {
                             let fd = unsafe {
                                 bpf::syscall::bpf_map_create_with_sized_attr(sized_attr)?
                             };
-                            program_object.fixup_map_relocation(fd, map)?;
                             self.fds.insert(fd);
+                            program_object.fixup_map_relocation(fd, map)?;
                         }
                     }
                     loaded_maps.insert(map.name.clone());
