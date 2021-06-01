@@ -317,3 +317,50 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
 
     Ok(elf)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn test_blueprint_object_parsing() {
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        assert!(
+            program.exists(),
+            "test program object not found: {:?}",
+            program
+        );
+
+        let data = fs::read(program).unwrap();
+
+        let blueprint = ProgramBlueprint::new(&data, None).unwrap();
+
+        let prog = blueprint.programs.get("test_program_map_update");
+        assert!(
+            prog.is_some(),
+            "expected program 'test_program_map_update' missing"
+        );
+        let prog = prog.unwrap();
+        assert_eq!(
+            prog.program_type,
+            ProgramType::Kprobe,
+            "expected program to be 'kprobe'"
+        );
+        assert_eq!(
+            prog.required_maps(),
+            vec!["__test_map".to_string()],
+            "expected program to depend on 'test_map'"
+        );
+
+        let map = blueprint.maps.get("__test_map");
+        assert!(map.is_some(), "expected map 'test_map' missing");
+        let map = map.unwrap();
+        assert_eq!(map.symbol_name, "__test_map");
+        assert_eq!(map.name, "test_map");
+    }
+}

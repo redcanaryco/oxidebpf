@@ -19,7 +19,7 @@ static unsigned long long (*bpf_get_current_pid_tgid)(void) =
     u32 max_entries;
 };
 
-struct map_t test_map __attribute__((section("maps/test_map"), used)) = {
+struct map_t __test_map __attribute__((section("maps/test_map"), used)) = {
         BPF_MAP_TYPE_ARRAY,
     sizeof(u32),
     sizeof(u32),
@@ -37,10 +37,10 @@ __attribute__((section("kprobe/test_program_map_update"), used))
 int test_program_map_update(struct pt_regs *regs)
 {
     u32 index = 0;
-    u32 *value = bpf_map_lookup_elem(&test_map, &index);
+    u32 *value = bpf_map_lookup_elem(&__test_map, &index);
     if (!value) {
         u32 new_value = 1;
-        bpf_map_update_elem(&test_map, &index, &new_value, BPF_ANY);
+        bpf_map_update_elem(&__test_map, &index, &new_value, BPF_ANY);
     }
     return 0;
 }
