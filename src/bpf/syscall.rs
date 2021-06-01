@@ -248,7 +248,9 @@ pub(crate) mod tests {
             OxidebpfError::CStringConversionError(e) => {
                 panic!("could not convert string: {:?}", e)
             }
-            _ => {}
+            e => {
+                panic!(e)
+            }
         }
     }
 
