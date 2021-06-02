@@ -3,6 +3,7 @@
 use libc::{c_int, pid_t};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Write};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -400,8 +401,48 @@ impl<'a> Drop for ProgramVersion<'a> {
                 libc::close(*fd as c_int);
             }
         }
-        for ev_path in self.ev_names.iter() {
-            // cleanup debugfs
+        for event_name in self.ev_names.iter() {
+            let event_name = event_name.clone();
+
+            // uprobe
+            let mut up_drops = Vec::<String>::new();
+            let up_file = std::fs::File::open("/sys/kernel/debug/tracing/uprobe_events").unwrap();
+            let up_reader = BufReader::new(up_file);
+            for line in up_reader.lines() {
+                let line = line.unwrap();
+                if line == event_name {
+                    up_drops.push(event_name.clone())
+                }
+            }
+            let mut up_file = std::fs::OpenOptions::new()
+                .append(true)
+                .write(true)
+                .read(false)
+                .open("/sys/kernel/debug/tracing/uprobe_events")
+                .unwrap(); // if we can't drop - panic!
+            for drop in up_drops.iter() {
+                up_file.write(format!("-:{}", drop).as_bytes());
+            }
+            // kprobe
+            let mut kp_drops = Vec::<String>::new();
+            let kp_file = std::fs::File::open("/sys/kernel/debug/tracing/kprobe_events").unwrap();
+            let kp_reader = BufReader::new(kp_file);
+            for line in kp_reader.lines() {
+                let line = line.unwrap();
+                if line == event_name {
+                    kp_drops.push(event_name.clone())
+                }
+            }
+            let mut kp_file = std::fs::OpenOptions::new()
+                .read(false)
+                .write(true)
+                .append(true)
+                .open("/sys/kernel/debug/tracing/kprobe_events")
+                .unwrap(); // if we can't drop - panic!
+
+            for drop in kp_drops {
+                kp_file.write(format!("-:{}", drop).as_bytes());
+            }
         }
     }
 }
