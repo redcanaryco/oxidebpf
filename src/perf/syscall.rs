@@ -146,10 +146,7 @@ pub(crate) fn perf_event_open_debugfs(
         _ => {}
     }
 
-    Ok(format!(
-        "/sys/kernel/debug/tracing/events/{}/{}",
-        event_type, event_alias
-    ))
+    Ok(format!("{}/{}", event_type, event_alias))
 }
 
 /// Checks if `perf_event_open()` is supported and if so, calls the syscall.
@@ -292,7 +289,7 @@ pub(crate) fn attach_uprobe(
                 } else {
                     ProgramType::Uprobe
                 },
-                "TODO",
+                attach_point,
                 offset.unwrap_or(0),
                 attach_point,
             )?;
@@ -338,7 +335,7 @@ pub(crate) fn attach_kprobe(
                 } else {
                     ProgramType::Kprobe
                 },
-                "TODO",
+                attach_point,
                 offset.unwrap_or(0),
                 attach_point,
             )?;
