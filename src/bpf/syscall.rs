@@ -197,6 +197,7 @@ pub(crate) mod tests {
     use std::ffi::c_void;
     use std::os::raw::{c_int, c_uint};
     use std::os::unix::io::{FromRawFd, RawFd};
+    use std::path::PathBuf;
 
     use nix::errno::{errno, Errno};
     use scopeguard::defer;
@@ -209,6 +210,7 @@ pub(crate) mod tests {
     use crate::error::OxidebpfError;
     use crate::perf::syscall::{perf_event_ioc_set_bpf, perf_event_open};
     use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use std::fs;
 
     pub(crate) fn bpf_panic_error(err: OxidebpfError) {
         match err {
@@ -353,13 +355,13 @@ pub(crate) mod tests {
     #[test]
     fn test_bpf_prog_load() {
         // currently fails w/ EACCES because we are not applying relocations
-        use std::path::PathBuf;
-        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("resources/test.o"); // TODO: make this a MIT licensed bpf stub program that doesn't need relocations
-        let program_blueprint =
-            ProgramBlueprint::new(&std::fs::read(d).expect("Could not open file"), None)
-                .expect("Could not open test object file");
-        let program_object = program_blueprint.programs.get("sys_ptrace_write").unwrap();
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        let data = fs::read(program).unwrap();
+        let blueprint = ProgramBlueprint::new(&data, None).unwrap();
+
+        let program_object = blueprint.programs.get("test_program").unwrap();
         match bpf_prog_load(
             BPF_PROG_TYPE_KPROBE,
             &program_object.code,

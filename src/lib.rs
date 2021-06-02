@@ -593,16 +593,17 @@ mod program_tests {
 
     #[test]
     fn test_program_group() {
-        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("resources/test.o");
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
         let program_blueprint =
-            ProgramBlueprint::new(&std::fs::read(d).expect("Could not open file"), None)
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![Program::new(
                 ProgramType::Kprobe,
-                "sys_ptrace_write",
+                "test_program",
                 vec!["sys_ptrace"],
                 false,
                 None,
