@@ -27,8 +27,8 @@ pub enum SectionType<'a> {
     Program {
         /// The name of the section prefix.
         section_prefix: &'a str,
-        /// The type of program ("kprobe", "kretprobe", "uprobe",...)
-        program_type: &'a str,
+        /// The type of program.
+        program_type: ProgramType,
     },
 }
 
@@ -91,7 +91,8 @@ impl ProgramBlueprint {
     ///
     /// ```
     /// use std::path::PathBuf;
-    /// use oxidebpf::blueprint::{ProgramBlueprint, SectionType};                                                                                        
+    /// use oxidebpf::blueprint::{ProgramBlueprint, SectionType};
+    /// use oxidebpf::ProgramType;
     ///
     /// let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));                                                         
     /// d.push("resources/test.o");
@@ -101,7 +102,7 @@ impl ProgramBlueprint {
     ///     SectionType::Map { section_prefix: "mymap" },
     ///     SectionType::Program {
     ///         section_prefix: "probes",
-    ///         program_type: "kprobe",
+    ///         program_type: ProgramType::Kprobe,
     ///     },
     /// ];
     ///
@@ -135,8 +136,9 @@ impl ProgramBlueprint {
                     continue;
                 }
                 "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => {
+                    let program_type = prefix.into();
                     let obj =
-                        ProgramObject::from_section(prefix.into(), name, data, &elf, sh_index, sh)?;
+                        ProgramObject::from_section(&program_type, name, data, &elf, sh_index, sh)?;
                     blueprint.programs.insert(obj.name.clone(), obj);
                     continue;
                 }
@@ -146,7 +148,7 @@ impl ProgramBlueprint {
             // check to see if the section matches up with the section definitions the user passed in
             for section_type in section_types
                 .iter()
-                .flat_map(|s| s)
+                .flatten()
                 .filter(|s| s.prefix_matches(prefix))
             {
                 match section_type {
@@ -159,7 +161,7 @@ impl ProgramBlueprint {
                     }
                     SectionType::Program { program_type, .. } => {
                         let obj = ProgramObject::from_section(
-                            (*program_type).into(),
+                            program_type,
                             name,
                             data,
                             &elf,
@@ -187,7 +189,7 @@ pub(crate) struct ProgramObject {
 
 impl ProgramObject {
     fn from_section<'a>(
-        program_type: ProgramType,
+        program_type: &ProgramType,
         name: Option<&str>,
         data: &'a [u8],
         elf: &'a Elf,
@@ -200,14 +202,13 @@ impl ProgramObject {
         let symbol_name = elf
             .syms
             .iter()
-            .filter(|sym| sym.st_shndx == sh_index)
-            .next()
+            .find(|sym| sym.st_shndx == sh_index)
             .map(|sym| get_symbol_name(&elf, &sym).unwrap_or_default())
             .unwrap_or_default();
 
         // For object naming, we prioritize the section name over the symbol name
         Ok(Self {
-            program_type,
+            program_type: program_type.clone(),
             name: name.map(str::to_string).unwrap_or(symbol_name),
             code,
             relocations: Reloc::get_map_relocations(sh_index, &elf)?,
