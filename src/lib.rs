@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
+use libc::{c_int, pid_t};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
 use std::slice;
 use std::thread::JoinHandle;
@@ -21,6 +21,7 @@ use crate::error::OxidebpfError;
 use crate::maps::{PerCpu, PerfMap};
 use crate::maps::{PerfEvent, ProgramMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
+use itertools::Itertools;
 
 mod blueprint;
 mod bpf;
@@ -64,6 +65,7 @@ pub struct Program<'a> {
     optional: bool,
     loaded: bool,
     fd: RawFd,
+    pid: Option<pid_t>,
 }
 
 impl<'a> Program<'a> {
@@ -76,6 +78,7 @@ impl<'a> Program<'a> {
         name: &'a str,
         attach_points: Vec<&'a str>,
         optional: bool,
+        pid: Option<pid_t>,
     ) -> Program<'a> {
         Self {
             kind,
@@ -84,6 +87,7 @@ impl<'a> Program<'a> {
             optional,
             loaded: false,
             fd: 0,
+            pid,
         }
     }
 
@@ -129,6 +133,7 @@ impl<'a> Program<'a> {
                     self.kind == ProgramType::Uretprobe,
                     None,
                     *cpu,
+                    self.pid.unwrap_or(-1),
                 ) {
                     errs.push(e)
                 }
@@ -305,28 +310,49 @@ impl ProgramVersion<'_> {
             }
         }
 
-        // TODO: optionals here should just skip over, return what's left
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
-            self.fds.insert({
-                let fd = syscall::bpf_prog_load(
-                    u32::from(&blueprint.program_type),
-                    &blueprint.code,
-                    blueprint.license.clone(),
-                )? as RawFd;
-                // Programs are kept separate from ProgramBlueprints to allow users to specify
-                // different blueprints/files for the same set of programs, should they choose.
-                // This means we need to do ugly filters like this.
-                self.programs
-                    .iter_mut()
-                    .filter(|p| p.name.eq(blueprint.name.as_str()))
-                    .map(|p| {
-                        p.loaded_as(fd);
-                        p.attach()
-                    })
-                    .collect::<Result<Vec<()>, OxidebpfError>>()?;
-                fd
-            });
+            let fd = syscall::bpf_prog_load(
+                u32::from(&blueprint.program_type),
+                &blueprint.code,
+                blueprint.license.clone(),
+            );
+            // Programs are kept separate from ProgramBlueprints to allow users to specify
+            // different blueprints/files for the same set of programs, should they choose.
+            // This means we need to do ugly filters like this.
+            let mut programs: Vec<&mut Program> = self
+                .programs
+                .iter_mut()
+                .filter(|p| p.name.eq(blueprint.name.as_str()))
+                .collect();
+            if fd.is_err() {
+                for program in programs.iter() {
+                    if !program.optional {
+                        // If any are not optional, fail out of the whole Version
+                        return Err(fd.unwrap_err());
+                    }
+                }
+                // if they're all optional, go to the next blueprint object
+                continue;
+            }
+            let fd = fd?;
+            programs
+                .iter_mut()
+                .map(|p| {
+                    p.loaded_as(fd);
+                    match p.attach() {
+                        Err(e) => {
+                            if p.optional {
+                                Ok(())
+                            } else {
+                                Err(e)
+                            }
+                        }
+                        _ => Ok(()),
+                    }
+                })
+                .collect::<Result<Vec<()>, OxidebpfError>>()?;
+            self.fds.insert(fd);
         }
 
         // start event poller and pass back channel, if one exists
@@ -372,6 +398,7 @@ mod program_tests {
                 "sys_ptrace_write",
                 vec!["sys_ptrace"],
                 false,
+                None,
             )])],
             None,
         );
