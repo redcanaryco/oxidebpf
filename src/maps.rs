@@ -135,19 +135,12 @@ pub struct Map {
     loaded: bool,
 }
 
-pub trait ProgramMap {
-    fn load(&mut self) -> Result<(), OxidebpfError>;
-    fn unload(&mut self) -> Result<(), OxidebpfError>;
-    fn get_fd(&self) -> Result<RawFd, OxidebpfError>;
-}
-
 pub trait RWMap<T> {
     fn read(&self) -> Result<T, OxidebpfError>;
     fn write(&self) -> Result<(), OxidebpfError>;
 }
 
 pub trait PerCpu {
-    // What other per-cpu maps are there that we may want to use?
     fn cpuid(&self) -> i32;
 }
 
@@ -266,21 +259,6 @@ impl PerCpu for PerfMap {
         self.cpuid
     }
 }
-
-impl ProgramMap for PerfMap {
-    fn load(&mut self) -> Result<(), OxidebpfError> {
-        todo!()
-    }
-
-    fn unload(&mut self) -> Result<(), OxidebpfError> {
-        todo!()
-    }
-
-    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
-        Ok(self.ev_fd)
-    }
-}
-
 impl<T> ArrayMap<T> {
     pub fn new() -> ArrayMap<T> {
         unimplemented!()
@@ -294,43 +272,6 @@ impl<T> RWMap<T> for ArrayMap<T> {
 
     fn write(&self) -> Result<(), OxidebpfError> {
         unimplemented!()
-    }
-}
-
-impl<T> ProgramMap for ArrayMap<T> {
-    fn load(&mut self) -> Result<(), OxidebpfError> {
-        todo!()
-    }
-
-    fn unload(&mut self) -> Result<(), OxidebpfError> {
-        todo!()
-    }
-
-    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
-        todo!()
-    }
-}
-
-impl ProgramMap for Map {
-    fn load(&mut self) -> Result<(), OxidebpfError> {
-        let fd = unsafe {
-            crate::bpf::syscall::bpf_map_create_with_config(self.map_config, self.map_config_size)?
-        };
-        self.fd = fd;
-        self.loaded = true;
-        Ok(())
-    }
-    fn unload(&mut self) -> std::result::Result<(), OxidebpfError> {
-        // TODO: close FD
-        self.loaded = false;
-        Ok(())
-    }
-    fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
-        if self.loaded {
-            Ok(self.fd)
-        } else {
-            Err(OxidebpfError::MapNotLoaded)
-        }
     }
 }
 

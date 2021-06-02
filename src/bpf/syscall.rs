@@ -36,16 +36,6 @@ type BpfMapType = u32;
 /// sys_bpf(BPF_MAP_CREATE, arg_bpf_atr);
 /// ```
 unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
-    // https://man7.org/linux/man-pages/man2/syscall.2.html
-    // Architecture-specific requirements
-    // Each architecture ABI has its own requirements on how system call
-    // arguments are passed to the kernel.  For system calls that have a
-    // glibc wrapper (e.g., most system calls), glibc handles the
-    // details of copying arguments to the right registers in a manner
-    // suitable for the architecture.  However, when using syscall() to
-    // make a system call, the caller might need to handle architecture-
-    // dependent details; this requirement is most commonly encountered
-    // on certain 32-bit architectures.
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
 
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
