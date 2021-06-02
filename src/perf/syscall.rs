@@ -207,7 +207,7 @@ fn perf_attach_tracepoint_with_debugfs(
     prog_fd: RawFd,
     event_path: String,
     cpu: i32,
-) -> Result<i32, OxidebpfError> {
+) -> Result<String, OxidebpfError> {
     let p_type = std::fs::read_to_string((*PMU_TTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
         .parse::<u32>()
@@ -225,7 +225,8 @@ fn perf_attach_tracepoint_with_debugfs(
     };
 
     let pfd = perf_event_open(&perf_event_attr, -1, cpu, -1, PERF_FLAG_FD_CLOEXEC)?;
-    perf_attach_tracepoint(prog_fd, pfd)
+    perf_attach_tracepoint(prog_fd, pfd)?;
+    Ok(event_path)
 }
 
 fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, OxidebpfError> {
@@ -261,7 +262,7 @@ pub(crate) fn attach_uprobe(
     offset: Option<u64>,
     cpu: i32,
     pid: pid_t,
-) -> Result<i32, OxidebpfError> {
+) -> Result<(Option<String>, Option<RawFd>), OxidebpfError> {
     let config = std::fs::read_to_string((*PMU_URETPROBE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?;
     let mut return_bit = 0u64;
@@ -282,7 +283,7 @@ pub(crate) fn attach_uprobe(
         .map_err(|_| OxidebpfError::FileIOError)?;
 
     match perf_event_with_probe(attach_point, return_bit, p_type, offset.unwrap_or(0), cpu) {
-        Ok(pfd) => perf_attach_tracepoint(fd, pfd),
+        Ok(pfd) => perf_attach_tracepoint(fd, pfd).map(|fd| Ok((None, Some(fd))))?,
         Err(e) => {
             let event_path = perf_event_open_debugfs(
                 pid,
@@ -291,11 +292,11 @@ pub(crate) fn attach_uprobe(
                 } else {
                     ProgramType::Uprobe
                 },
-                "",
+                "TODO",
                 offset.unwrap_or(0),
                 attach_point,
             )?;
-            perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
+            perf_attach_tracepoint_with_debugfs(fd, event_path, cpu).map(|s| Ok((Some(s), None)))?
         }
     }
 }
@@ -306,7 +307,7 @@ pub(crate) fn attach_kprobe(
     is_return: bool,
     offset: Option<u64>,
     cpu: i32,
-) -> Result<i32, OxidebpfError> {
+) -> Result<(Option<String>, Option<RawFd>), OxidebpfError> {
     let config = std::fs::read_to_string((*PMU_KRETPROBE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?;
     let mut return_bit = 0u64;
@@ -328,7 +329,7 @@ pub(crate) fn attach_kprobe(
 
     // create perf
     match perf_event_with_probe(attach_point, return_bit, p_type, offset.unwrap_or(0), cpu) {
-        Ok(pfd) => perf_attach_tracepoint(fd, pfd),
+        Ok(pfd) => perf_attach_tracepoint(fd, pfd).map(|fd| Ok((None, Some(fd))))?,
         Err(e) => {
             let event_path = perf_event_open_debugfs(
                 -1,
@@ -337,11 +338,11 @@ pub(crate) fn attach_kprobe(
                 } else {
                     ProgramType::Kprobe
                 },
-                "",
+                "TODO",
                 offset.unwrap_or(0),
                 attach_point,
             )?;
-            perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
+            perf_attach_tracepoint_with_debugfs(fd, event_path, cpu).map(|s| Ok((Some(s), None)))?
         }
     }
 }

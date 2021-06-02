@@ -56,6 +56,7 @@ pub struct ProgramGroup<'a> {
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
+    ev_names: HashSet<String>,
 }
 
 pub struct Program<'a> {
@@ -91,43 +92,61 @@ impl<'a> Program<'a> {
         }
     }
 
-    fn attach_kprobe(&self) -> Result<(), OxidebpfError> {
+    fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         let mut errs = Vec::<OxidebpfError>::new();
+        let mut paths = Vec::<String>::new();
+        let mut fds = Vec::<RawFd>::new();
         for cpu in crate::maps::get_cpus()?.iter() {
             self.attach_points.iter().map(|attach_point| {
-                if let Err(e) = attach_kprobe(
+                match attach_kprobe(
                     self.fd,
                     attach_point,
                     self.kind == ProgramType::Kretprobe,
                     None,
                     *cpu,
                 ) {
-                    if let Err(s) = attach_kprobe(
-                        self.fd,
-                        &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
-                        self.kind == ProgramType::Kretprobe,
-                        None,
-                        *cpu,
-                    ) {
-                        errs.push(e);
-                        errs.push(s);
+                    Ok(o) => match o {
+                        (Some(s), None) => paths.push(s),
+                        (None, Some(fd)) => fds.push(fd),
+                        _ => {}
+                    },
+                    Err(e) => {
+                        match attach_kprobe(
+                            self.fd,
+                            &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
+                            self.kind == ProgramType::Kretprobe,
+                            None,
+                            *cpu,
+                        ) {
+                            Ok(o) => match o {
+                                (Some(s), None) => paths.push(s),
+                                (None, Some(fd)) => fds.push(fd),
+                                _ => {}
+                            },
+                            Err(s) => {
+                                errs.push(e);
+                                errs.push(s);
+                            }
+                        }
                     }
                 }
             });
         }
 
         if errs.is_empty() {
-            Ok(())
+            Ok((paths, fds))
         } else {
             Err(OxidebpfError::MultipleErrors(errs))
         }
     }
 
-    fn attach_uprobe(&self) -> Result<(), OxidebpfError> {
+    fn attach_uprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         let mut errs = Vec::<OxidebpfError>::new();
+        let mut paths = Vec::<String>::new();
+        let mut fds = Vec::<RawFd>::new();
         for cpu in crate::maps::get_cpus()?.iter() {
             self.attach_points.iter().map(|attach_point| {
-                if let Err(e) = attach_uprobe(
+                match attach_uprobe(
                     self.fd,
                     attach_point,
                     self.kind == ProgramType::Uretprobe,
@@ -135,18 +154,23 @@ impl<'a> Program<'a> {
                     *cpu,
                     self.pid.unwrap_or(-1),
                 ) {
-                    errs.push(e)
+                    Ok(o) => match o {
+                        (Some(s), None) => paths.push(s),
+                        (None, Some(fd)) => fds.push(fd),
+                        _ => {}
+                    },
+                    Err(e) => errs.push(e),
                 }
             });
         }
         if errs.is_empty() {
-            Ok(())
+            Ok((paths, fds))
         } else {
             Err(OxidebpfError::MultipleErrors(errs))
         }
     }
 
-    fn attach(&self) -> Result<(), OxidebpfError> {
+    fn attach(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         if !self.loaded {
             return Err(OxidebpfError::ProgramNotLoaded);
         }
@@ -214,6 +238,7 @@ impl ProgramVersion<'_> {
         ProgramVersion {
             programs,
             fds: HashSet::<RawFd>::new(),
+            ev_names: HashSet::<String>::new(),
         }
     }
 
@@ -336,22 +361,24 @@ impl ProgramVersion<'_> {
                 continue;
             }
             let fd = fd?;
-            programs
-                .iter_mut()
-                .map(|p| {
-                    p.loaded_as(fd);
-                    match p.attach() {
-                        Err(e) => {
-                            if p.optional {
-                                Ok(())
-                            } else {
-                                Err(e)
-                            }
+            for mut p in programs {
+                p.loaded_as(fd);
+                match p.attach() {
+                    Err(e) => {
+                        if !p.optional {
+                            return Err(e);
                         }
-                        _ => Ok(()),
                     }
-                })
-                .collect::<Result<Vec<()>, OxidebpfError>>()?;
+                    Ok(s) => {
+                        for s in s.0.iter() {
+                            self.ev_names.insert(s.clone());
+                        }
+                        for fd in s.1.into_iter() {
+                            self.fds.insert(fd);
+                        }
+                    }
+                }
+            }
             self.fds.insert(fd);
         }
 
@@ -372,6 +399,9 @@ impl<'a> Drop for ProgramVersion<'a> {
             unsafe {
                 libc::close(*fd as c_int);
             }
+        }
+        for ev_path in self.ev_names.iter() {
+            // cleanup debugfs
         }
     }
 }
