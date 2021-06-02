@@ -13,7 +13,7 @@ use nix::errno::errno;
 use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_event_type;
-use crate::perf::syscall::perf_event_ioc_enable;
+use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
 
 #[repr(C)]
@@ -168,10 +168,6 @@ impl PerfMap {
         for cpuid in get_cpus()?.iter() {
             let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
             let base_ptr: *mut _;
-            if fd < 0 {
-                // fallback on debugfs
-                //fd = crate::perf::syscall::perf_event_open_debugfs(&event_attr, -1, *cpuid, 1, 0)?;
-            }
             base_ptr = unsafe {
                 libc::mmap(
                     null_mut(),
@@ -277,6 +273,8 @@ impl<T> RWMap<T> for ArrayMap<T> {
 
 impl Drop for PerfMap {
     fn drop(&mut self) {
+        // if it doesn't work, we're gonna close it anyway so :shrug:
+        perf_event_ioc_disable(self.ev_fd);
         unsafe {
             libc::close(self.ev_fd);
         }

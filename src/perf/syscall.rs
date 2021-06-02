@@ -160,10 +160,11 @@ pub(crate) fn perf_event_open(
     if !((*PERF_PATH).as_path().exists()) {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
+    let attr = attr.clone();
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
-            attr.clone() as *const _ as u64,
+            attr as *const _ as u64,
             pid,
             cpu,
             group_fd,
@@ -345,61 +346,91 @@ pub(crate) fn attach_kprobe(
 
 #[cfg(test)]
 mod tests {
+    use crate::perf::constant::{
+        PERF_PATH, PMU_KRETPROBE_FILE, PMU_KTYPE_FILE, PMU_TTYPE_FILE, PMU_URETPROBE_FILE,
+        PMU_UTYPE_FILE,
+    };
     use std::os::unix::io::RawFd;
 
+    use crate::blueprint::ProgramBlueprint;
+    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
+    use crate::bpf::syscall::bpf_prog_load;
     use crate::bpf::syscall::tests::bpf_panic_error;
-    use crate::perf::syscall::{perf_event_ioc_set_bpf, perf_event_open};
+    use crate::error::OxidebpfError;
+    use crate::perf::constant::perf_type_id::PERF_TYPE_SOFTWARE;
+    use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
+    use crate::perf::syscall::{
+        perf_attach_tracepoint, perf_event_ioc_disable, perf_event_ioc_enable,
+        perf_event_ioc_set_bpf, perf_event_open, perf_event_with_probe,
+    };
     use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use lazy_static::lazy_static;
+    use std::fs;
+    use std::path::PathBuf;
+
+    lazy_static! {
+        static ref EVENT_ATTR: PerfEventAttr = PerfEventAttr {
+            config: perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64,
+            size: std::mem::size_of::<PerfEventAttr>() as u32,
+            p_type: perf_type_id::PERF_TYPE_SOFTWARE,
+            sample_type: perf_event_sample_format::PERF_SAMPLE_RAW as u64,
+            sample_union: PerfSample { sample_period: 1 },
+            wakeup_union: PerfWakeup { wakeup_events: 1 },
+            ..Default::default()
+        };
+    }
 
     #[test]
     fn test_perf_event_open() {
-        #![allow(unreachable_code)]
-        todo!();
-        match perf_event_open(
-            &PerfEventAttr {
-                p_type: 0,
-                size: 0,
-                config: 0,
-                sample_union: PerfSample { sample_freq: 0 },
-                sample_type: 0,
-                read_format: 0,
-                flags: 0,
-                wakeup_union: PerfWakeup { wakeup_events: 0 },
-                bp_type: 0,
-                bp_addr_union: PerfBpAddr { bp_addr: 0 },
-                bp_len_union: PerfBpLen { bp_len: 0 },
-                branch_sample_type: 0,
-                sample_regs_user: 0,
-                sample_stack_user: 0,
-                clockid: 0,
-                sample_regs_intr: 0,
-                aux_watermark: 0,
-                __reserved_2: 0,
-            },
-            0,
-            0,
-            0,
-            0,
-        ) {
-            Ok(_) => {}
-            Err(e) => bpf_panic_error(e),
-        }
+        perf_event_open(&EVENT_ATTR, -1, 0, -1, 0).unwrap();
     }
 
     #[test]
     fn test_perf_event_ioc_set_bpf() {
-        #![allow(unreachable_code)]
-        todo!();
-        let perf_fd: RawFd = 0;
-        match perf_event_ioc_set_bpf(perf_fd, 0) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
+        let blueprint = ProgramBlueprint::new(
+            fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("test")
+                    .join(format!("test_program_{}", std::env::consts::ARCH)),
+            )
+            .unwrap()
+            .as_slice(),
+            None,
+        )
+        .unwrap();
+
+        let program_object = blueprint.programs.get("test_program").unwrap();
+        let prog_fd = bpf_prog_load(
+            BPF_PROG_TYPE_KPROBE,
+            &program_object.code,
+            program_object.license.clone(),
+        )
+        .unwrap();
+
+        let pfd = perf_event_with_probe("sys_ptrace", 0, PERF_TYPE_SOFTWARE, 0, 0).unwrap();
+        perf_event_ioc_set_bpf(pfd, prog_fd as u32).unwrap();
+    }
+
+    #[test]
+    fn test_perf_event_ioc_enable() {
+        let pfd = perf_event_open(&EVENT_ATTR, -1, 0, -1, 0).unwrap();
+        perf_event_ioc_enable(pfd).unwrap();
     }
 
     #[test]
     fn test_perf_event_ioc_disable() {
-        todo!()
+        let event_attr = PerfEventAttr {
+            config: perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT as u64,
+            size: std::mem::size_of::<PerfEventAttr>() as u32,
+            p_type: perf_type_id::PERF_TYPE_SOFTWARE,
+            sample_type: perf_event_sample_format::PERF_SAMPLE_RAW as u64,
+            sample_union: PerfSample { sample_period: 1 },
+            wakeup_union: PerfWakeup { wakeup_events: 1 },
+            ..Default::default()
+        };
+        let pfd = perf_event_open(&event_attr, -1, 0, -1, 0).unwrap();
+        perf_event_ioc_enable(pfd).unwrap();
+        perf_event_ioc_disable(pfd).unwrap();
     }
 }
 

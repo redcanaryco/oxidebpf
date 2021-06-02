@@ -453,6 +453,7 @@ impl ProgramVersion<'_> {
                                 wakeup_union: PerfWakeup { wakeup_events: 1 },
                                 ..Default::default()
                             };
+                            // TODO: is this necessary if we're creating perfmaps when attaching probes?
                             let mut perfmap =
                                 PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
                             perfmaps.append(&mut perfmap);

@@ -354,7 +354,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_bpf_prog_load() {
-        // currently fails w/ EACCES because we are not applying relocations
         let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test")
             .join(format!("test_program_{}", std::env::consts::ARCH));

@@ -1,4 +1,4 @@
-use std::os::raw::{c_int, c_uint, c_ulong};
+use std::os::raw::{c_int, c_uint, c_ulong, c_ushort};
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
@@ -55,8 +55,7 @@ impl Default for PerfBpLen {
     }
 }
 
-#[repr(C)]
-#[derive(Default)]
+#[repr(align(8), C)]
 pub struct PerfEventAttr {
     pub(crate) p_type: c_uint,
     pub(crate) size: c_uint,
@@ -75,5 +74,32 @@ pub struct PerfEventAttr {
     pub(crate) clockid: c_int,
     pub(crate) sample_regs_intr: c_ulong,
     pub(crate) aux_watermark: c_uint,
-    pub(crate) __reserved_2: c_uint, // align to __u64
+    pub(crate) sample_max_stack: c_ushort,
+    pub(crate) __reserved_2: c_ushort, // align to __u64
+}
+
+impl Default for PerfEventAttr {
+    fn default() -> Self {
+        Self {
+            p_type: 0,
+            size: std::mem::size_of::<PerfEventAttr>() as u32,
+            config: 0,
+            sample_union: Default::default(),
+            sample_type: 0,
+            read_format: 0,
+            flags: 0,
+            wakeup_union: Default::default(),
+            bp_type: 0,
+            bp_addr_union: Default::default(),
+            bp_len_union: Default::default(),
+            branch_sample_type: 0,
+            sample_regs_user: 0,
+            sample_stack_user: 0,
+            clockid: 0,
+            sample_regs_intr: 0,
+            aux_watermark: 0,
+            sample_max_stack: 0,
+            __reserved_2: 0,
+        }
+    }
 }
