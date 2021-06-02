@@ -90,7 +90,22 @@ impl ProgramBlueprint {
     /// This example creates a new `ProgramBlueprint` with a custom section parser.
     ///
     /// ```
-    /// TODO: brandon, put example here
+    /// use std::path::PathBuf;
+    /// use oxidebpf::blueprint::{ProgramBlueprint, SectionType};                                                                                        
+    ///
+    /// let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));                                                         
+    /// d.push("resources/test.o");
+    /// let program_bytes = std::fs::read(d).expect("Could not open file");
+    ///
+    /// let section_types = vec![
+    ///     SectionType::Map { section_prefix: "mymap" },
+    ///     SectionType::Program {
+    ///         section_prefix: "probes",
+    ///         program_type: "kprobe",
+    ///     },
+    /// ];
+    ///
+    /// let program_blueprint = ProgramBlueprint::new(&program_bytes, Some(section_types))?;
     /// ```
     pub fn new(
         data: &[u8],
