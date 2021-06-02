@@ -42,6 +42,56 @@ impl<'a> SectionType<'a> {
 }
 
 impl ProgramBlueprint {
+    /// Create a new `ProgramBlueprint` from a given series of bytes.
+    ///
+    /// The bytes can come from any source, but the easiest way is to load them directly
+    /// from a file. See the included examples below. The program assumes a default ABI for
+    /// specifying probes and maps by section name, as used in the
+    /// [redcanary-ebpf-sensor](https://github.com/redcanaryco/redcanary-ebpf-sensor).
+    ///
+    /// # Default ABI
+    ///
+    /// The default ABI assumes that probes are in their own section with the name
+    /// `<probe type>/<probe name>` (e.g., `kprobe/sys_process_vm_writev`). Maps
+    /// are also assumed to be prefixed with `maps`, followed by the map name (e.g.,
+    /// `maps/wpm_events`). It is common in many eBPF examples for maps to all
+    /// be placed in the same section, simply called `maps`. If this is the case, you will
+    /// need to provide your own custom section parser (see below examples).
+    ///
+    /// Here is a snippet of what a default eBPF program might look like.
+    ///
+    /// ```C
+    /// struct bpf_map_def SEC("maps/wpm_events") write_process_memory_events = {
+    ///     // map configuration goes here
+    /// };
+    ///
+    /// SEC("kprobe/sys_ptrace_write")
+    /// int kprobe__sys_ptrace_write(struct pt_regs *__ctx)
+    /// {
+    ///     // probe configuration goes here
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// This example creates a new `ProgramBlueprint` with the default section parser.
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use oxidebpf::blueprint::ProgramBlueprint;                                                                                        
+    ///
+    /// let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));                                                         
+    /// d.push("resources/test.o");
+    /// let program_bytes = std::fs::read(d).expect("Could not open file");
+    ///
+    /// let program_blueprint = ProgramBlueprint::new(&program_bytes, None)?;
+    /// ```
+    ///
+    /// This example creates a new `ProgramBlueprint` with a custom section parser.
+    ///
+    /// ```
+    /// TODO: brandon, put example here
+    /// ```
     pub fn new(
         data: &[u8],
         section_types: Option<Vec<SectionType>>,
