@@ -4,6 +4,8 @@ use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::bpf_prog_type;
 use crate::error::OxidebpfError;
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::mem::MaybeUninit;
 
 pub(crate) mod constant;
@@ -478,6 +480,24 @@ impl From<&str> for ProgramType {
             "rawtracepoint" => ProgramType::RawTracepoint,
             _ => ProgramType::Unspec,
         }
+    }
+}
+
+impl Display for ProgramType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ProgramType::Unspec => "unspec",
+                ProgramType::Kprobe => "kprobe",
+                ProgramType::Kretprobe => "kretprobe",
+                ProgramType::Uprobe => "uprobe",
+                ProgramType::Uretprobe => "uretprobe",
+                ProgramType::Tracepoint => "tracepoint",
+                ProgramType::RawTracepoint => "rawtracepoint",
+            }
+        )
     }
 }
 
