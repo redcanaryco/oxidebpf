@@ -19,8 +19,8 @@ use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::{syscall, BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
 use crate::error::OxidebpfError;
+use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
-use crate::maps::{PerfEvent, ProgramMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use itertools::Itertools;
 
@@ -29,7 +29,6 @@ mod bpf;
 mod error;
 pub mod maps;
 mod perf;
-pub mod probes;
 
 #[cfg(target_arch = "aarch64")]
 const ARCH_SYSCALL_PREFIX: &str = "__arm64__";
