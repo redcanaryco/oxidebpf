@@ -38,7 +38,7 @@ const ARCH_SYSCALL_PREFIX: &str = "__x64__";
 // TODO: this is the public interface, needs docstrings
 
 // (map name, cpuid, event data)
-pub struct PerfChannelMessage(String, i32, Vec<u8>);
+pub struct PerfChannelMessage(pub String, pub i32, pub Vec<u8>);
 
 #[derive(Clone)]
 struct Channel {
