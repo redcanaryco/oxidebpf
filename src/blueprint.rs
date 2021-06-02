@@ -1,12 +1,14 @@
-use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 
+use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
+use itertools::Itertools;
+
 use crate::bpf::*;
 use crate::error::*;
+use crate::ProgramType;
 
 /// Structure that parses eBPF objects from an ELF object.
 #[derive(Debug, Clone, Default)]

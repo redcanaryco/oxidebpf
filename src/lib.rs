@@ -1,28 +1,29 @@
 #![allow(dead_code)]
 
-use libc::{c_int, pid_t};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader, Write};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
-use std::slice;
 use std::thread::JoinHandle;
+use std::{fmt, slice};
 
 use crossbeam_channel::{bounded, Receiver, SendError, Sender};
+use itertools::Itertools;
+use libc::{c_int, pid_t};
 
 use perf::syscall::{attach_kprobe, attach_uprobe};
 use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
-use crate::bpf::{syscall, BpfAttr, MapConfig, ProgramType, SizedBpfAttr};
+use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
-use itertools::Itertools;
 
 mod blueprint;
 mod bpf;
@@ -451,7 +452,7 @@ mod program_tests {
     use std::path::PathBuf;
 
     use crate::blueprint::ProgramBlueprint;
-    use crate::bpf::ProgramType;
+    use crate::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
 
     #[test]
@@ -474,5 +475,48 @@ mod program_tests {
         );
 
         program_group.load().expect("Could not load programs");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgramType {
+    Unspec,
+    Kprobe,
+    Kretprobe,
+    Uprobe,
+    Uretprobe,
+    Tracepoint,
+    RawTracepoint,
+}
+
+impl From<&str> for ProgramType {
+    fn from(value: &str) -> ProgramType {
+        match value {
+            "kprobe" => ProgramType::Kprobe,
+            "kretprobe" => ProgramType::Kretprobe,
+            "uprobe" => ProgramType::Uprobe,
+            "uretprobe" => ProgramType::Uretprobe,
+            "tracepoint" => ProgramType::Tracepoint,
+            "rawtracepoint" => ProgramType::RawTracepoint,
+            _ => ProgramType::Unspec,
+        }
+    }
+}
+
+impl Display for ProgramType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ProgramType::Unspec => "unspec",
+                ProgramType::Kprobe => "kprobe",
+                ProgramType::Kretprobe => "kretprobe",
+                ProgramType::Uprobe => "uprobe",
+                ProgramType::Uretprobe => "uretprobe",
+                ProgramType::Tracepoint => "tracepoint",
+                ProgramType::RawTracepoint => "rawtracepoint",
+            }
+        )
     }
 }

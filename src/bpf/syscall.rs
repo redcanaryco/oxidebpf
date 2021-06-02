@@ -65,16 +65,6 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     Ok(ret as usize)
 }
 
-/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
-pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-    }
-    Ok(ret as usize)
-}
-
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
 /// License should (almost) always be GPL.
 pub(crate) fn bpf_prog_load(
@@ -354,7 +344,7 @@ pub(crate) mod tests {
             let fd = file.as_raw_fd();
 
             // switch mnt namespace
-            crate::bpf::syscall::setns(fd, CLONE_NEWNS)
+            crate::perf::syscall::setns(fd, CLONE_NEWNS)
                 .map_err(|e| bpf_panic_error(e))
                 .unwrap();
         }
