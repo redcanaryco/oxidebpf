@@ -1,3 +1,9 @@
+//! A fully MIT licensed library for managing eBPF programs.
+//!
+//! `oxidebpf` allows a user to easily manage a pre-built eBPF object file, creating
+//! groups of programs based on functionality and loading them as units.
+//! For a quick getting-started, see the documentation for [`ProgramGroup`](struct@ProgramGroup)'s
+//! `new()` and `load()` functions.
 #![allow(dead_code)]
 
 use std::borrow::Borrow;
@@ -25,10 +31,10 @@ use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 
-mod blueprint;
+pub mod blueprint;
 mod bpf;
 mod error;
-pub mod maps;
+mod maps;
 mod perf;
 
 #[cfg(target_arch = "aarch64")]
@@ -36,10 +42,16 @@ const ARCH_SYSCALL_PREFIX: &str = "__arm64__";
 #[cfg(target_arch = "x86_64")]
 const ARCH_SYSCALL_PREFIX: &str = "__x64__";
 
-// TODO: this is the public interface, needs docstrings
-
-// (map name, cpuid, event data)
-pub struct PerfChannelMessage(pub String, pub i32, pub Vec<u8>);
+/// Message format for messages sent back across the channel. It includes
+/// the map name, cpu id, and message data.
+pub struct PerfChannelMessage(
+    /// The name of the map this message is from.
+    pub String,
+    /// The cpuid of the CPU this message is from.
+    pub i32,
+    /// The data in the message.
+    pub Vec<u8>,
+);
 
 #[derive(Clone)]
 struct Channel {
@@ -47,6 +59,9 @@ struct Channel {
     rx: Receiver<PerfChannelMessage>,
 }
 
+/// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
+/// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
+/// in order until one successfully loads, or none do.
 pub struct ProgramGroup<'a> {
     program_blueprint: ProgramBlueprint,
     program_versions: Vec<ProgramVersion<'a>>,
@@ -54,12 +69,16 @@ pub struct ProgramGroup<'a> {
     channel: Channel,
 }
 
+/// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
 }
 
+/// The description of an individual eBPF program. Note: This is _not_ the same
+/// as the eBPF program itself, the actual binary is loaded from a
+/// [`ProgramBlueprint`](struct@ProgramBlueprint).
 pub struct Program<'a> {
     kind: ProgramType,
     name: &'a str,
@@ -71,10 +90,29 @@ pub struct Program<'a> {
 }
 
 impl<'a> Program<'a> {
-    fn get_name(&self) -> &'a str {
-        self.name
-    }
-
+    /// Create a new program specification.
+    ///
+    /// You must provide the program type, the name of the program section in your
+    /// blueprint's object file (see ['ProgramBlueprint'](struct@ProgramBlueprint))
+    /// a vector of attachment points, whether or not the program is optional, and
+    /// an optional pid to attach to.
+    ///
+    /// The pid is mainly used for uprobes. If the `Program` is optional then any encapsulating
+    /// `ProgramVersion` will ignore any errors when attempting to load or attach it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use oxidebpf::{Program, ProgramType};
+    ///
+    /// Program::new(
+    ///     ProgramType::Kprobe,
+    ///     "sys_ptrace_write",
+    ///     vec!["sys_ptrace"],
+    ///     false,
+    ///     None,
+    /// );
+    /// ```
     pub fn new(
         kind: ProgramType,
         name: &'a str,
@@ -201,6 +239,35 @@ impl<'a> Program<'a> {
 }
 
 impl ProgramGroup<'_> {
+    /// Create a program group out of multiple [`ProgramVersion`](struct@ProgramVersion)s.
+    ///
+    /// Together with [`load()`](fn.load.html), this is the primary public interface of the
+    /// oxidebpf library. You feed your `ProgramGroup` a collection of `ProgramVersion`s,
+    /// each with their own set of `Program`s. Note that you must provide your `ProgramGroup`
+    /// with a [`ProgramBlueprint`](struct@ProgramBlueprint). The blueprint contains the parsed
+    /// object file with all the eBPF programs and maps you may load.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use oxidebpf::{ProgramGroup, ProgramVersion, ProgramType, Program};
+    /// use oxidebpf::blueprint::ProgramBlueprint;
+    ///
+    /// let program_blueprint =                                                            
+    ///     ProgramBlueprint::new(&std::fs::read("program.o")?, None)?;
+    ///
+    /// ProgramGroup::new(                                         
+    ///     program_blueprint,                                                             
+    ///     vec![ProgramVersion::new(vec![Program::new(
+    ///         ProgramType::Kprobe,                                                       
+    ///         "sys_ptrace_write",                                                        
+    ///         vec!["sys_ptrace"],                                                        
+    ///         false,                                                                     
+    ///         None,                                                                      
+    ///     )])],                                                                          
+    ///     None,                                                                          
+    /// );                                                                                 
+    /// ```
     pub fn new(
         program_blueprint: ProgramBlueprint,
         program_versions: Vec<ProgramVersion>,
@@ -218,6 +285,38 @@ impl ProgramGroup<'_> {
         }
     }
 
+    /// Attempt to load contained [`ProgramVersion`](struct@ProgramVersion)s until one
+    /// successfully loads.
+    ///
+    /// This function attempts to load each `ProgramVersion` in the order given until
+    /// one successfully loads. When one loads, if that version had a perfmap channel,
+    /// a [`PerfChannelMessage`](struct@PerfChannelMessage) receiver crossbeam channel
+    /// is returned. If none load, a `NoProgramVersionLoaded` error is returned, along
+    /// with all the internal errors generated during attempted loading.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use oxidebpf::{ProgramGroup, ProgramVersion, Program, ProgramType};
+    /// use oxidebpf::blueprint::ProgramBlueprint;
+    ///
+    /// let program_blueprint =                                                            
+    ///     ProgramBlueprint::new(&std::fs::read("program.o")?, None)?;
+    ///
+    /// let mut program_group = ProgramGroup::new(                                         
+    ///     program_blueprint,                                                             
+    ///     vec![ProgramVersion::new(vec![Program::new(                                    
+    ///         ProgramType::Kprobe,                                                       
+    ///         "sys_ptrace_write",                                                        
+    ///         vec!["sys_ptrace"],                                                        
+    ///         false,                                                                     
+    ///         None,                                                                      
+    ///     )])],                                                                          
+    ///     None,                                                                          
+    /// );                                                                                 
+    ///                                                                                    
+    /// program_group.load().expect("Could not load programs");
+    /// ```
     pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
         let mut errors = Vec::<OxidebpfError>::new();
         for program_version in self.program_versions.iter_mut() {
@@ -235,6 +334,43 @@ impl ProgramGroup<'_> {
 }
 
 impl ProgramVersion<'_> {
+    /// Create a new `ProgramVersion` from a vector of [`Program`](struct@Program)s.
+    ///
+    /// The newly created `ProgramVersion` should be given to a
+    /// [`ProgramGroup`](struct@ProgramGroup) for loading. The `ProgramVersion` encapsulates
+    /// all the logic for loading, attaching, and returning events from a single clustering
+    /// of eBPF [`Program`](struct@Program)s. Each `ProgramVersion` should be intended to act
+    /// as an independent unit, in the absence of other `ProgramVersion`s.
+    ///
+    /// # Panics
+    ///
+    /// *  When dropping a `ProgramVersion` that uses debugfs, if the drop routine cannot
+    /// reach the correct files in debugfs it will panic.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use oxidebpf::{ProgramVersion, Program, ProgramType};
+    ///
+    /// let program_vec = vec![
+    ///     Program::new(
+    ///         ProgramType::Kprobe,
+    ///         "sys_ptrace_write",
+    ///         vec!["sys_ptrace"],
+    ///         false,
+    ///         None,
+    ///     ),
+    ///     Program::new(
+    ///         ProgramType::Kprobe,
+    ///         "sys_process_vm_writev",
+    ///         vec!["sys_process_vm_writev"],
+    ///         false,
+    ///         None,
+    ///     )
+    /// ];
+    ///
+    /// ProgramVersion::new(program_vec);
+    /// ```
     pub fn new(programs: Vec<Program>) -> ProgramVersion {
         ProgramVersion {
             programs,
@@ -478,14 +614,22 @@ mod program_tests {
     }
 }
 
+/// An enum of the different BPF program types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProgramType {
+    /// Unspecified program type.
     Unspec,
+    /// A kprobe that can be attached at the function (or syscall) start or offset.
     Kprobe,
+    /// A kprobe that can be attached at the return of a function (or syscall).
     Kretprobe,
+    /// A uprobe that can be attached to a function in a program or pid at the start or offset.
     Uprobe,
+    /// A uprobe that can be attached to the return of a function in a program or pid.
     Uretprobe,
+    /// Stable (in theory) kernel static instrumentation points.
     Tracepoint,
+    /// A tracepoint with raw arguments accessible, without `TP_fast_assign()` applied.
     RawTracepoint,
 }
 
