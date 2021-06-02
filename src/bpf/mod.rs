@@ -1,12 +1,13 @@
 use std::convert::TryFrom;
 use std::ffi::CStr;
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::bpf_prog_type;
 use crate::error::OxidebpfError;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::mem::MaybeUninit;
+use crate::ProgramType;
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
@@ -444,17 +445,6 @@ impl BpfInsn {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ProgramType {
-    Unspec,
-    Kprobe,
-    Kretprobe,
-    Uprobe,
-    Uretprobe,
-    Tracepoint,
-    RawTracepoint,
-}
-
 impl From<&ProgramType> for u32 {
     fn from(value: &ProgramType) -> u32 {
         match value {
@@ -466,38 +456,6 @@ impl From<&ProgramType> for u32 {
             ProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
             ProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
         }
-    }
-}
-
-impl From<&str> for ProgramType {
-    fn from(value: &str) -> ProgramType {
-        match value {
-            "kprobe" => ProgramType::Kprobe,
-            "kretprobe" => ProgramType::Kretprobe,
-            "uprobe" => ProgramType::Uprobe,
-            "uretprobe" => ProgramType::Uretprobe,
-            "tracepoint" => ProgramType::Tracepoint,
-            "rawtracepoint" => ProgramType::RawTracepoint,
-            _ => ProgramType::Unspec,
-        }
-    }
-}
-
-impl Display for ProgramType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ProgramType::Unspec => "unspec",
-                ProgramType::Kprobe => "kprobe",
-                ProgramType::Kretprobe => "kretprobe",
-                ProgramType::Uprobe => "uprobe",
-                ProgramType::Uretprobe => "uretprobe",
-                ProgramType::Tracepoint => "tracepoint",
-                ProgramType::RawTracepoint => "rawtracepoint",
-            }
-        )
     }
 }
 

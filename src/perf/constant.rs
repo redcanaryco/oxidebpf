@@ -3,36 +3,18 @@ use lazy_static::lazy_static;
 use std::path::PathBuf;
 
 lazy_static! {
-    pub(crate) static ref PERF_PATH: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/proc/sys/kernel/perf_event_paranoid");
-        p
-    };
-    pub(crate) static ref PMU_KRETPROBE_FILE: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/sys/bus/event_source/devices/kprobe/format/retprobe");
-        p
-    };
-    pub(crate) static ref PMU_URETPROBE_FILE: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/sys/bus/event_source/devices/uprobe/format/retprobe");
-        p
-    };
-    pub(crate) static ref PMU_KTYPE_FILE: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/sys/bus/event_source/devices/kprobe/type");
-        p
-    };
-    pub(crate) static ref PMU_UTYPE_FILE: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/sys/bus/event_source/devices/uprobe/type");
-        p
-    };
-    pub(crate) static ref PMU_TTYPE_FILE: PathBuf = {
-        let mut p = PathBuf::new();
-        p.push("/sys/bus/event_source/devices/tracepoint/type");
-        p
-    };
+    pub(crate) static ref PERF_PATH: PathBuf =
+        PathBuf::from("/proc/sys/kernel/perf_event_paranoid");
+    pub(crate) static ref PMU_KRETPROBE_FILE: PathBuf =
+        PathBuf::from("/sys/bus/event_source/devices/kprobe/format/retprobe");
+    pub(crate) static ref PMU_URETPROBE_FILE: PathBuf =
+        PathBuf::from("/sys/bus/event_source/devices/uprobe/format/retprobe");
+    pub(crate) static ref PMU_KTYPE_FILE: PathBuf =
+        PathBuf::from("/sys/bus/event_source/devices/kprobe/type");
+    pub(crate) static ref PMU_UTYPE_FILE: PathBuf =
+        PathBuf::from("/sys/bus/event_source/devices/uprobe/type");
+    pub(crate) static ref PMU_TTYPE_FILE: PathBuf =
+        PathBuf::from("/sys/bus/event_source/devices/tracepoint/type");
 }
 
 pub(crate) mod perf_event_sample_format {

@@ -1,5 +1,6 @@
 use std::convert::TryInto;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::os::linux::fs::MetadataExt;
 use std::os::raw::{c_int, c_ulong};
 use std::os::unix::io::{IntoRawFd, RawFd};
@@ -7,12 +8,10 @@ use std::path::PathBuf;
 
 use lazy_static::lazy_static;
 use libc::pid_t;
-use libc::{syscall, SYS_perf_event_open, CLONE_NEWNS};
+use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 
-use crate::bpf::syscall::setns;
-use crate::bpf::ProgramType;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
 use crate::perf::constant::{
@@ -20,7 +19,7 @@ use crate::perf::constant::{
     PMU_UTYPE_FILE,
 };
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
-use std::io::Write;
+use crate::ProgramType;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
@@ -402,4 +401,14 @@ mod tests {
     fn test_perf_event_ioc_disable() {
         todo!()
     }
+}
+
+/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
+pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
+    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
+    if ret < 0 {
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+    }
+    Ok(ret as usize)
 }
