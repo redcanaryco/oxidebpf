@@ -27,6 +27,12 @@ pub enum OxidebpfError {
     UncaughtMountNsError,
 }
 
+impl std::fmt::Display for OxidebpfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl From<Vec<OxidebpfError>> for OxidebpfError {
     fn from(e: Vec<OxidebpfError>) -> Self {
         Self::MultipleErrors(e)

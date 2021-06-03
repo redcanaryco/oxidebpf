@@ -262,20 +262,17 @@ impl ProgramObject {
         fd: RawFd,
         map: &MapObject,
     ) -> Result<(), OxidebpfError> {
-        if self.relocations.len() == 0 {
-            return Ok(());
-        }
-
-        let reloc = self
+        for reloc in self
             .relocations
             .iter()
-            .find(|r| r.symbol_name == map.symbol_name)
-            .ok_or(OxidebpfError::InvalidProgramObject)?;
-
-        if let Some(insn) = self.code.0.get_mut(reloc.insn_index as usize) {
-            insn.set_src(1);
-            insn.imm = fd as i32;
+            .filter(|r| r.symbol_name == map.symbol_name)
+        {
+            if let Some(insn) = self.code.0.get_mut(reloc.insn_index as usize) {
+                insn.set_src(1);
+                insn.imm = fd as i32;
+            }
         }
+
         Ok(())
     }
 }
