@@ -31,7 +31,7 @@ impl Default for PerfWakeup {
     }
 }
 
-#[repr(C)]
+#[repr(align(8), C)]
 pub(crate) union PerfBpAddr {
     pub(crate) bp_addr: c_ulong,
     pub(crate) config1: c_ulong,
@@ -43,7 +43,7 @@ impl Default for PerfBpAddr {
     }
 }
 
-#[repr(C)]
+#[repr(align(8), C)]
 pub(crate) union PerfBpLen {
     pub(crate) bp_len: c_ulong,
     pub(crate) config2: c_ulong,

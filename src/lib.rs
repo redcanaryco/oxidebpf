@@ -6,22 +6,17 @@
 //! `new()` and `load()` functions.
 #![allow(dead_code)]
 
-use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader, Write};
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
-use std::thread::JoinHandle;
-use std::{fmt, slice};
 
-use crossbeam_channel::{bounded, Receiver, SendError, Sender};
-use itertools::Itertools;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use libc::{c_int, pid_t};
 
 use perf::syscall::{attach_kprobe, attach_uprobe};
-use perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+use perf::{PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
@@ -136,7 +131,7 @@ impl<'a> Program<'a> {
         let mut paths = Vec::<String>::new();
         let mut fds = Vec::<RawFd>::new();
         for cpu in crate::maps::get_cpus()?.iter() {
-            self.attach_points.iter().map(|attach_point| {
+            self.attach_points.iter().for_each(|attach_point| {
                 match attach_kprobe(
                     self.fd,
                     attach_point,
@@ -184,7 +179,7 @@ impl<'a> Program<'a> {
         let mut paths = Vec::<String>::new();
         let mut fds = Vec::<RawFd>::new();
         for cpu in crate::maps::get_cpus()?.iter() {
-            self.attach_points.iter().map(|attach_point| {
+            self.attach_points.iter().for_each(|attach_point| {
                 match attach_uprobe(
                     self.fd,
                     attach_point,
@@ -495,7 +490,7 @@ impl ProgramVersion<'_> {
             // Programs are kept separate from ProgramBlueprints to allow users to specify
             // different blueprints/files for the same set of programs, should they choose.
             // This means we need to do ugly filters like this.
-            let mut programs: Vec<&mut Program> = self
+            let programs: Vec<&mut Program> = self
                 .programs
                 .iter_mut()
                 .filter(|p| p.name.eq(blueprint.name.as_str()))
@@ -511,7 +506,7 @@ impl ProgramVersion<'_> {
                 continue;
             }
             let fd = fd?;
-            for mut p in programs {
+            for p in programs {
                 p.loaded_as(fd);
                 match p.attach() {
                     Err(e) => {

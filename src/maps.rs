@@ -1,5 +1,3 @@
-use std::borrow::Borrow;
-use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;

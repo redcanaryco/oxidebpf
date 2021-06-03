@@ -1,23 +1,15 @@
-use std::convert::TryInto;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
-use std::os::raw::{c_uint, c_ulong};
-use std::os::unix::io::RawFd;
-use std::sync::atomic::AtomicPtr;
+use std::os::unix::io::{IntoRawFd, RawFd};
 
-use libc::{pid_t, syscall, SYS_bpf, SYS_setns, CLONE_NEWNS};
+use libc::{c_uint, syscall, SYS_bpf};
 use nix::errno::errno;
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
-use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY;
-use crate::bpf::{
-    BpfAttr, BpfCode, BpfInsn, BpfProgAttach, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr,
-};
+use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
-use crate::perf::constant::perf_ioctls;
-use crate::perf::PerfEventAttr;
 
 type BpfMapType = u32;
 
@@ -76,6 +68,8 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
+    let name = "do_mount".to_string();
+    let name = name.as_bytes();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -85,7 +79,7 @@ pub(crate) fn bpf_prog_load(
     };
     let bpf_attr = SizedBpfAttr {
         bpf_attr: BpfAttr { bpf_prog_load },
-        size: 24,
+        size: 48, // 48 = minimum for 4.4
     };
     unsafe {
         let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr)?;

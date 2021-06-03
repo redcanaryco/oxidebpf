@@ -1,12 +1,11 @@
 use std::convert::TryInto;
-use std::fs::OpenOptions;
+
 use std::io::Write;
+use std::mem::MaybeUninit;
 use std::os::linux::fs::MetadataExt;
 use std::os::raw::{c_int, c_ulong};
 use std::os::unix::io::{IntoRawFd, RawFd};
-use std::path::PathBuf;
 
-use lazy_static::lazy_static;
 use libc::pid_t;
 use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
@@ -14,10 +13,16 @@ use nix::{ioctl_none, ioctl_write_int};
 
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
+
+// the compiler doesn't recognize that these _are_ used
+#[allow(unused_imports)]
 use crate::perf::constant::{
     PERF_PATH, PMU_KRETPROBE_FILE, PMU_KTYPE_FILE, PMU_TTYPE_FILE, PMU_URETPROBE_FILE,
     PMU_UTYPE_FILE,
 };
+
+use crate::perf::constant::perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT;
+use crate::perf::constant::perf_type_id::PERF_TYPE_SOFTWARE;
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 use crate::ProgramType;
 
@@ -97,7 +102,7 @@ pub(crate) fn perf_event_open_debugfs(
         .write(true)
         .append(true)
         .open(event_path)
-        .map_err(|e| OxidebpfError::FileIOError)?;
+        .map_err(|_e| OxidebpfError::FileIOError)?;
 
     let event_alias = format!("{}_oxidebpf_{}", event_name, std::process::id());
     let mut ns_fd: RawFd = -1;
@@ -160,11 +165,24 @@ pub(crate) fn perf_event_open(
     if !((*PERF_PATH).as_path().exists()) {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
-    let attr = attr.clone();
+    let perf_event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
+    let perf_event_attr = unsafe { perf_event_attr.assume_init() };
+    let mut perf_event_attr = Box::new(perf_event_attr);
+    let size = attr.size;
+    let mut p = attr as *const PerfEventAttr as *const u8;
+    let mut q = perf_event_attr.as_mut() as *mut PerfEventAttr as *mut u8;
+    unsafe {
+        // VERY UNSAFE!!!
+        for _ in 0..=size {
+            *q = *p;
+            q = q.add(1);
+            p = p.add(1);
+        }
+    }
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
-            attr as *const _ as u64,
+            perf_event_attr.as_ref() as *const _,
             pid,
             cpu,
             group_fd,
@@ -207,10 +225,14 @@ fn perf_attach_tracepoint_with_debugfs(
 ) -> Result<String, OxidebpfError> {
     let p_type = std::fs::read_to_string((*PMU_TTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
+        .trim()
+        .to_string()
         .parse::<u32>()
         .map_err(|_| OxidebpfError::FileIOError)?;
     let config = std::fs::read_to_string(format!("{}/id", event_path))
         .map_err(|_| OxidebpfError::FileIOError)?
+        .trim()
+        .to_string()
         .parse::<u64>()
         .map_err(|_| OxidebpfError::FileIOError)?;
     let perf_event_attr = PerfEventAttr {
@@ -262,9 +284,12 @@ pub(crate) fn attach_uprobe(
 ) -> Result<(Option<String>, Option<RawFd>), OxidebpfError> {
     let config = std::fs::read_to_string((*PMU_URETPROBE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?;
+
     let mut return_bit = 0u64;
     if config.contains("config:") {
-        let bit = &config[6..]
+        let bit = &config[7..]
+            .trim()
+            .to_string()
             .parse::<u64>()
             .map_err(|_| OxidebpfError::FileIOError)?;
         if is_return {
@@ -283,7 +308,7 @@ pub(crate) fn attach_uprobe(
 
     match perf_event_with_probe(attach_point, return_bit, p_type, offset.unwrap_or(0), cpu) {
         Ok(pfd) => perf_attach_tracepoint(fd, pfd).map(|fd| Ok((None, Some(fd))))?,
-        Err(e) => {
+        Err(_e) => {
             let event_path = perf_event_open_debugfs(
                 pid,
                 if is_return {
@@ -310,8 +335,11 @@ pub(crate) fn attach_kprobe(
     let config = std::fs::read_to_string((*PMU_KRETPROBE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?;
     let mut return_bit = 0u64;
+
     if config.contains("config:") {
-        let bit = &config[6..]
+        let bit = &config[7..]
+            .trim()
+            .to_string()
             .parse::<u64>()
             .map_err(|_| OxidebpfError::FileIOError)?;
         if is_return {
@@ -329,9 +357,9 @@ pub(crate) fn attach_kprobe(
         .map_err(|_| OxidebpfError::FileIOError)?;
 
     // create perf
-    match perf_event_with_probe(attach_point, return_bit, p_type, offset.unwrap_or(0), cpu) {
+    match perf_event_with_probe(attach_point, return_bit, p_type, offset.unwrap_or(0), 0) {
         Ok(pfd) => perf_attach_tracepoint(fd, pfd).map(|fd| Ok((None, Some(fd))))?,
-        Err(e) => {
+        Err(_e) => {
             let event_path = perf_event_open_debugfs(
                 -1,
                 if is_return {
@@ -348,32 +376,37 @@ pub(crate) fn attach_kprobe(
     }
 }
 
+/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
+pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
+    #![allow(clippy::useless_conversion)] // fails to compile otherwise
+    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
+    if ret < 0 {
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+    }
+    Ok(ret as usize)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::perf::constant::{
-        PERF_PATH, PMU_KRETPROBE_FILE, PMU_KTYPE_FILE, PMU_TTYPE_FILE, PMU_URETPROBE_FILE,
-        PMU_UTYPE_FILE,
-    };
-    use std::os::unix::io::RawFd;
+    use crate::perf::constant::PMU_KTYPE_FILE;
 
     use crate::blueprint::ProgramBlueprint;
     use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
     use crate::bpf::syscall::bpf_prog_load;
-    use crate::bpf::syscall::tests::bpf_panic_error;
-    use crate::error::OxidebpfError;
+    use crate::maps::get_cpus;
     use crate::perf::constant::perf_type_id::PERF_TYPE_SOFTWARE;
     use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
     use crate::perf::syscall::{
-        perf_attach_tracepoint, perf_event_ioc_disable, perf_event_ioc_enable,
-        perf_event_ioc_set_bpf, perf_event_open, perf_event_with_probe,
+        perf_event_ioc_disable, perf_event_ioc_enable, perf_event_ioc_set_bpf, perf_event_open,
+        perf_event_with_probe,
     };
-    use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
     use lazy_static::lazy_static;
     use std::fs;
+    use std::os::unix::io::RawFd;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::thread::sleep;
 
     lazy_static! {
         static ref EVENT_ATTR: PerfEventAttr = PerfEventAttr {
@@ -430,7 +463,11 @@ mod tests {
             .parse::<u32>()
             .unwrap();
 
-        let pfd = perf_event_with_probe("do_mount", 0, p_type, 0, 0).unwrap();
+        let mut pfd = 0;
+        for cpu in get_cpus().unwrap() {
+            pfd = perf_event_with_probe("do_mount", 0, p_type.clone(), 0, cpu).unwrap();
+        }
+        //let pfd = perf_event_with_probe("do_mount", 0, p_type.clone(), 0, 0).unwrap();
         //ctrlc_wait();
         perf_event_ioc_set_bpf(pfd, prog_fd as u32).unwrap();
     }
@@ -456,14 +493,4 @@ mod tests {
         perf_event_ioc_enable(pfd).unwrap();
         perf_event_ioc_disable(pfd).unwrap();
     }
-}
-
-/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
-pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-    }
-    Ok(ret as usize)
 }

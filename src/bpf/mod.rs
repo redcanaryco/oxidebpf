@@ -1,8 +1,5 @@
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::bpf_prog_type;
@@ -122,7 +119,7 @@ struct BpfProgLoad {
     // Additional functionality set, as of 5.12.7
     kern_version: c_uint, // not used
     prog_flags: c_uint,
-    prog_name: c_ulong, // char pointer, length BPF_OBJ_NAME_LEN
+    prog_name: [u8; 16], // char array, length BPF_OBJ_NAME_LEN
     prog_ifindex: c_uint,
     expected_attach_type: c_uint,
     prog_btf_fd: c_uint,
@@ -136,7 +133,7 @@ struct BpfProgLoad {
     prog_attach: BpfProgAttach,
 }
 
-#[repr(C)]
+#[repr(align(8), C)]
 #[derive(Clone, Copy)]
 union BpfProgAttach {
     attach_prog_fd: c_uint,
@@ -408,7 +405,7 @@ impl TryFrom<&[u8]> for BpfCode {
     }
 }
 
-#[repr(C)]
+#[repr(align(8), C)]
 #[derive(Debug, Clone)]
 pub(crate) struct BpfInsn {
     pub code: c_uchar,
