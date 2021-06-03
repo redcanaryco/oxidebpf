@@ -276,6 +276,8 @@ pub(crate) fn attach_uprobe(
 
     let p_type = std::fs::read_to_string((*PMU_UTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
+        .trim()
+        .to_string()
         .parse::<u32>()
         .map_err(|_| OxidebpfError::FileIOError)?;
 
@@ -321,6 +323,8 @@ pub(crate) fn attach_kprobe(
 
     let p_type = std::fs::read_to_string((*PMU_KTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
+        .trim()
+        .to_string()
         .parse::<u32>()
         .map_err(|_| OxidebpfError::FileIOError)?;
 
@@ -367,6 +371,9 @@ mod tests {
     use lazy_static::lazy_static;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::sleep;
 
     lazy_static! {
         static ref EVENT_ATTR: PerfEventAttr = PerfEventAttr {
@@ -378,6 +385,16 @@ mod tests {
             wakeup_union: PerfWakeup { wakeup_events: 1 },
             ..Default::default()
         };
+    }
+
+    fn ctrlc_wait() {
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::SeqCst);
+        })
+        .expect("Error setting handler");
+        while running.load(Ordering::SeqCst) {}
     }
 
     #[test]
@@ -406,8 +423,15 @@ mod tests {
             program_object.license.clone(),
         )
         .unwrap();
+        let p_type = std::fs::read_to_string((*PMU_KTYPE_FILE).as_path())
+            .unwrap()
+            .trim()
+            .to_string()
+            .parse::<u32>()
+            .unwrap();
 
-        let pfd = perf_event_with_probe("sys_ptrace", 0, PERF_TYPE_SOFTWARE, 0, 0).unwrap();
+        let pfd = perf_event_with_probe("do_mount", 0, p_type, 0, 0).unwrap();
+        //ctrlc_wait();
         perf_event_ioc_set_bpf(pfd, prog_fd as u32).unwrap();
     }
 
