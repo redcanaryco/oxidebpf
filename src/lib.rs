@@ -403,7 +403,7 @@ impl ProgramVersion<'_> {
 
     fn load_program_version(
         &mut self,
-        program_blueprint: ProgramBlueprint,
+        mut program_blueprint: ProgramBlueprint,
         channel: Channel,
         event_buffer_size: usize,
     ) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
@@ -427,7 +427,7 @@ impl ProgramVersion<'_> {
             for name in program_object.required_maps().iter() {
                 let map = program_blueprint
                     .maps
-                    .get(name)
+                    .get_mut(name)
                     .ok_or(OxidebpfError::MapNotFound)?;
 
                 if !loaded_maps.contains(&map.name.clone()) {
@@ -442,6 +442,7 @@ impl ProgramVersion<'_> {
                             let fd =
                                 unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
                             self.fds.insert(fd);
+                            map.set_loaded(fd);
                             program_object.fixup_map_relocation(fd, map)?;
 
                             let event_attr = PerfEventAttr {
@@ -469,6 +470,8 @@ impl ProgramVersion<'_> {
                         }
                     }
                     loaded_maps.insert(map.name.clone());
+                } else {
+                    program_object.fixup_map_relocation(map.get_fd()?, map)?;
                 }
             }
         }

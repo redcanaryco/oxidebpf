@@ -108,6 +108,26 @@ impl ProgramBlueprint {
     ///
     /// let program_blueprint = ProgramBlueprint::new(&program_bytes, Some(section_types))?;
     /// ```
+    ///
+    /// The `test.o` program loaded by this custom parser might look like this:
+    ///
+    /// ```c
+    /// struct bpf_map_def SEC("mymap") my_map = {
+    ///     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
+    ///     .key_size = sizeof(u32),
+    ///     .value_size = sizeof(u32),
+    ///     .max_entries = 1024,
+    ///     .pinning = 0,
+    ///     .namespace = "",
+    /// };
+    ///
+    /// SEC("probes/sys_setuid")
+    /// int kprobe__sys_setuid(struct pt_regs *regs)
+    /// {
+    ///     return 0;
+    /// }
+    /// ```
+    ///
     pub fn new(
         data: &[u8],
         section_types: Option<Vec<SectionType>>,
@@ -309,6 +329,8 @@ pub(crate) struct MapObject {
     pub name: String,
     /// The symbol name of the map
     pub symbol_name: String,
+    /// The file descriptor of the map, if it's been loaded
+    fd: Option<RawFd>,
 }
 
 impl MapObject {
@@ -338,11 +360,22 @@ impl MapObject {
                     definition: MapDefinition::try_from(map_data)?,
                     name,
                     symbol_name,
+                    fd: None,
                 });
             }
         }
 
         Ok(objects)
+    }
+
+    pub(crate) fn set_loaded(&mut self, fd: RawFd) {
+        self.fd = Some(fd);
+    }
+    pub(crate) fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
+        match self.fd {
+            Some(fd) => Ok(fd),
+            None => Err(OxidebpfError::MapNotLoaded),
+        }
     }
 }
 
