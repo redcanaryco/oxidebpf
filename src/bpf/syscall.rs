@@ -30,20 +30,10 @@ type BpfMapType = u32;
 unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
 
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let bpf_attr: BpfAttr = bpf_attr.assume_init();
-    let mut bpf_attr = Box::new(bpf_attr);
     let size = arg_bpf_attr.size;
-    let arg_bpf_attr = Box::new(arg_bpf_attr.bpf_attr);
-
-    // VERY UNSAFE!!!
-    let mut p = arg_bpf_attr.as_ref() as *const BpfAttr as *const u8;
-    let mut q = bpf_attr.as_mut() as *mut BpfAttr as *mut u8;
-    for _ in 0..=size {
-        *q = *p;
-        q = q.add(1);
-        p = p.add(1);
-    }
+    let p: *const BpfAttr = &arg_bpf_attr.bpf_attr;
+    let p = p as *mut u8;
+    let bpf_attr: &[u8] = std::slice::from_raw_parts(p, size);
 
     let ret = syscall(
         (SYS_bpf as i32).into(),

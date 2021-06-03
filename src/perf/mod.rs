@@ -75,7 +75,9 @@ pub struct PerfEventAttr {
     pub(crate) sample_regs_intr: c_ulong,
     pub(crate) aux_watermark: c_uint,
     pub(crate) sample_max_stack: c_ushort,
-    pub(crate) __reserved_2: c_ushort, // align to __u64
+    pub(crate) __reserved_2: c_ushort,
+    pub(crate) aux_sample_size: c_uint,
+    pub(crate) __reserved_3: c_uint,
 }
 
 impl Default for PerfEventAttr {
@@ -100,6 +102,8 @@ impl Default for PerfEventAttr {
             aux_watermark: 0,
             sample_max_stack: 0,
             __reserved_2: 0,
+            aux_sample_size: 0,
+            __reserved_3: 0,
         }
     }
 }

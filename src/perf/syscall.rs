@@ -165,20 +165,26 @@ pub(crate) fn perf_event_open(
     if !((*PERF_PATH).as_path().exists()) {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
-    let perf_event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
-    let perf_event_attr = unsafe { perf_event_attr.assume_init() };
-    let mut perf_event_attr = Box::new(perf_event_attr);
+    //let perf_event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
+    //let perf_event_attr = unsafe { perf_event_attr.assume_init() };
+    //let mut perf_event_attr = Box::new(perf_event_attr);
+    //let size = attr.size;
+    //let mut p = attr as *const PerfEventAttr as *const u8;
+    //let mut q = perf_event_attr.as_mut() as *mut PerfEventAttr as *mut u8;
+    //unsafe {
+    //    // VERY UNSAFE!!!
+    //    for _ in 0..=size {
+    //        *q = *p;
+    //        q = q.add(1);
+    //        p = p.add(1);
+    //    }
+    //}
+
     let size = attr.size;
-    let mut p = attr as *const PerfEventAttr as *const u8;
-    let mut q = perf_event_attr.as_mut() as *mut PerfEventAttr as *mut u8;
-    unsafe {
-        // VERY UNSAFE!!!
-        for _ in 0..=size {
-            *q = *p;
-            q = q.add(1);
-            p = p.add(1);
-        }
-    }
+    let p: *const PerfEventAttr = attr;
+    let p = p as *mut u8;
+    let perf_event_attr: &[u8] = unsafe { std::slice::from_raw_parts(p, size as usize) };
+
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
