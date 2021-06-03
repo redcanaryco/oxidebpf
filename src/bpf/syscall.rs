@@ -25,15 +25,15 @@ type BpfMapType = u32;
 /// indicate the amount of _bytes_ to be used by this call.
 ///
 /// # Example
-/// ```no_run
+/// ```ignore
 /// let arg_bpf_attr = SizedBpfAttr {
-///     bpf_atr: SomeStruct {
+///     bpf_attr: SomeStruct {
 ///         SomeVal: 123 as u32,
 ///         ..Default::default()
 ///     },
 ///     size: 4, // we instantiated 1 u32 of size 4 bytes
 /// };
-/// sys_bpf(BPF_MAP_CREATE, arg_bpf_atr);
+/// sys_bpf(BPF_MAP_CREATE, arg_bpf_attr);
 /// ```
 unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise

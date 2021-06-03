@@ -76,27 +76,38 @@ impl ProgramBlueprint {
     ///
     /// This example creates a new `ProgramBlueprint` with the default section parser.
     ///
-    /// ```no_run
+    /// ```
     /// use std::path::PathBuf;
     /// use oxidebpf::blueprint::ProgramBlueprint;                                                                                        
+    /// use std::fs;
     ///
-    /// let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));                                                         
-    /// d.push("resources/test.o");
-    /// let program_bytes = std::fs::read(d).expect("Could not open file");
+    /// ProgramBlueprint::new(
+    ///     fs::read(
+    ///         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    ///         .join("test")
+    ///         .join(format!("test_program_{}", std::env::consts::ARCH)),
+    ///     )
+    ///     .unwrap()
+    ///     .as_slice(),
+    ///     None,
+    /// )
+    /// .unwrap();
     ///
-    /// let program_blueprint = ProgramBlueprint::new(&program_bytes, None)?;
     /// ```
     ///
     /// This example creates a new `ProgramBlueprint` with a custom section parser.
     ///
-    /// ```
+    /// ```ignore
     /// use std::path::PathBuf;
     /// use oxidebpf::blueprint::{ProgramBlueprint, SectionType};
     /// use oxidebpf::ProgramType;
+    /// use std::fs;
     ///
-    /// let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));                                                         
-    /// d.push("resources/test.o");
-    /// let program_bytes = std::fs::read(d).expect("Could not open file");
+    /// let program_bytes = fs::read(
+    ///         // your program here
+    ///     )
+    ///     .unwrap()
+    ///     .as_slice();
     ///
     /// let section_types = vec![
     ///     SectionType::Map { section_prefix: "mymap" },

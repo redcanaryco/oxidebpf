@@ -249,24 +249,29 @@ impl ProgramGroup<'_> {
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// use oxidebpf::{ProgramGroup, ProgramVersion, ProgramType, Program};
+    /// ```
     /// use oxidebpf::blueprint::ProgramBlueprint;
+    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
+    /// use std::path::PathBuf;
     ///
-    /// let program_blueprint =                                                            
-    ///     ProgramBlueprint::new(&std::fs::read("program.o")?, None)?;
+    /// let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    ///             .join("test")
+    ///             .join(format!("test_program_{}", std::env::consts::ARCH));
+    /// let program_blueprint =
+    ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+    ///         .expect("Could not open test object file");
     ///
-    /// ProgramGroup::new(                                         
-    ///     program_blueprint,                                                             
+    /// ProgramGroup::new(
+    ///     program_blueprint,
     ///     vec![ProgramVersion::new(vec![Program::new(
-    ///         ProgramType::Kprobe,                                                       
-    ///         "sys_ptrace_write",                                                        
-    ///         vec!["sys_ptrace"],                                                        
-    ///         false,                                                                     
-    ///         None,                                                                      
-    ///     )])],                                                                          
-    ///     None,                                                                          
-    /// );                                                                                 
+    ///         ProgramType::Kprobe,
+    ///         "test_program",
+    ///         vec!["sys_ptrace"],
+    ///         false,
+    ///         None,
+    ///     )])],
+    ///     None,
+    /// );
     /// ```
     pub fn new(
         program_blueprint: ProgramBlueprint,
@@ -296,25 +301,29 @@ impl ProgramGroup<'_> {
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// use oxidebpf::{ProgramGroup, ProgramVersion, Program, ProgramType};
+    /// ```
     /// use oxidebpf::blueprint::ProgramBlueprint;
+    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
+    /// use std::path::PathBuf;
     ///
-    /// let program_blueprint =                                                            
-    ///     ProgramBlueprint::new(&std::fs::read("program.o")?, None)?;
+    /// let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    ///             .join("test")
+    ///             .join(format!("test_program_{}", std::env::consts::ARCH));
+    /// let program_blueprint =
+    ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+    ///         .expect("Could not open test object file");
+    /// let mut program_group = ProgramGroup::new(
+    ///     program_blueprint,
+    ///     vec![ProgramVersion::new(vec![Program::new(
+    ///         ProgramType::Kprobe,
+    ///         "test_program",
+    ///         vec!["sys_ptrace"],
+    ///         false,
+    ///         None,
+    ///     )])],
+    ///     None,
+    /// );
     ///
-    /// let mut program_group = ProgramGroup::new(                                         
-    ///     program_blueprint,                                                             
-    ///     vec![ProgramVersion::new(vec![Program::new(                                    
-    ///         ProgramType::Kprobe,                                                       
-    ///         "sys_ptrace_write",                                                        
-    ///         vec!["sys_ptrace"],                                                        
-    ///         false,                                                                     
-    ///         None,                                                                      
-    ///     )])],                                                                          
-    ///     None,                                                                          
-    /// );                                                                                 
-    ///                                                                                    
     /// program_group.load().expect("Could not load programs");
     /// ```
     pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
