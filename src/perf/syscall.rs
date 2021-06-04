@@ -25,6 +25,7 @@ use crate::perf::constant::perf_sw_ids::PERF_COUNT_SW_BPF_OUTPUT;
 use crate::perf::constant::perf_type_id::PERF_TYPE_SOFTWARE;
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 use crate::ProgramType;
+use std::ffi::CString;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
 ioctl_write_int!(
@@ -165,12 +166,12 @@ pub(crate) fn perf_event_open(
     if !((*PERF_PATH).as_path().exists()) {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
-    //let perf_event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
-    //let perf_event_attr = unsafe { perf_event_attr.assume_init() };
-    //let mut perf_event_attr = Box::new(perf_event_attr);
+    //let s_perf_event_attr = MaybeUninit::<PerfEventAttr>::zeroed();
+    //let s_perf_event_attr = unsafe { s_perf_event_attr.assume_init() };
+    //let mut s_perf_event_attr = Box::new(s_perf_event_attr);
     //let size = attr.size;
     //let mut p = attr as *const PerfEventAttr as *const u8;
-    //let mut q = perf_event_attr.as_mut() as *mut PerfEventAttr as *mut u8;
+    //let mut q = s_perf_event_attr.as_mut() as *mut PerfEventAttr as *mut u8;
     //unsafe {
     //    // VERY UNSAFE!!!
     //    for _ in 0..=size {
@@ -188,7 +189,7 @@ pub(crate) fn perf_event_open(
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
-            perf_event_attr.as_ref() as *const _,
+            perf_event_attr.as_ptr() as *const _,
             pid,
             cpu,
             group_fd,
@@ -266,11 +267,13 @@ fn perf_event_with_probe(
     offset: u64,
     cpu: i32,
 ) -> Result<RawFd, OxidebpfError> {
+    let ap_cstring =
+        CString::new(attach_point).map_err(|e| OxidebpfError::CStringConversionError(e))?;
     let perf_event_attr = PerfEventAttr {
         sample_union: PerfSample { sample_period: 1 },
         wakeup_union: PerfWakeup { wakeup_events: 1 },
         bp_addr_union: PerfBpAddr {
-            config1: attach_point.as_ptr() as u64,
+            config1: ap_cstring.as_ptr() as u64,
         },
         bp_len_union: PerfBpLen { config2: offset },
         config: return_bit,
@@ -471,11 +474,7 @@ mod tests {
             .unwrap();
 
         let mut pfd = 0;
-        for cpu in get_cpus().unwrap() {
-            pfd = perf_event_with_probe("do_mount", 0, p_type.clone(), 0, cpu).unwrap();
-        }
-        //let pfd = perf_event_with_probe("do_mount", 0, p_type.clone(), 0, 0).unwrap();
-        //ctrlc_wait();
+        let pfd = perf_event_with_probe("__x64_sys_ptrace", 0, p_type.clone(), 0, 0).unwrap();
         perf_event_ioc_set_bpf(pfd, prog_fd as u32).unwrap();
     }
 

@@ -59,8 +59,6 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
-    let name = "do_mount".to_string();
-    let name = name.as_bytes();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,

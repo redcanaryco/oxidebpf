@@ -104,7 +104,7 @@ impl<'a> Program<'a> {
     /// Program::new(
     ///     ProgramType::Kprobe,
     ///     "sys_ptrace_write",
-    ///     vec!["sys_ptrace"],
+    ///     vec!["do_mount"],
     ///     false,
     ///     None,
     /// );
@@ -262,7 +262,7 @@ impl ProgramGroup<'_> {
     ///     vec![ProgramVersion::new(vec![Program::new(
     ///         ProgramType::Kprobe,
     ///         "test_program",
-    ///         vec!["sys_ptrace"],
+    ///         vec!["do_mount"],
     ///         false,
     ///         None,
     ///     )])],
@@ -313,7 +313,7 @@ impl ProgramGroup<'_> {
     ///     vec![ProgramVersion::new(vec![Program::new(
     ///         ProgramType::Kprobe,
     ///         "test_program",
-    ///         vec!["sys_ptrace"],
+    ///         vec!["do_mount"],
     ///         false,
     ///         None,
     ///     )])],
@@ -361,14 +361,14 @@ impl ProgramVersion<'_> {
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_ptrace_write",
-    ///         vec!["sys_ptrace"],
+    ///         vec!["__x64_sys_ptrace"],
     ///         false,
     ///         None,
     ///     ),
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_process_vm_writev",
-    ///         vec!["sys_process_vm_writev"],
+    ///         vec!["__x64_sys_process_vm_writev"],
     ///         false,
     ///         None,
     ///     )
@@ -614,7 +614,7 @@ mod program_tests {
             vec![ProgramVersion::new(vec![Program::new(
                 ProgramType::Kprobe,
                 "test_program",
-                vec!["sys_ptrace"],
+                vec!["__x64_sys_ptrace"],
                 false,
                 None,
             )])],

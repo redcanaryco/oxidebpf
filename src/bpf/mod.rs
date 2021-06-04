@@ -106,7 +106,7 @@ struct MapElem {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct BpfProgLoad {
     // Minimal functionality set
     prog_type: c_uint,
@@ -131,6 +131,34 @@ struct BpfProgLoad {
     line_info_cnt: c_uint,
     attach_btf_id: c_uint,
     prog_attach: BpfProgAttach,
+}
+
+impl Default for BpfProgLoad {
+    fn default() -> Self {
+        Self {
+            prog_type: 0,
+            insn_cnt: 0,
+            insns: 0,
+            license: 0,
+            log_level: 0,
+            log_size: 0,
+            log_buf: 0,
+            kern_version: 0,
+            prog_flags: 0,
+            prog_name: [0u8; 16],
+            prog_ifindex: 0,
+            expected_attach_type: 0,
+            prog_btf_fd: 0,
+            func_info_rec_size: 0,
+            func_info: 0,
+            func_info_cnt: 0,
+            line_info_rec_size: 0,
+            line_info: 0,
+            line_info_cnt: 0,
+            attach_btf_id: 0,
+            prog_attach: BpfProgAttach { attach_prog_fd: 0 },
+        }
+    }
 }
 
 #[repr(align(8), C)]
