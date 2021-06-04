@@ -216,6 +216,7 @@ pub(crate) struct ProgramObject {
     pub(crate) code: BpfCode,
     relocations: Vec<Reloc>,
     pub license: String,
+    pub kernel_version: u32,
 }
 
 impl ProgramObject {
@@ -244,6 +245,7 @@ impl ProgramObject {
             code,
             relocations: Reloc::get_map_relocations(sh_index, &elf)?,
             license: get_license(data, elf),
+            kernel_version: get_kernel_version(data, elf),
         })
     }
 
@@ -408,6 +410,25 @@ fn get_license(data: &[u8], elf: &Elf) -> String {
         .map(|s| s.unwrap_or_default().to_str().unwrap_or_default())
         .map(|s| s.to_string())
         .unwrap_or_default()
+}
+
+fn get_kernel_version(data: &[u8], elf: &Elf) -> u32 {
+    const MAGIC_VERSION: u32 = 0xFFFFFFFE;
+    let version = get_section_by_name(elf, "version")
+        .and_then(|section| get_section_data(data, section))
+        .filter(|section_data| section_data.len() == 4)
+        .map(|section_data| {
+            let mut int_data: [u8; 4] = Default::default();
+            int_data.copy_from_slice(section_data);
+            u32::from_ne_bytes(int_data)
+        })
+        .unwrap_or(MAGIC_VERSION);
+
+    if version == MAGIC_VERSION {
+        crate::sys::get_kernel_version()
+    } else {
+        version
+    }
 }
 
 fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {

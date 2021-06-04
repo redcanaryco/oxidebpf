@@ -460,6 +460,7 @@ mod tests {
             BPF_PROG_TYPE_KPROBE,
             &program_object.code,
             program_object.license.clone(),
+            program_object.kernel_version,
         )
         .unwrap();
         let p_type = std::fs::read_to_string((*PMU_KTYPE_FILE).as_path())

@@ -31,6 +31,7 @@ mod bpf;
 mod error;
 mod maps;
 mod perf;
+mod sys;
 
 #[cfg(target_arch = "aarch64")]
 const ARCH_SYSCALL_PREFIX: &str = "__arm64__";
@@ -486,6 +487,7 @@ impl ProgramVersion<'_> {
                 u32::from(&blueprint.program_type),
                 &blueprint.code,
                 blueprint.license.clone(),
+                blueprint.kernel_version,
             );
             // Programs are kept separate from ProgramBlueprints to allow users to specify
             // different blueprints/files for the same set of programs, should they choose.

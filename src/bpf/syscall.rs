@@ -53,6 +53,7 @@ pub(crate) fn bpf_prog_load(
     prog_type: u32,
     insns: &BpfCode,
     license: String,
+    kernel_version: u32,
 ) -> Result<RawFd, OxidebpfError> {
     let insn_cnt = insns.0.len();
     let insns = insns.0.clone().into_boxed_slice();
@@ -65,6 +66,7 @@ pub(crate) fn bpf_prog_load(
         insn_cnt: insn_cnt as u32,
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,
+        kern_version: kernel_version,
         ..Default::default()
     };
     let bpf_attr = SizedBpfAttr {
@@ -349,6 +351,7 @@ pub(crate) mod tests {
             BPF_PROG_TYPE_KPROBE,
             &program_object.code,
             program_object.license.clone(),
+            program_object.kernel_version,
         ) {
             Ok(_fd) => {}
             Err(e) => bpf_panic_error(e),
