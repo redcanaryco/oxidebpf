@@ -12,7 +12,7 @@ fn kernel_str_to_u32(release: &str) -> u32 {
 /// Packs the kernel version into an u32
 pub(crate) fn get_kernel_version() -> u32 {
     let utsname = nix::sys::utsname::uname();
-    let mut release = utsname.release();
+    let release = utsname.release();
     kernel_str_to_u32(release)
 }
 

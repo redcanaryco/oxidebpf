@@ -17,6 +17,7 @@ nix = "0.20.0"
 itertools = "0.10.0"
 crossbeam-channel = "0.5.1"
 lazy_static = "1.4.0"
+uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
 memmap = "0.7.0"

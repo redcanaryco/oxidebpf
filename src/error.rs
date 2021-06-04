@@ -3,6 +3,9 @@ use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    ThreadPollingError,
+    UuidError,
+    NumberParserError,
     SelfTrace,
     UnsupportedProgramType,
     ProgramNotLoaded,

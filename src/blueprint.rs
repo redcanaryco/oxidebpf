@@ -366,7 +366,6 @@ impl MapObject {
 
         for (index, sym) in symbols.iter().enumerate() {
             let symbol_name = get_symbol_name(elf, &sym).unwrap_or_default();
-            println!("{}", symbol_name);
             // If a section name was provided (which does not include the "maps/" prefix)
             // then we use that. Otherwise we use the symbol name.
             let name = section_name
@@ -466,7 +465,6 @@ mod tests {
 
     use super::*;
     use crate::bpf::constant::bpf_map_type;
-    use crate::bpf::MapDefinition;
 
     #[test]
     fn test_blueprint_object_parsing() {

@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::mem::MaybeUninit;
-use std::os::unix::io::{IntoRawFd, RawFd};
+use std::os::unix::io::RawFd;
 
 use libc::{c_uint, syscall, SYS_bpf};
 use nix::errno::errno;
@@ -38,7 +38,7 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     let ret = syscall(
         (SYS_bpf as i32).into(),
         cmd,
-        bpf_attr.as_ref() as *const _,
+        bpf_attr.as_ptr() as *const _,
         size,
     );
     if ret < 0 {
@@ -196,30 +196,6 @@ pub(crate) mod tests {
     use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
     use std::fs;
 
-    pub(crate) fn bpf_panic_error(err: OxidebpfError) {
-        match err {
-            OxidebpfError::LinuxError(e) => {
-                panic!(
-                    "System error [{:?}]: {:?}",
-                    (e as Errno),
-                    (e as Errno).to_string()
-                );
-            }
-            OxidebpfError::PerfEventDoesNotExist => {
-                panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system");
-            }
-            OxidebpfError::PerfIoctlError(e) => {
-                panic!("perf IOCTL error: {:?}", e);
-            }
-            OxidebpfError::CStringConversionError(e) => {
-                panic!("could not convert string: {:?}", e)
-            }
-            e => {
-                panic!(e)
-            }
-        }
-    }
-
     #[test]
     fn bpf_map_create() {
         let fd: RawFd = crate::bpf::syscall::bpf_map_create(
@@ -228,7 +204,6 @@ pub(crate) mod tests {
             std::mem::size_of::<u32>() as c_uint,
             10,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
@@ -243,7 +218,6 @@ pub(crate) mod tests {
             std::mem::size_of::<u32>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
@@ -254,8 +228,7 @@ pub(crate) mod tests {
                 assert_eq!(val, 0);
             }
             Err(e) => {
-                bpf_panic_error(e);
-                panic!()
+                panic!("{:?}", e);
             }
         }
     }
@@ -268,23 +241,19 @@ pub(crate) mod tests {
             std::mem::size_of::<u64>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
         });
 
-        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50)
-            .map_err(|e| bpf_panic_error(e))
-            .unwrap();
+        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50).unwrap();
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u64>(fd, 5) {
             Ok(val) => {
                 assert_eq!(val, 50);
             }
             Err(e) => {
-                bpf_panic_error(e);
-                panic!()
+                panic!("{:?}", e)
             }
         }
     }
@@ -330,9 +299,7 @@ pub(crate) mod tests {
             let fd = file.as_raw_fd();
 
             // switch mnt namespace
-            crate::perf::syscall::setns(fd, CLONE_NEWNS)
-                .map_err(|e| bpf_panic_error(e))
-                .unwrap();
+            crate::perf::syscall::setns(fd, CLONE_NEWNS).unwrap();
         }
     }
 
@@ -352,7 +319,7 @@ pub(crate) mod tests {
             program_object.kernel_version,
         ) {
             Ok(_fd) => {}
-            Err(e) => bpf_panic_error(e),
+            Err(e) => panic!("{:?}", e),
         };
     }
 }

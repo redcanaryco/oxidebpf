@@ -272,6 +272,7 @@ impl<T> RWMap<T> for ArrayMap<T> {
 impl Drop for PerfMap {
     fn drop(&mut self) {
         // if it doesn't work, we're gonna close it anyway so :shrug:
+        #![allow(unused_must_use)]
         perf_event_ioc_disable(self.ev_fd);
         unsafe {
             libc::close(self.ev_fd);

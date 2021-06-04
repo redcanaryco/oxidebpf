@@ -25,6 +25,7 @@ use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
+use crate::perf::syscall::{attach_kprobe_debugfs, attach_uprobe_debugfs};
 
 pub mod blueprint;
 mod bpf;
@@ -140,24 +141,16 @@ impl<'a> Program<'a> {
                     None,
                     *cpu,
                 ) {
-                    Ok(o) => match o {
-                        (Some(s), None) => paths.push(s),
-                        (None, Some(fd)) => fds.push(fd),
-                        _ => {}
-                    },
+                    Ok(fd) => fds.push(fd),
                     Err(e) => {
-                        match attach_kprobe(
+                        match attach_kprobe_debugfs(
                             self.fd,
-                            &format!("{}{}", ARCH_SYSCALL_PREFIX, attach_point),
+                            attach_point,
                             self.kind == ProgramType::Kretprobe,
                             None,
                             *cpu,
                         ) {
-                            Ok(o) => match o {
-                                (Some(s), None) => paths.push(s),
-                                (None, Some(fd)) => fds.push(fd),
-                                _ => {}
-                            },
+                            Ok(s) => paths.push(s),
                             Err(s) => {
                                 errs.push(e);
                                 errs.push(s);
@@ -189,12 +182,23 @@ impl<'a> Program<'a> {
                     *cpu,
                     self.pid.unwrap_or(-1),
                 ) {
-                    Ok(o) => match o {
-                        (Some(s), None) => paths.push(s),
-                        (None, Some(fd)) => fds.push(fd),
-                        _ => {}
-                    },
-                    Err(e) => errs.push(e),
+                    Ok(fd) => fds.push(fd),
+                    Err(e) => {
+                        match attach_uprobe_debugfs(
+                            self.fd,
+                            attach_point,
+                            self.kind == ProgramType::Uretprobe,
+                            None,
+                            *cpu,
+                            self.pid.unwrap_or(-1),
+                        ) {
+                            Ok(s) => paths.push(s),
+                            Err(s) => {
+                                errs.push(e);
+                                errs.push(s)
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -384,7 +388,11 @@ impl ProgramVersion<'_> {
         }
     }
 
-    fn event_poller(&self, perfmaps: Vec<PerfMap>, tx: Sender<PerfChannelMessage>) {
+    fn event_poller(
+        &self,
+        perfmaps: Vec<PerfMap>,
+        tx: Sender<PerfChannelMessage>,
+    ) -> Result<(), OxidebpfError> {
         std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
             .spawn(move || 'outer: loop {
@@ -403,7 +411,9 @@ impl ProgramVersion<'_> {
                         Err(_) => break 'outer,
                     };
                 }
-            });
+            })
+            .map_err(|_e| OxidebpfError::ThreadPollingError)?;
+        Ok(())
     }
 
     fn load_program_version(
@@ -533,7 +543,7 @@ impl ProgramVersion<'_> {
         if perfmaps.is_empty() {
             Ok(None)
         } else {
-            self.event_poller(perfmaps, channel.tx);
+            self.event_poller(perfmaps, channel.tx)?;
             Ok(Some(channel.rx))
         }
     }
@@ -547,48 +557,44 @@ impl<'a> Drop for ProgramVersion<'a> {
                 libc::close(*fd as c_int);
             }
         }
-        for event_name in self.ev_names.iter() {
-            let event_name = event_name.clone();
+        // uprobe
+        let mut up_drops = Vec::<String>::new();
+        let up_file = std::fs::File::open("/sys/kernel/debug/tracing/uprobe_events").unwrap();
+        let up_reader = BufReader::new(up_file);
+        for line in up_reader.lines() {
+            let line = line.unwrap();
+            if line.contains("_oxidebpf_") {
+                up_drops.push(line.clone())
+            }
+        }
+        let mut up_file = std::fs::OpenOptions::new()
+            .append(true)
+            .write(true)
+            .read(false)
+            .open("/sys/kernel/debug/tracing/uprobe_events")
+            .unwrap(); // if we can't drop - panic!
+        for drop in up_drops.iter() {
+            up_file.write(format!("-:{}", drop).as_bytes()).unwrap();
+        }
+        // kprobe
+        let mut kp_drops = Vec::<String>::new();
+        let kp_file = std::fs::File::open("/sys/kernel/debug/tracing/kprobe_events").unwrap();
+        let kp_reader = BufReader::new(kp_file);
+        for line in kp_reader.lines() {
+            let line = line.unwrap();
+            if line.contains("__oxidebpf__") {
+                kp_drops.push(line.clone())
+            }
+        }
+        let mut kp_file = std::fs::OpenOptions::new()
+            .read(false)
+            .write(true)
+            .append(true)
+            .open("/sys/kernel/debug/tracing/kprobe_events")
+            .unwrap(); // if we can't drop - panic!
 
-            // uprobe
-            let mut up_drops = Vec::<String>::new();
-            let up_file = std::fs::File::open("/sys/kernel/debug/tracing/uprobe_events").unwrap();
-            let up_reader = BufReader::new(up_file);
-            for line in up_reader.lines() {
-                let line = line.unwrap();
-                if line == event_name {
-                    up_drops.push(event_name.clone())
-                }
-            }
-            let mut up_file = std::fs::OpenOptions::new()
-                .append(true)
-                .write(true)
-                .read(false)
-                .open("/sys/kernel/debug/tracing/uprobe_events")
-                .unwrap(); // if we can't drop - panic!
-            for drop in up_drops.iter() {
-                up_file.write(format!("-:{}", drop).as_bytes());
-            }
-            // kprobe
-            let mut kp_drops = Vec::<String>::new();
-            let kp_file = std::fs::File::open("/sys/kernel/debug/tracing/kprobe_events").unwrap();
-            let kp_reader = BufReader::new(kp_file);
-            for line in kp_reader.lines() {
-                let line = line.unwrap();
-                if line == event_name {
-                    kp_drops.push(event_name.clone())
-                }
-            }
-            let mut kp_file = std::fs::OpenOptions::new()
-                .read(false)
-                .write(true)
-                .append(true)
-                .open("/sys/kernel/debug/tracing/kprobe_events")
-                .unwrap(); // if we can't drop - panic!
-
-            for drop in kp_drops {
-                kp_file.write(format!("-:{}", drop).as_bytes());
-            }
+        for drop in kp_drops {
+            kp_file.write(format!("-:{}", drop).as_bytes()).unwrap();
         }
     }
 }
@@ -611,13 +617,22 @@ mod program_tests {
                 .expect("Could not open test object file");
         let mut program_group = ProgramGroup::new(
             program_blueprint,
-            vec![ProgramVersion::new(vec![Program::new(
-                ProgramType::Kprobe,
-                "test_program",
-                vec!["__x64_sys_ptrace"],
-                false,
-                None,
-            )])],
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    vec!["do_mount"],
+                    false,
+                    None,
+                ),
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program",
+                    vec!["do_mount"],
+                    false,
+                    None,
+                ),
+            ])],
             None,
         );
 

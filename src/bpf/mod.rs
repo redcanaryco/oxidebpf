@@ -117,7 +117,7 @@ struct BpfProgLoad {
     log_size: c_uint,
     log_buf: c_ulong, // 'char *' buffer
     // Additional functionality set, as of 5.12.7
-    kern_version: c_uint, // not used
+    kern_version: c_uint, // not used later, used in early versions
     prog_flags: c_uint,
     prog_name: [u8; 16], // char array, length BPF_OBJ_NAME_LEN
     prog_ifindex: c_uint,
