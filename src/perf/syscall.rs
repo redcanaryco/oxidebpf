@@ -188,7 +188,7 @@ pub(crate) fn perf_event_open(
 
 /// Safe wrapper around `u_perf_event_ioc_set_bpf()`
 pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: u32) -> Result<i32, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
+    #![allow(clippy::useless_conversion, clippy::redundant_closure)] // fails to compile otherwise
     let data_unwrapped = match data.try_into() {
         Ok(d) => d,
         Err(_e) => 0, // Should be infallible
@@ -201,11 +201,13 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: u32) -> Result<i32, O
 
 /// Safe wrapper around `u_perf_event_ioc_enable()`
 pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
+    #![allow(clippy::redundant_closure)]
     unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
 /// Safe wrapper around `u_perf_event_ioc_disable()`
 pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
+    #![allow(clippy::redundant_closure)]
     unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
@@ -255,6 +257,7 @@ fn perf_event_with_probe(
     cpu: i32,
     pid: Option<i32>,
 ) -> Result<RawFd, OxidebpfError> {
+    #![allow(clippy::redundant_closure)]
     let ap_cstring =
         CString::new(attach_point).map_err(|e| OxidebpfError::CStringConversionError(e))?;
     let perf_event_attr = PerfEventAttr {

@@ -55,6 +55,7 @@ pub(crate) fn bpf_prog_load(
     license: String,
     kernel_version: u32,
 ) -> Result<RawFd, OxidebpfError> {
+    #![allow(clippy::redundant_closure)] // it's not a function clippy
     let insn_cnt = insns.0.len();
     let insns = insns.0.clone().into_boxed_slice();
     let license =

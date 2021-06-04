@@ -317,15 +317,11 @@ impl Reloc {
         Ok(reloc_section
             .iter()
             .filter_map(|r| {
-                if let Some(sym) = elf.syms.get(r.r_sym) {
-                    Some(Reloc {
-                        symbol_name: get_symbol_name(&elf, &sym).unwrap_or_default(),
-                        insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
-                        reloc_type: r.r_type,
-                    })
-                } else {
-                    None
-                }
+                elf.syms.get(r.r_sym).map(|sym| Reloc {
+                    symbol_name: get_symbol_name(&elf, &sym).unwrap_or_default(),
+                    insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
+                    reloc_type: r.r_type,
+                })
             })
             .collect())
     }

@@ -41,8 +41,8 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     .map_err(|_| OxidebpfError::Utf8StringConversionError)?;
     let mut cpus = Vec::<i32>::new();
     let cpu_string = cpu_string.trim();
-    for sublist in cpu_string.split(",").into_iter() {
-        let pair: Vec<&str> = sublist.split("-").collect();
+    for sublist in cpu_string.split(',').into_iter() {
+        let pair: Vec<&str> = sublist.split('-').collect();
         if pair.len() != 2 {
             return Err(OxidebpfError::CpuOnlineFormatError);
         }
@@ -56,7 +56,7 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
             .ok_or(OxidebpfError::CpuOnlineFormatError)?
             .parse::<i32>()
             .map_err(|_| OxidebpfError::CpuOnlineFormatError)?;
-        (from..to).into_iter().for_each(|i| cpus.push(i))
+        (from..=to).into_iter().for_each(|i| cpus.push(i))
     }
     Ok(cpus)
 }
@@ -145,17 +145,20 @@ pub trait PerCpu {
 impl PerfMap {
     // we want cpuid and give back a channel to read from
     pub fn new_group(
-        map_name: &String,
+        map_name: &str,
         event_attr: PerfEventAttr,
         event_buffer_size: usize,
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
-        if page_size < 0 {
-            return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-        } else if page_size == 0 {
-            return Err(OxidebpfError::BadPageSize);
-        }
-        let page_size = page_size as usize;
+        let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
+            size if size < 0 => {
+                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+            }
+            size if size == 0 => {
+                return Err(OxidebpfError::BadPageSize);
+            }
+            size if size > 0 => size as usize,
+            _ => return Err(OxidebpfError::BadPageSize),
+        };
         let page_count = (event_buffer_size as f64 / page_size as f64).ceil() as usize;
         if page_count == 0 {
             return Err(OxidebpfError::BadPageCount);
@@ -181,7 +184,7 @@ impl PerfMap {
             }
             perf_event_ioc_enable(fd)?;
             loaded_perfmaps.push(PerfMap {
-                name: map_name.clone(),
+                name: map_name.to_string(),
                 base_ptr: AtomicPtr::new(base_ptr as *mut PerfMem),
                 page_count,
                 page_size,

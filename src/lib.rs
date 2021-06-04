@@ -507,11 +507,11 @@ impl ProgramVersion<'_> {
                 .iter_mut()
                 .filter(|p| p.name.eq(blueprint.name.as_str()))
                 .collect();
-            if fd.is_err() {
+            if let Err(e) = fd {
                 for program in programs.iter() {
                     if !program.optional {
                         // If any are not optional, fail out of the whole Version
-                        return Err(fd.unwrap_err());
+                        return Err(e);
                     }
                 }
                 // if they're all optional, go to the next blueprint object
@@ -574,7 +574,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             .open("/sys/kernel/debug/tracing/uprobe_events")
             .unwrap(); // if we can't drop - panic!
         for drop in up_drops.iter() {
-            up_file.write(format!("-:{}", drop).as_bytes()).unwrap();
+            up_file.write_all(format!("-:{}", drop).as_bytes()).unwrap();
         }
         // kprobe
         let mut kp_drops = Vec::<String>::new();
@@ -594,7 +594,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             .unwrap(); // if we can't drop - panic!
 
         for drop in kp_drops {
-            kp_file.write(format!("-:{}", drop).as_bytes()).unwrap();
+            kp_file.write_all(format!("-:{}", drop).as_bytes()).unwrap();
         }
     }
 }
