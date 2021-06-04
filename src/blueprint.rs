@@ -355,17 +355,31 @@ impl MapObject {
         let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
 
         // Assume that all symbols in this section are map definitions.
-        for sym in elf.syms.iter().filter(|sym| sym.st_shndx == sh_index) {
+        let mut symbols: Vec<Sym> = elf
+            .syms
+            .iter()
+            .filter(|sym| sym.st_shndx == sh_index)
+            .collect();
+
+        // sort symbols by section offsets so we can easily calculate symbol sizes
+        symbols.sort_by(|a, b| a.st_value.cmp(&b.st_value));
+
+        for (index, sym) in symbols.iter().enumerate() {
             let symbol_name = get_symbol_name(elf, &sym).unwrap_or_default();
+            println!("{}", symbol_name);
             // If a section name was provided (which does not include the "maps/" prefix)
             // then we use that. Otherwise we use the symbol name.
             let name = section_name
                 .map(str::to_string)
                 .unwrap_or_else(|| symbol_name.clone());
 
-            if let Some(map_data) =
-                section_data.get(sym.st_value as usize..section_data.len() as usize)
-            {
+            let upper_bound = if let Some(next_sym) = symbols.get(index + 1) {
+                next_sym.st_value as usize
+            } else {
+                section_data.len()
+            };
+
+            if let Some(map_data) = section_data.get(sym.st_value as usize..upper_bound) {
                 objects.push(Self {
                     definition: MapDefinition::try_from(map_data)?,
                     name,
@@ -382,10 +396,7 @@ impl MapObject {
         self.fd = Some(fd);
     }
     pub(crate) fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
-        match self.fd {
-            Some(fd) => Ok(fd),
-            None => Err(OxidebpfError::MapNotLoaded),
-        }
+        self.fd.ok_or(OxidebpfError::MapNotLoaded)
     }
 }
 
@@ -454,6 +465,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::bpf::constant::bpf_map_type;
+    use crate::bpf::MapDefinition;
 
     #[test]
     fn test_blueprint_object_parsing() {
@@ -468,14 +481,12 @@ mod tests {
 
         let data = fs::read(program).unwrap();
 
-        let blueprint = ProgramBlueprint::new(&data, None).unwrap();
+        let blueprint = ProgramBlueprint::new(&data, None).expect("blueprint parsing unsuccessful");
 
-        let prog = blueprint.programs.get("test_program_map_update");
-        assert!(
-            prog.is_some(),
-            "expected program 'test_program_map_update' missing"
-        );
-        let prog = prog.unwrap();
+        let prog = blueprint
+            .programs
+            .get("test_program_map_update")
+            .expect("expecting 'test_program_map_updates' program to exist");
         assert_eq!(
             prog.program_type,
             ProgramType::Kprobe,
@@ -487,10 +498,33 @@ mod tests {
             "expected program to depend on 'test_map'"
         );
 
-        let map = blueprint.maps.get("__test_map");
-        assert!(map.is_some(), "expected map 'test_map' missing");
-        let map = map.unwrap();
+        let map = blueprint
+            .maps
+            .get("__test_map")
+            .expect("expecting '__test_map' to exist");
         assert_eq!(map.symbol_name, "__test_map");
         assert_eq!(map.name, "test_map");
+
+        let map = blueprint
+            .maps
+            .get("__map_combined_section1")
+            .expect("expecting '__map_combined_section1' to exist");
+        assert_eq!(map.symbol_name, "__map_combined_section1");
+        assert_eq!(map.name, "__map_combined_section1");
+        assert_eq!(map.definition.map_type, bpf_map_type::BPF_MAP_TYPE_ARRAY);
+        assert_eq!(map.definition.key_size, 4);
+        assert_eq!(map.definition.value_size, 8);
+        assert_eq!(map.definition.max_entries, 1024);
+
+        let map = blueprint
+            .maps
+            .get("__map_combined_section2")
+            .expect("expecting '__map_combined_section2' to exist");
+        assert_eq!(map.symbol_name, "__map_combined_section2");
+        assert_eq!(map.name, "__map_combined_section2");
+        assert_eq!(map.definition.map_type, bpf_map_type::BPF_MAP_TYPE_ARRAY);
+        assert_eq!(map.definition.key_size, 4);
+        assert_eq!(map.definition.value_size, 12);
+        assert_eq!(map.definition.max_entries, 1024);
     }
 }
