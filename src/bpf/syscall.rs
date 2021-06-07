@@ -1,3 +1,4 @@
+#[cfg(LOG_BUF)]
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
@@ -62,6 +63,7 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
+    #[cfg(LOG_BUF)]
     let mut log_buf = [0u8; LOG_BUF_SIZE_BYTE];
     let bpf_prog_load = BpfProgLoad {
         prog_type,
@@ -69,8 +71,11 @@ pub(crate) fn bpf_prog_load(
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,
         kern_version: kernel_version,
+        #[cfg(LOG_BUF)]
         log_level: 1,
+        #[cfg(LOG_BUF)]
         log_size: LOG_BUF_SIZE_BYTE as u32,
+        #[cfg(LOG_BUF)]
         log_buf: log_buf.as_mut_ptr() as u64,
         ..Default::default()
     };
@@ -81,14 +86,26 @@ pub(crate) fn bpf_prog_load(
     unsafe {
         match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
-            Err(e) => Err(OxidebpfError::BpfProgLoadError((
-                Box::new(e),
-                CStr::from_bytes_with_nul(&log_buf)
-                    .map_err(|_| OxidebpfError::CStrConversionError)?
-                    .to_str()
-                    .map_err(|_| OxidebpfError::CStrConversionError)?
-                    .to_string(),
-            ))),
+            Err(e) => {
+                #[cfg(LOG_BUF)]
+                {
+                    Err(OxidebpfError::BpfProgLoadError((
+                        Box::new(e),
+                        CStr::from_bytes_with_nul(&log_buf)
+                            .map_err(|_| OxidebpfError::CStrConversionError)?
+                            .to_str()
+                            .map_err(|_| OxidebpfError::CStrConversionError)?
+                            .to_string(),
+                    )))
+                }
+                #[cfg(not(LOG_BUF))]
+                {
+                    Err(OxidebpfError::BpfProgLoadError((
+                        Box::new(e),
+                        "".to_string(),
+                    )))
+                }
+            }
         }
     }
 }
