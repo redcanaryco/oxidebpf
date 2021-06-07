@@ -576,7 +576,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("_oxidebpf_") {
                 up_writer
-                    .write_all(format!("-:{}", line).as_bytes())
+                    .write_all(format!("-:{}\n", line).as_bytes())
                     .unwrap();
             }
         }
@@ -593,7 +593,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("_oxidebpf_") {
                 kp_writer
-                    .write_all(format!("-:{}", line).as_bytes())
+                    .write_all(format!("-:{}\n", &line[2..]).as_bytes())
                     .unwrap();
             }
         }

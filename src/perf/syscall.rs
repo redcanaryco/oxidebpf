@@ -140,7 +140,7 @@ pub(crate) fn perf_event_open_debugfs(
     };
 
     event_file
-        .write(name.as_bytes())
+        .write(format!("{}\n", name).as_bytes())
         .map_err(|_| OxidebpfError::FileIOError)?;
 
     match event_type {
@@ -228,7 +228,6 @@ fn perf_attach_tracepoint_with_debugfs(
         .parse::<u32>()
         .map_err(|_| OxidebpfError::NumberParserError)?;
 
-    dbg!(event_path.clone());
     let config = std::fs::read_to_string(format!(
         "/sys/kernel/debug/tracing/events/{}/id",
         event_path
