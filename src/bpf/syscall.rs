@@ -1,5 +1,3 @@
-#[cfg(LOG_BUF)]
-use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -91,11 +89,7 @@ pub(crate) fn bpf_prog_load(
                 {
                     Err(OxidebpfError::BpfProgLoadError((
                         Box::new(e),
-                        CStr::from_bytes_with_nul(&log_buf)
-                            .map_err(|_| OxidebpfError::CStrConversionError)?
-                            .to_str()
-                            .map_err(|_| OxidebpfError::CStrConversionError)?
-                            .to_string(),
+                        String::from_utf8_unchecked(Vec::from(log_buf)),
                     )))
                 }
                 #[cfg(not(LOG_BUF))]
