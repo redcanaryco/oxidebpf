@@ -28,6 +28,7 @@ pub enum OxidebpfError {
     UnsupportedEventType,
     MultipleErrors(Vec<OxidebpfError>),
     UncaughtMountNsError,
+    BpfProgLoadError((Box<OxidebpfError>, String)),
 }
 
 impl std::fmt::Display for OxidebpfError {

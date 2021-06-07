@@ -60,12 +60,16 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
+    let mut log_buf = [0u8; 4096];
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,
         kern_version: kernel_version,
+        log_level: 1,
+        log_size: 4096,
+        log_buf: log_buf.as_mut_ptr() as u64,
         ..Default::default()
     };
     let bpf_attr = SizedBpfAttr {
@@ -73,8 +77,13 @@ pub(crate) fn bpf_prog_load(
         size: 48, // 48 = minimum for 4.4
     };
     unsafe {
-        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr)?;
-        Ok(fd as RawFd)
+        match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
+            Ok(fd) => Ok(fd as RawFd),
+            Err(e) => Err(OxidebpfError::BpfProgLoadError((
+                Box::new(e),
+                String::from_utf8_unchecked(Vec::from(log_buf)),
+            ))),
+        }
     }
 }
 
