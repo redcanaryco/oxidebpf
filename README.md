@@ -34,6 +34,7 @@ $ cargo build
 
 ## Testing
 
-You can run tests with `cargo test`. To trace BPF syscalls as they occur, run 
-the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in
-vagrant bootstrap by default).
+1. Run `docker-compose run --rm test-builder` to build the eBPF test application.
+2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run 
+   the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in 
+   vagrant bootstrap by default).
