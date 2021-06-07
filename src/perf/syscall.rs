@@ -45,33 +45,35 @@ ioctl_none!(
     crate::perf::constant::perf_ioctls::PERF_EVENT_IOC_DISABLE
 );
 
-fn enter_mount_ns(pid: pid_t) -> Result<RawFd, OxidebpfError> {
-    let new_mnt = std::fs::File::open(format!("/proc/{}/ns/mnt", pid))
-        .map_err(|_| OxidebpfError::FileIOError)?;
+fn my_mount_fd() -> Result<RawFd, OxidebpfError> {
     let my_mnt =
         std::fs::File::open("/proc/self/ns/mnt").map_err(|_| OxidebpfError::FileIOError)?;
-
-    if new_mnt
-        .metadata()
-        .map_err(|_| OxidebpfError::FileIOError)?
-        .st_ino()
-        == my_mnt
-            .metadata()
-            .map_err(|_| OxidebpfError::FileIOError)?
-            .st_ino()
-    {
-        return Err(OxidebpfError::SelfTrace);
-    }
-
-    setns(new_mnt.into_raw_fd(), CLONE_NEWNS)?;
-
     Ok(my_mnt.into_raw_fd())
 }
 
-fn exit_mount_ns(ns_fd: RawFd) -> Result<(), OxidebpfError> {
-    setns(ns_fd, CLONE_NEWNS)?;
+// TODO: refactor (libbpf)
+fn enter_pid_mnt_ns(pid: pid_t, my_mount: RawFd) -> Result<usize, OxidebpfError> {
+    let new_mnt = std::fs::File::open(format!("/proc/{}/ns/mnt", pid))
+        .map_err(|_| OxidebpfError::FileIOError)?;
+    let new_inode = new_mnt
+        .metadata()
+        .map_err(|_| OxidebpfError::FileIOError)?
+        .st_ino();
+    let my_inode = nix::sys::stat::fstat(my_mount)
+        .map_err(|_| OxidebpfError::FileIOError)?
+        .st_ino;
+    if new_inode == my_inode {
+        return Err(OxidebpfError::SelfTrace);
+    }
+
+    setns(new_mnt.into_raw_fd(), CLONE_NEWNS)
+}
+
+// TODO: refactor (libbpf)
+fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
+    setns(original_mnt_ns_fd, CLONE_NEWNS)?;
     unsafe {
-        if libc::close(ns_fd as c_int) < 0 {
+        if libc::close(original_mnt_ns_fd as c_int) < 0 {
             Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())))
         } else {
             Ok(())
@@ -79,7 +81,7 @@ fn exit_mount_ns(ns_fd: RawFd) -> Result<(), OxidebpfError> {
     }
 }
 
-// TODO: refactor
+// TODO: refactor (libbpf, this is what happens after regular fails)
 pub(crate) fn perf_event_open_debugfs(
     pid: pid_t,
     event_type: ProgramType,
@@ -105,28 +107,30 @@ pub(crate) fn perf_event_open_debugfs(
     let mut uuid = uuid::Uuid::new_v4().to_string();
     uuid.truncate(8);
     let event_alias = format!("{}_oxidebpf_{}_{}", event_name, std::process::id(), uuid);
-    let mut ns_fd: RawFd = -1;
+    let mut my_fd: RawFd = -1;
     let name = match event_type {
         ProgramType::Kprobe => {
             if offset > 0 {
-                format!("p:kprobes/{} {}+{}", event_alias, func_name_or_path, offset)
+                format!("p:kprobe/{} {}+{}", event_alias, func_name_or_path, offset)
             } else {
-                format!("p:kprobes/{} {}", event_alias, func_name_or_path)
+                format!("p:kprobe/{} {}", event_alias, func_name_or_path)
             }
         }
-        // no maxactive support
+        // no maxactive support for now
         ProgramType::Kretprobe => {
-            format!("r:kprobes/{} {}", event_alias, func_name_or_path)
+            format!("r:kprobe/{} {}", event_alias, func_name_or_path)
         }
         ProgramType::Uprobe => {
-            ns_fd = enter_mount_ns(pid)?;
+            my_fd = my_mount_fd()?;
+            enter_pid_mnt_ns(pid, my_fd)?;
             format!(
                 "p:uprobe/{} {}:0x{}",
                 event_alias, func_name_or_path, offset
             )
         }
         ProgramType::Uretprobe => {
-            ns_fd = enter_mount_ns(pid)?;
+            my_fd = my_mount_fd()?;
+            enter_pid_mnt_ns(pid, my_fd)?;
             format!(
                 "r:uretprobe/{} {}:0x{}",
                 event_alias, func_name_or_path, offset
@@ -141,18 +145,19 @@ pub(crate) fn perf_event_open_debugfs(
 
     match event_type {
         ProgramType::Uprobe | ProgramType::Uretprobe => {
-            if ns_fd < 0 {
+            if my_fd < 0 {
                 // This should be impossible to reach
                 return Err(OxidebpfError::UncaughtMountNsError);
             }
-            exit_mount_ns(ns_fd)?;
+            restore_mnt_ns(my_fd)?;
         }
         _ => {}
     }
 
-    Ok(format!("{}s/{}", event_type, event_alias))
+    Ok(format!("{}/{}", event_type, event_alias))
 }
 
+// TODO: refactor (libbpf)
 /// Checks if `perf_event_open()` is supported and if so, calls the syscall.
 pub(crate) fn perf_event_open(
     attr: &PerfEventAttr,
@@ -222,6 +227,8 @@ fn perf_attach_tracepoint_with_debugfs(
         .to_string()
         .parse::<u32>()
         .map_err(|_| OxidebpfError::NumberParserError)?;
+
+    dbg!(event_path.clone());
     let config = std::fs::read_to_string(format!(
         "/sys/kernel/debug/tracing/events/{}/id",
         event_path
@@ -231,6 +238,7 @@ fn perf_attach_tracepoint_with_debugfs(
     .to_string()
     .parse::<u64>()
     .map_err(|_| OxidebpfError::NumberParserError)?;
+
     let perf_event_attr = PerfEventAttr {
         sample_union: PerfSample { sample_period: 1 },
         wakeup_union: PerfWakeup { wakeup_events: 1 },
@@ -249,7 +257,8 @@ fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, Oxidebp
     perf_event_ioc_enable(perf_fd)
 }
 
-fn perf_event_with_probe(
+// TODO: refactor (libbpf)
+fn perf_event_with_attach_point(
     attach_point: &str,
     return_bit: u64,
     p_type: u32,
@@ -334,7 +343,7 @@ pub(crate) fn attach_uprobe(
         .parse::<u32>()
         .map_err(|_| OxidebpfError::NumberParserError)?;
 
-    let pfd = perf_event_with_probe(
+    let pfd = perf_event_with_attach_point(
         attach_point,
         return_bit,
         p_type,
@@ -363,6 +372,7 @@ pub(crate) fn attach_kprobe_debugfs(
         offset.unwrap_or(0),
         attach_point,
     )?;
+
     perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
 }
 
@@ -397,7 +407,7 @@ pub(crate) fn attach_kprobe(
         .parse::<u32>()
         .map_err(|_| OxidebpfError::NumberParserError)?;
 
-    let pfd = perf_event_with_probe(
+    let pfd = perf_event_with_attach_point(
         attach_point,
         return_bit,
         p_type,
@@ -429,7 +439,8 @@ mod tests {
     use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
     use crate::perf::syscall::{
         perf_attach_tracepoint_with_debugfs, perf_event_ioc_disable, perf_event_ioc_enable,
-        perf_event_ioc_set_bpf, perf_event_open, perf_event_open_debugfs, perf_event_with_probe,
+        perf_event_ioc_set_bpf, perf_event_open, perf_event_open_debugfs,
+        perf_event_with_attach_point,
     };
     use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
     use crate::ProgramType;
@@ -497,7 +508,7 @@ mod tests {
             .unwrap();
 
         let fd_or_name: Result<(Option<String>, Option<RawFd>), OxidebpfError> =
-            match perf_event_with_probe("do_mount", 0, p_type.clone(), 0, 0, None) {
+            match perf_event_with_attach_point("do_mount", 0, p_type.clone(), 0, 0, None) {
                 Ok(fd) => Ok((None, Some(fd))),
                 Err(_e) => {
                     let event_path =

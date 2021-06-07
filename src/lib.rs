@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::RawFd;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -556,44 +556,46 @@ impl<'a> Drop for ProgramVersion<'a> {
                 libc::close(*fd as c_int);
             }
         }
+
+        // We are intentionally enumerating and closing _all_ debugfs created
+        // probes here, on the off chance that one gets missed somehow. Otherwise,
+        // we might end up stuck with a bunch of unused probes clogging the namespace.
+        // If it has _oxidebpf_ it's probably one of ours. This avoids conflicting
+        // with customer user probes or probes from other frameworks.
+
         // uprobe
-        let mut up_drops = Vec::<String>::new();
-        let up_file = std::fs::File::open("/sys/kernel/debug/tracing/uprobe_events").unwrap();
-        let up_reader = BufReader::new(up_file);
+        let up_file = std::fs::OpenOptions::new()
+            .append(true)
+            .write(true)
+            .read(true)
+            .open("/sys/kernel/debug/tracing/uprobe_events")
+            .unwrap(); // if we can't drop - panic!
+        let up_reader = BufReader::new(&up_file);
+        let mut up_writer = BufWriter::new(&up_file);
         for line in up_reader.lines() {
             let line = line.unwrap();
             if line.contains("_oxidebpf_") {
-                up_drops.push(line.clone())
+                up_writer
+                    .write_all(format!("-:{}", line).as_bytes())
+                    .unwrap();
             }
-        }
-        let mut up_file = std::fs::OpenOptions::new()
-            .append(true)
-            .write(true)
-            .read(false)
-            .open("/sys/kernel/debug/tracing/uprobe_events")
-            .unwrap(); // if we can't drop - panic!
-        for drop in up_drops.iter() {
-            up_file.write_all(format!("-:{}", drop).as_bytes()).unwrap();
         }
         // kprobe
-        let mut kp_drops = Vec::<String>::new();
-        let kp_file = std::fs::File::open("/sys/kernel/debug/tracing/kprobe_events").unwrap();
-        let kp_reader = BufReader::new(kp_file);
-        for line in kp_reader.lines() {
-            let line = line.unwrap();
-            if line.contains("__oxidebpf__") {
-                kp_drops.push(line.clone())
-            }
-        }
-        let mut kp_file = std::fs::OpenOptions::new()
-            .read(false)
+        let kp_file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .append(true)
             .open("/sys/kernel/debug/tracing/kprobe_events")
             .unwrap(); // if we can't drop - panic!
-
-        for drop in kp_drops {
-            kp_file.write_all(format!("-:{}", drop).as_bytes()).unwrap();
+        let kp_reader = BufReader::new(&kp_file);
+        let mut kp_writer = BufWriter::new(&kp_file);
+        for line in kp_reader.lines() {
+            let line = line.unwrap();
+            if line.contains("_oxidebpf_") {
+                kp_writer
+                    .write_all(format!("-:{}", line).as_bytes())
+                    .unwrap();
+            }
         }
     }
 }
