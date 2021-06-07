@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -12,6 +13,7 @@ use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, Size
 use crate::error::*;
 
 type BpfMapType = u32;
+const LOG_BUF_SIZE_BYTE: usize = 4096 * 10;
 
 /// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed [`SizedBpfAttr`] _must_
 /// indicate the amount of _bytes_ to be used by this call.
@@ -60,7 +62,7 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
-    let mut log_buf = [0u8; 4096];
+    let mut log_buf = [0u8; LOG_BUF_SIZE_BYTE];
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -68,7 +70,7 @@ pub(crate) fn bpf_prog_load(
         license: license.as_ptr() as u64,
         kern_version: kernel_version,
         log_level: 1,
-        log_size: 4096,
+        log_size: LOG_BUF_SIZE_BYTE as u32,
         log_buf: log_buf.as_mut_ptr() as u64,
         ..Default::default()
     };
@@ -81,7 +83,11 @@ pub(crate) fn bpf_prog_load(
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => Err(OxidebpfError::BpfProgLoadError((
                 Box::new(e),
-                String::from_utf8_unchecked(Vec::from(log_buf)),
+                CStr::from_bytes_with_nul(&log_buf)
+                    .map_err(|_| OxidebpfError::CStrConversionError)?
+                    .to_str()
+                    .map_err(|_| OxidebpfError::CStrConversionError)?
+                    .to_string(),
             ))),
         }
     }

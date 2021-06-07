@@ -3,6 +3,7 @@ use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    CStrConversionError,
     ThreadPollingError,
     UuidError,
     NumberParserError,
