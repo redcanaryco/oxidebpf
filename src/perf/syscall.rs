@@ -51,7 +51,6 @@ fn my_mount_fd() -> Result<RawFd, OxidebpfError> {
     Ok(my_mnt.into_raw_fd())
 }
 
-// TODO: refactor (libbpf)
 fn enter_pid_mnt_ns(pid: pid_t, my_mount: RawFd) -> Result<usize, OxidebpfError> {
     let new_mnt = std::fs::File::open(format!("/proc/{}/ns/mnt", pid))
         .map_err(|_| OxidebpfError::FileIOError)?;
@@ -69,7 +68,6 @@ fn enter_pid_mnt_ns(pid: pid_t, my_mount: RawFd) -> Result<usize, OxidebpfError>
     setns(new_mnt.into_raw_fd(), CLONE_NEWNS)
 }
 
-// TODO: refactor (libbpf)
 fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
     setns(original_mnt_ns_fd, CLONE_NEWNS)?;
     unsafe {
@@ -81,7 +79,6 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
     }
 }
 
-// TODO: refactor (libbpf, this is what happens after regular fails)
 pub(crate) fn perf_event_open_debugfs(
     pid: pid_t,
     event_type: ProgramType,
@@ -157,7 +154,6 @@ pub(crate) fn perf_event_open_debugfs(
     Ok(format!("{}/{}", event_type, event_alias))
 }
 
-// TODO: refactor (libbpf)
 /// Checks if `perf_event_open()` is supported and if so, calls the syscall.
 pub(crate) fn perf_event_open(
     attr: &PerfEventAttr,
@@ -256,7 +252,6 @@ fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, Oxidebp
     perf_event_ioc_enable(perf_fd)
 }
 
-// TODO: refactor (libbpf)
 fn perf_event_with_attach_point(
     attach_point: &str,
     return_bit: u64,

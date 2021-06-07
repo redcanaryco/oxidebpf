@@ -34,7 +34,6 @@ pub struct PerfEventSample {
     pub data: [u8; 0],
 }
 
-// TODO: refactor (from redbpf, cpus.rs)
 pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     let cpu_string = String::from_utf8(
         std::fs::read("/sys/devices/system/cpu/online").map_err(|_| OxidebpfError::FileIOError)?,

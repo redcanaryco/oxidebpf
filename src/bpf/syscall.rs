@@ -104,7 +104,6 @@ pub(crate) fn bpf_prog_load(
     }
 }
 
-// TODO: refactor (from libbpf)
 /// Look up an element of type `V` with key of type `K` from a given map. Specific behavior depends
 /// on the type of map.
 /// Caller is responsible for ensuring K and V are the correct types for this map.
@@ -129,7 +128,6 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Oxid
     }
 }
 
-// TODO: refactor (from libbpf)
 /// Update an element of type `V` with key of type `K` in a given map. Specific behavior depends on
 /// the type of map.
 pub(crate) fn bpf_map_update_elem<K, V>(
@@ -176,7 +174,6 @@ pub(crate) unsafe fn bpf_map_create_with_config(
     Ok(fd as RawFd)
 }
 
-// TODO: refactor (from libbpf)
 /// Create a map of the given type with given key size, value size, and number of entries.
 /// The sizes should be the size of key type and value type in bytes, which can be determined
 /// with `std::mem::size_of::<T>()` where `T` is the type of the key or value.
