@@ -32,7 +32,6 @@ mod bpf;
 mod error;
 mod maps;
 mod perf;
-mod sys;
 
 #[cfg(target_arch = "aarch64")]
 const ARCH_SYSCALL_PREFIX: &str = "__arm64__";

@@ -145,6 +145,7 @@ impl ProgramBlueprint {
     ) -> Result<Self, OxidebpfError> {
         let elf: Elf = parse_and_verify_elf(data)?;
         let mut blueprint = Self::default();
+        let kernel_version = get_kernel_version(data, &elf)?;
 
         for (sh_index, sh) in elf
             .section_headers
@@ -168,8 +169,15 @@ impl ProgramBlueprint {
                 }
                 "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => {
                     let program_type = prefix.into();
-                    let obj =
-                        ProgramObject::from_section(&program_type, name, data, &elf, sh_index, sh)?;
+                    let obj = ProgramObject::from_section(
+                        &program_type,
+                        name,
+                        data,
+                        &elf,
+                        sh_index,
+                        sh,
+                        kernel_version,
+                    )?;
                     blueprint.programs.insert(obj.name.clone(), obj);
                     continue;
                 }
@@ -198,6 +206,7 @@ impl ProgramBlueprint {
                             &elf,
                             sh_index,
                             sh,
+                            kernel_version,
                         )?;
                         blueprint.programs.insert(obj.name.clone(), obj);
                     }
@@ -227,6 +236,7 @@ impl ProgramObject {
         elf: &'a Elf,
         sh_index: usize,
         sh: &'a SectionHeader,
+        kernel_version: u32,
     ) -> Result<Self, OxidebpfError> {
         let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
         let code = BpfCode::try_from(section_data)?;
@@ -245,7 +255,7 @@ impl ProgramObject {
             code,
             relocations: Reloc::get_map_relocations(sh_index, &elf)?,
             license: get_license(data, elf),
-            kernel_version: get_kernel_version(data, elf),
+            kernel_version,
         })
     }
 
@@ -418,7 +428,7 @@ fn get_license(data: &[u8], elf: &Elf) -> String {
         .unwrap_or_default()
 }
 
-fn get_kernel_version(data: &[u8], elf: &Elf) -> u32 {
+fn get_kernel_version(data: &[u8], elf: &Elf) -> Result<u32, OxidebpfError> {
     const MAGIC_VERSION: u32 = 0xFFFFFFFE;
     let version = get_section_by_name(elf, "version")
         .and_then(|section| get_section_data(data, section))
@@ -430,11 +440,11 @@ fn get_kernel_version(data: &[u8], elf: &Elf) -> u32 {
         })
         .unwrap_or(MAGIC_VERSION);
 
-    if version == MAGIC_VERSION {
-        crate::sys::get_kernel_version()
+    Ok(if version == MAGIC_VERSION {
+        get_running_kernel_version()?
     } else {
         version
-    }
+    })
 }
 
 fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {
@@ -453,6 +463,41 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
 
     Ok(elf)
 }
+fn kernel_major_minor_str_to_u32(release: &str) -> u32 {
+    let release = release.to_string();
+    // The release information comes in the format "major.minor.patch-extra".
+    let mut split = release.split('.').flat_map(str::parse);
+    ((split.next().unwrap_or(0) & 0xFF) << 16) + ((split.next().unwrap_or(0) & 0xFF) << 8)
+}
+
+/// Packs the kernel version into an u32
+fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
+    let utsname = nix::sys::utsname::uname();
+    let release = utsname.release();
+    let version_base = kernel_major_minor_str_to_u32(release);
+
+    // there doesnt seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal
+    // ebpf program and load it with different versions until we find one that works. We assume
+    // that the major/minor from uname release is correct, but the patch is not.
+    let data: Vec<u8> = vec![0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0];
+    let code = BpfCode::try_from(&data[..])?; // r0 = 0, return r0
+    let license = "Proprietary".to_string();
+    for revision in 0..256 {
+        if let Ok(fd) = crate::bpf::syscall::bpf_prog_load(
+            u32::from(&ProgramType::Kprobe),
+            &code,
+            license.clone(),
+            version_base + revision,
+        ) {
+            unsafe {
+                libc::close(fd);
+            }
+            return Ok(version_base + revision);
+        }
+    }
+
+    Err(OxidebpfError::InvalidProgramObject)
+}
 
 #[cfg(test)]
 mod tests {
@@ -461,6 +506,18 @@ mod tests {
 
     use super::*;
     use crate::bpf::constant::bpf_map_type;
+
+    #[test]
+    fn test_find_running_kernel_version() {
+        assert!(get_running_kernel_version().is_ok())
+    }
+
+    #[test]
+    fn test_kernel_version_parsing() {
+        assert_eq!(kernel_major_minor_str_to_u32("4.4.1"), 0x040400);
+        assert_eq!(kernel_major_minor_str_to_u32("4.4"), 0x040400);
+        assert_eq!(kernel_major_minor_str_to_u32("5.0.0-1234"), 0x050000);
+    }
 
     #[test]
     fn test_blueprint_object_parsing() {
