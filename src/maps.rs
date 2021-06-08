@@ -10,9 +10,11 @@ use nix::errno::errno;
 
 use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
+use crate::fmt;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
+use std::fmt::{Debug, Formatter};
 
 #[repr(C)]
 struct PerfEventHeader {
@@ -93,7 +95,14 @@ union PerfMemCapabilitiesBitfield {
     bitfield: PerfMemBitfield,
 }
 
+impl Debug for PerfMemCapabilitiesBitfield {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "debug not implemented")
+    }
+}
+
 #[repr(C)]
+#[derive(Debug)]
 struct PerfMem {
     version: c_uint,
     compat_version: c_uint,

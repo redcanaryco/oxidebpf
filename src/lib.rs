@@ -6,7 +6,7 @@
 //! `new()` and `load()` functions.
 #![allow(dead_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -14,18 +14,22 @@ use std::os::unix::io::RawFd;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use libc::{c_int, pid_t};
+use mio::unix::SourceFd;
+use mio::{Events, Interest, Poll, Token};
 
 use perf::syscall::{attach_kprobe, attach_uprobe};
 use perf::{PerfEventAttr, PerfSample, PerfWakeup};
 
 use crate::blueprint::{ProgramBlueprint, ProgramObject};
 use crate::bpf::constant::bpf_map_type;
+use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crate::perf::syscall::{attach_kprobe_debugfs, attach_uprobe_debugfs};
+use std::time::Duration;
 
 pub mod blueprint;
 mod bpf;
@@ -424,21 +428,47 @@ impl ProgramVersion<'_> {
     ) -> Result<(), OxidebpfError> {
         std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
-            .spawn(move || 'outer: loop {
-                for perfmap in perfmaps.iter() {
-                    let message = match perfmap.read() {
-                        None => continue,
-                        Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
-                        Some(PerfEvent::Sample(e)) => PerfChannelMessage(
-                            perfmap.name.clone(),
-                            perfmap.cpuid() as i32,
-                            Vec::from(e.data),
-                        ),
-                    };
-                    match tx.send(message) {
-                        Ok(_) => {}
-                        Err(_) => break 'outer,
-                    };
+            .spawn(move || {
+                let mut poll = Poll::new()
+                    .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))
+                    .unwrap();
+                let tokens: HashMap<Token, &PerfMap> = perfmaps
+                    .iter()
+                    .map(|p: &PerfMap| -> Result<(Token, &PerfMap), OxidebpfError> {
+                        let token = Token(p.ev_fd as usize);
+                        poll.registry()
+                            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
+                            .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))?;
+
+                        Ok((token, p))
+                    })
+                    .collect::<Result<HashMap<Token, &PerfMap>, OxidebpfError>>()
+                    .unwrap();
+                let mut events = Events::with_capacity(1024);
+                'outer: loop {
+                    poll.poll(&mut events, Some(Duration::from_millis(100)))
+                        .unwrap();
+                    let events: Vec<(String, i32, Option<PerfEvent>)> = events
+                        .iter()
+                        .filter(|event| event.is_readable())
+                        .filter_map(|e| tokens.get(&e.token()))
+                        .filter_map(|perfmap| {
+                            Some((perfmap.name.clone(), perfmap.cpuid() as i32, perfmap.read()))
+                        })
+                        .collect();
+                    for event in events.into_iter() {
+                        let message = match event.2 {
+                            None => continue,
+                            Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                            Some(PerfEvent::Sample(e)) => {
+                                PerfChannelMessage(event.0, event.1, Vec::from(e.data))
+                            }
+                        };
+                        match tx.send(message) {
+                            Ok(_) => {}
+                            Err(_) => break 'outer,
+                        };
+                    }
                 }
             })
             .map_err(|_e| OxidebpfError::ThreadPollingError)?;
@@ -500,10 +530,15 @@ impl ProgramVersion<'_> {
                             };
                             let mut perfmap =
                                 PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
+                            perfmap
+                                .iter()
+                                .map(|p: &PerfMap| -> Result<(), OxidebpfError> {
+                                    self.fds.insert(p.ev_fd as RawFd);
+                                    bpf_map_update_elem::<i32, i32>(fd, p.cpuid(), p.ev_fd as i32)
+                                })
+                                .collect::<Result<Vec<()>, OxidebpfError>>()?;
+
                             perfmaps.append(&mut perfmap);
-                            perfmap.iter().for_each(|p| {
-                                self.fds.insert(p.ev_fd as RawFd);
-                            });
                         }
                         _ => {
                             let fd =

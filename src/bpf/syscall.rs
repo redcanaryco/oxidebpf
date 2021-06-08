@@ -1,3 +1,4 @@
+#[cfg(not(LOG_BUF = "off"))]
 use lazy_static::lazy_static;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
