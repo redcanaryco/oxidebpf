@@ -73,6 +73,7 @@ pub(crate) fn bpf_prog_load(
 
     #[cfg(not(LOG_BUF = "off"))]
     let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
+    #[cfg(not(LOG_BUF = "off"))]
     let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,

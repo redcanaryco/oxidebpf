@@ -40,6 +40,7 @@ const ARCH_SYSCALL_PREFIX: &str = "__x64__";
 
 /// Message format for messages sent back across the channel. It includes
 /// the map name, cpu id, and message data.
+#[derive(Debug)]
 pub struct PerfChannelMessage(
     /// The name of the map this message is from.
     pub String,
