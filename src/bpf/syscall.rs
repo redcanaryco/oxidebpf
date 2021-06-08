@@ -12,7 +12,8 @@ use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, Size
 use crate::error::*;
 
 type BpfMapType = u32;
-const LOG_BUF_SIZE_BYTE: usize = 4096 * 10;
+#[cfg(not(LOG_BUF = "off"))]
+const LOG_BUF_SIZE_BYTE: usize = 4096;
 
 /// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed [`SizedBpfAttr`] _must_
 /// indicate the amount of _bytes_ to be used by this call.
@@ -61,7 +62,8 @@ pub(crate) fn bpf_prog_load(
     let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
-    #[cfg(LOG_BUF)]
+
+    #[cfg(not(LOG_BUF = "off"))]
     let mut log_buf = [0u8; LOG_BUF_SIZE_BYTE];
     let bpf_prog_load = BpfProgLoad {
         prog_type,
@@ -69,11 +71,11 @@ pub(crate) fn bpf_prog_load(
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,
         kern_version: kernel_version,
-        #[cfg(LOG_BUF)]
+        #[cfg(not(LOG_BUF = "off"))]
         log_level: 1,
-        #[cfg(LOG_BUF)]
+        #[cfg(not(LOG_BUF = "off"))]
         log_size: LOG_BUF_SIZE_BYTE as u32,
-        #[cfg(LOG_BUF)]
+        #[cfg(not(LOG_BUF = "off"))]
         log_buf: log_buf.as_mut_ptr() as u64,
         ..Default::default()
     };
