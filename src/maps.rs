@@ -34,11 +34,7 @@ pub struct PerfEventSample {
     pub data: [u8; 0],
 }
 
-pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
-    let cpu_string = String::from_utf8(
-        std::fs::read("/sys/devices/system/cpu/online").map_err(|_| OxidebpfError::FileIOError)?,
-    )
-    .map_err(|_| OxidebpfError::Utf8StringConversionError)?;
+pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
     let mut cpus = Vec::<i32>::new();
     let cpu_string = cpu_string.trim();
     for sublist in cpu_string.split(',').into_iter() {
@@ -68,7 +64,16 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
             );
         }
     }
+
     Ok(cpus)
+}
+
+pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
+    let cpu_string = String::from_utf8(
+        std::fs::read("/sys/devices/system/cpu/online").map_err(|_| OxidebpfError::FileIOError)?,
+    )
+    .map_err(|_| OxidebpfError::Utf8StringConversionError)?;
+    process_cpu_string(cpu_string)
 }
 
 pub(crate) enum PerfEvent<'a> {
@@ -296,5 +301,23 @@ impl Drop for PerfMap {
 impl<T> Drop for ArrayMap<T> {
     fn drop(&mut self) {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use crate::maps::process_cpu_string;
+
+    #[test]
+    fn test_cpu_formatter() {
+        assert_eq!(vec![0], process_cpu_string("0".to_string()).unwrap());
+        assert_eq!(
+            vec![0, 1, 2],
+            process_cpu_string("0-2".to_string()).unwrap()
+        );
+        assert_eq!(
+            vec![0, 3, 4, 5, 8],
+            process_cpu_string("0,3-5,8".to_string()).unwrap()
+        );
     }
 }
