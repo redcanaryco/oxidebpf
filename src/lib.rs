@@ -34,9 +34,9 @@ mod maps;
 mod perf;
 
 #[cfg(target_arch = "aarch64")]
-const ARCH_SYSCALL_PREFIX: &str = "__arm64__";
+const ARCH_SYSCALL_PREFIX: &str = "__arm64_";
 #[cfg(target_arch = "x86_64")]
-const ARCH_SYSCALL_PREFIX: &str = "__x64__";
+const ARCH_SYSCALL_PREFIX: &str = "__x64_";
 
 /// Message format for messages sent back across the channel. It includes
 /// the map name, cpu id, and message data.
@@ -79,9 +79,10 @@ pub struct ProgramVersion<'a> {
 pub struct Program<'a> {
     kind: ProgramType,
     name: &'a str,
-    attach_points: Vec<&'a str>,
+    attach_points: Vec<String>,
     optional: bool,
     loaded: bool,
+    is_syscall: bool,
     fd: RawFd,
     pid: Option<pid_t>,
 }
@@ -91,11 +92,18 @@ impl<'a> Program<'a> {
     ///
     /// You must provide the program type, the name of the program section in your
     /// blueprint's object file (see ['ProgramBlueprint'](struct@ProgramBlueprint))
-    /// a vector of attachment points, whether or not the program is optional, and
+    /// a vector of attachment points, whether or not the program is optional, whether
+    /// or not the program is tracing a syscall, and
     /// an optional pid to attach to.
     ///
     /// The pid is mainly used for uprobes. If the `Program` is optional then any encapsulating
     /// `ProgramVersion` will ignore any errors when attempting to load or attach it.
+    ///
+    /// The `is_syscall` boolean is used to automatically discover syscall wrappers
+    /// for the system we are running on. For example, if we want to trace `sys_ptrace`
+    /// we may want to trace `__x64_sys_ptrace` instead. By setting `is_syscall` to `true`,
+    /// oxidebpf will attempt to discover and fix this for you, and you can simply pass
+    /// `sys_ptrace` as the attachment point.
     ///
     /// # Example
     ///
@@ -107,6 +115,7 @@ impl<'a> Program<'a> {
     ///     "sys_ptrace_write",
     ///     vec!["do_mount"],
     ///     false,
+    ///     true,
     ///     None,
     /// );
     /// ```
@@ -115,14 +124,16 @@ impl<'a> Program<'a> {
         name: &'a str,
         attach_points: Vec<&'a str>,
         optional: bool,
+        is_syscall: bool,
         pid: Option<pid_t>,
     ) -> Program<'a> {
         Self {
             kind,
             name,
-            attach_points,
+            attach_points: attach_points.iter().map(|ap| ap.to_string()).collect(),
             optional,
             loaded: false,
+            is_syscall,
             fd: 0,
             pid,
         }
@@ -209,7 +220,21 @@ impl<'a> Program<'a> {
         }
     }
 
-    fn attach(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
+    fn attach(&mut self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
+        match self.attach_probes() {
+            Ok(res) => Ok(res),
+            Err(_e) => {
+                self.attach_points = self
+                    .attach_points
+                    .iter()
+                    .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
+                    .collect();
+                self.attach_probes()
+            }
+        }
+    }
+
+    fn attach_probes(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         if !self.loaded {
             return Err(OxidebpfError::ProgramNotLoaded);
         }
@@ -268,6 +293,7 @@ impl ProgramGroup<'_> {
     ///         "test_program",
     ///         vec!["do_mount"],
     ///         false,
+    ///         true,
     ///         None,
     ///     )])],
     ///     None,
@@ -319,6 +345,7 @@ impl ProgramGroup<'_> {
     ///         "test_program",
     ///         vec!["do_mount"],
     ///         false,
+    ///         true,
     ///         None,
     ///     )])],
     ///     None,
@@ -365,15 +392,17 @@ impl ProgramVersion<'_> {
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_ptrace_write",
-    ///         vec!["__x64_sys_ptrace"],
+    ///         vec!["sys_ptrace"],
     ///         false,
+    ///         true,
     ///         None,
     ///     ),
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_process_vm_writev",
-    ///         vec!["__x64_sys_process_vm_writev"],
+    ///         vec!["sys_process_vm_writev"],
     ///         false,
+    ///         true,
     ///         None,
     ///     )
     /// ];
@@ -624,6 +653,7 @@ mod program_tests {
                     "test_program_map_update",
                     vec!["do_mount"],
                     false,
+                    true,
                     None,
                 ),
                 Program::new(
@@ -631,6 +661,7 @@ mod program_tests {
                     "test_program",
                     vec!["do_mount"],
                     false,
+                    true,
                     None,
                 ),
             ])],
