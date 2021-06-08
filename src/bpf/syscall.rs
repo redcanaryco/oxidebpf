@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -12,8 +13,15 @@ use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, Size
 use crate::error::*;
 
 type BpfMapType = u32;
+
 #[cfg(not(LOG_BUF = "off"))]
-const LOG_BUF_SIZE_BYTE: usize = 4096;
+lazy_static! {
+    static ref LOG_BUF_SIZE_BYTE: usize = option_env!("LOG_SIZE")
+        .unwrap_or("4096")
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(4096);
+}
 
 /// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed [`SizedBpfAttr`] _must_
 /// indicate the amount of _bytes_ to be used by this call.
@@ -64,7 +72,8 @@ pub(crate) fn bpf_prog_load(
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
 
     #[cfg(not(LOG_BUF = "off"))]
-    let mut log_buf = [0u8; LOG_BUF_SIZE_BYTE];
+    let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
+    let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -74,9 +83,9 @@ pub(crate) fn bpf_prog_load(
         #[cfg(not(LOG_BUF = "off"))]
         log_level: 1,
         #[cfg(not(LOG_BUF = "off"))]
-        log_size: LOG_BUF_SIZE_BYTE as u32,
+        log_size: *LOG_BUF_SIZE_BYTE as u32,
         #[cfg(not(LOG_BUF = "off"))]
-        log_buf: log_buf.as_mut_ptr() as u64,
+        log_buf: log_buf.as_ptr() as u64,
         ..Default::default()
     };
     let bpf_attr = SizedBpfAttr {
