@@ -195,7 +195,16 @@ impl PerfMap {
                 )
             };
             if base_ptr == libc::MAP_FAILED {
-                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+                let mmap_errno = nix::errno::from_i32(errno());
+                unsafe {
+                    if libc::close(fd) < 0 {
+                        return Err(OxidebpfError::MultipleErrors(vec![
+                            OxidebpfError::LinuxError(mmap_errno),
+                            OxidebpfError::LinuxError(nix::errno::from_i32(errno())),
+                        ]));
+                    }
+                };
+                return Err(OxidebpfError::LinuxError(mmap_errno));
             }
             perf_event_ioc_enable(fd)?;
             loaded_perfmaps.push(PerfMap {
