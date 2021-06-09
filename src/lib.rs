@@ -97,18 +97,7 @@ impl<'a> Program<'a> {
     ///
     /// You must provide the program type, the name of the program section in your
     /// blueprint's object file (see ['ProgramBlueprint'](struct@ProgramBlueprint))
-    /// a vector of attachment points, whether or not the program is optional, whether
-    /// or not the program is tracing a syscall, and
-    /// an optional pid to attach to.
-    ///
-    /// The pid is mainly used for uprobes. If the `Program` is optional then any encapsulating
-    /// `ProgramVersion` will ignore any errors when attempting to load or attach it.
-    ///
-    /// The `is_syscall` boolean is used to automatically discover syscall wrappers
-    /// for the system we are running on. For example, if we want to trace `sys_ptrace`
-    /// we may want to trace `__x64_sys_ptrace` instead. By setting `is_syscall` to `true`,
-    /// oxidebpf will attempt to discover and fix this for you, and you can simply pass
-    /// `sys_ptrace` as the attachment point.
+    /// and a vector of attachment points.
     ///
     /// # Example
     ///
@@ -119,29 +108,48 @@ impl<'a> Program<'a> {
     ///     ProgramType::Kprobe,
     ///     "sys_ptrace_write",
     ///     vec!["do_mount"],
-    ///     false,
-    ///     true,
-    ///     None,
-    /// );
+    /// ).optional(false).syscall(true);
     /// ```
-    pub fn new(
-        kind: ProgramType,
-        name: &'a str,
-        attach_points: Vec<&'a str>,
-        optional: bool,
-        is_syscall: bool,
-        pid: Option<pid_t>,
-    ) -> Program<'a> {
+    pub fn new(kind: ProgramType, name: &'a str, attach_points: Vec<&'a str>) -> Program<'a> {
         Self {
             kind,
             name,
             attach_points: attach_points.iter().map(|ap| ap.to_string()).collect(),
-            optional,
+            optional: false,
             loaded: false,
-            is_syscall,
+            is_syscall: false,
             fd: 0,
-            pid,
+            pid: None,
         }
+    }
+
+    /// Specify a pid to attach to, if this program should trace a specific pid.
+    ///
+    /// The pid is mainly used for uprobes.
+    pub fn pid(mut self, pid: pid_t) -> Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    /// Specify whether or not the program is optional to load.
+    ///
+    /// If the `Program` is optional then any encapsulating `ProgramVersion`
+    /// will ignore any errors when attempting to load or attach it.
+    pub fn optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    /// Specify whether or not the program is tracing a syscall.
+    ///
+    /// The `syscall` setting is used to automatically discover syscall wrappers
+    /// for the system we are running on. For example, if we want to trace `sys_ptrace`
+    /// we may want to trace `__x64_sys_ptrace` instead. By setting `syscall(true)`,
+    /// oxidebpf will attempt to discover and fix this for you, and you can simply pass
+    /// `sys_ptrace` as the attachment point.
+    pub fn syscall(mut self, syscall: bool) -> Self {
+        self.is_syscall = syscall;
+        self
     }
 
     fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
@@ -297,10 +305,7 @@ impl ProgramGroup<'_> {
     ///         ProgramType::Kprobe,
     ///         "test_program",
     ///         vec!["do_mount"],
-    ///         false,
-    ///         true,
-    ///         None,
-    ///     )])],
+    ///     ).syscall(true)])],
     ///     None,
     /// );
     /// ```
@@ -349,10 +354,7 @@ impl ProgramGroup<'_> {
     ///         ProgramType::Kprobe,
     ///         "test_program",
     ///         vec!["do_mount"],
-    ///         false,
-    ///         true,
-    ///         None,
-    ///     )])],
+    ///     ).syscall(true)])],
     ///     None,
     /// );
     ///
@@ -398,18 +400,12 @@ impl ProgramVersion<'_> {
     ///         ProgramType::Kprobe,
     ///         "sys_ptrace_write",
     ///         vec!["sys_ptrace"],
-    ///         false,
-    ///         true,
-    ///         None,
-    ///     ),
+    ///     ).syscall(true),
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_process_vm_writev",
     ///         vec!["sys_process_vm_writev"],
-    ///         false,
-    ///         true,
-    ///         None,
-    ///     )
+    ///     ).syscall(true)
     /// ];
     ///
     /// ProgramVersion::new(program_vec);
@@ -697,18 +693,9 @@ mod program_tests {
                     ProgramType::Kprobe,
                     "test_program_map_update",
                     vec!["do_mount"],
-                    false,
-                    true,
-                    None,
-                ),
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program",
-                    vec!["do_mount"],
-                    false,
-                    true,
-                    None,
-                ),
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
             ])],
             None,
         );
