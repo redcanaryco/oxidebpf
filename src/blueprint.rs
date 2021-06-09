@@ -470,15 +470,15 @@ fn kernel_major_minor_str_to_u32(release: &str) -> u32 {
     ((split.next().unwrap_or(0) & 0xFF) << 16) + ((split.next().unwrap_or(0) & 0xFF) << 8)
 }
 
-/// Packs the kernel version into an u32
+// Packs the kernel version into an u32
 fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
     let utsname = nix::sys::utsname::uname();
     let release = utsname.release();
     let version_base = kernel_major_minor_str_to_u32(release);
 
-    // there doesnt seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal
-    // ebpf program and load it with different versions until we find one that works. We assume
-    // that the major/minor from uname release is correct, but the patch is not.
+    // There doesn't seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal
+    // ebpf program and load it with different versions until we find one that works. At most, we
+    // do this 255 times, as we only enumerate the revision number (1 byte).
     let data: Vec<u8> = vec![0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0];
     let code = BpfCode::try_from(&data[..])?; // r0 = 0, return r0
     let license = "Proprietary".to_string();
