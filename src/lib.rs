@@ -630,7 +630,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         // We are intentionally enumerating and closing _all_ debugfs created
         // probes here, on the off chance that one gets missed somehow. Otherwise,
         // we might end up stuck with a bunch of unused probes clogging the namespace.
-        // If it has _oxidebpf_ it's probably one of ours. This avoids conflicting
+        // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
 
         // uprobe
@@ -644,7 +644,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         let mut up_writer = BufWriter::new(&up_file);
         for line in up_reader.lines() {
             let line = line.unwrap();
-            if line.contains("_oxidebpf_") {
+            if line.contains("oxidebpf_") {
                 up_writer
                     .write_all(format!("-:{}\n", &line[2..]).as_bytes())
                     .unwrap();
@@ -661,7 +661,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         let mut kp_writer = BufWriter::new(&kp_file);
         for line in kp_reader.lines() {
             let line = line.unwrap();
-            if line.contains("_oxidebpf_") {
+            if line.contains("oxidebpf_") {
                 kp_writer
                     .write_all(format!("-:{}\n", &line[2..]).as_bytes())
                     .unwrap();

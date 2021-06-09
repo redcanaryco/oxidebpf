@@ -82,7 +82,6 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
 pub(crate) fn perf_event_open_debugfs(
     pid: pid_t,
     event_type: ProgramType,
-    event_name: &str,
     offset: u64,
     func_name_or_path: &str,
 ) -> Result<String, OxidebpfError> {
@@ -103,7 +102,7 @@ pub(crate) fn perf_event_open_debugfs(
 
     let mut uuid = uuid::Uuid::new_v4().to_string();
     uuid.truncate(8);
-    let event_alias = format!("{}_oxidebpf_{}_{}", event_name, std::process::id(), uuid);
+    let event_alias = format!("oxidebpf_{}", uuid);
     let mut my_fd: RawFd = -1;
     let name = match event_type {
         ProgramType::Kprobe => {
@@ -298,7 +297,6 @@ pub(crate) fn attach_uprobe_debugfs(
         } else {
             ProgramType::Uprobe
         },
-        attach_point,
         offset.unwrap_or(0),
         attach_point,
     )?;
@@ -362,7 +360,6 @@ pub(crate) fn attach_kprobe_debugfs(
         } else {
             ProgramType::Kprobe
         },
-        attach_point,
         offset.unwrap_or(0),
         attach_point,
     )?;
@@ -506,8 +503,7 @@ mod tests {
                 Ok(fd) => Ok((None, Some(fd))),
                 Err(_e) => {
                     let event_path =
-                        perf_event_open_debugfs(-1, ProgramType::Kprobe, "do_mount", 0, "do_mount")
-                            .unwrap();
+                        perf_event_open_debugfs(-1, ProgramType::Kprobe, 0, "do_mount").unwrap();
                     // perf_event_ioc_set_bpf is called in here already
                     let s = perf_attach_tracepoint_with_debugfs(prog_fd, event_path, 0).unwrap();
                     Ok((Some(s), None))
