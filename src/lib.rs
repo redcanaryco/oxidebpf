@@ -29,6 +29,7 @@ use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crate::perf::syscall::{attach_kprobe_debugfs, attach_uprobe_debugfs};
+use nix::errno::Errno;
 use std::time::Duration;
 
 pub mod blueprint;
@@ -431,7 +432,7 @@ impl ProgramVersion<'_> {
             .spawn(move || {
                 let mut poll = Poll::new()
                     .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))
-                    .unwrap();
+                    .expect("could not create poller");
                 let tokens: HashMap<Token, &PerfMap> = perfmaps
                     .iter()
                     .map(|p: &PerfMap| -> Result<(Token, &PerfMap), OxidebpfError> {
@@ -443,26 +444,35 @@ impl ProgramVersion<'_> {
                         Ok((token, p))
                     })
                     .collect::<Result<HashMap<Token, &PerfMap>, OxidebpfError>>()
-                    .unwrap();
+                    .expect("could not establish polling registry");
                 let mut events = Events::with_capacity(1024);
                 'outer: loop {
-                    poll.poll(&mut events, Some(Duration::from_millis(100)))
-                        .unwrap();
-                    let events: Vec<(String, i32, Option<PerfEvent>)> = events
-                        .iter()
-                        .filter(|event| event.is_readable())
-                        .filter_map(|e| tokens.get(&e.token()))
-                        .filter_map(|perfmap| {
-                            Some((perfmap.name.clone(), perfmap.cpuid() as i32, perfmap.read()))
-                        })
-                        .collect();
+                    match poll.poll(&mut events, Some(Duration::from_millis(100))) {
+                        Ok(_) => {}
+                        Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
+                            Errno::EINTR => continue,
+                            _ => {
+                                panic!("unrecoverable polling error: {}", e)
+                            }
+                        },
+                    }
+                    let events: Vec<(String, i32, Result<Option<PerfEvent>, OxidebpfError>)> =
+                        events
+                            .iter()
+                            .filter(|event| event.is_readable())
+                            .filter_map(|e| tokens.get(&e.token()))
+                            .map(|perfmap| {
+                                (perfmap.name.clone(), perfmap.cpuid() as i32, perfmap.read())
+                            })
+                            .collect();
                     for event in events.into_iter() {
                         let message = match event.2 {
-                            None => continue,
-                            Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
-                            Some(PerfEvent::Sample(e)) => {
-                                PerfChannelMessage(event.0, event.1, Vec::from(e.data))
+                            Ok(None) => continue,
+                            Ok(Some(PerfEvent::Lost(_))) => continue, // TODO: count losses
+                            Ok(Some(PerfEvent::Sample(e))) => {
+                                PerfChannelMessage(event.0, event.1, e.data.clone())
                             }
+                            Err(_) => continue, // ignore any errors
                         };
                         match tx.send(message) {
                             Ok(_) => {}
@@ -640,7 +650,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("_oxidebpf_") {
                 up_writer
-                    .write_all(format!("-:{}\n", line).as_bytes())
+                    .write_all(format!("-:{}\n", &line[2..]).as_bytes())
                     .unwrap();
             }
         }

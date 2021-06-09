@@ -17,6 +17,7 @@ use crate::perf::PerfEventAttr;
 use std::fmt::{Debug, Formatter};
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct PerfEventHeader {
     type_: c_uint,
     misc: c_ushort,
@@ -33,7 +34,7 @@ pub struct PerfEventLostSamples {
 pub struct PerfEventSample {
     header: PerfEventHeader,
     pub size: u32,
-    pub data: [u8; 0],
+    pub data: Vec<u8>,
 }
 
 pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
@@ -79,8 +80,25 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
 }
 
 pub(crate) enum PerfEvent<'a> {
-    Sample(&'a PerfEventSample),
+    Sample(Box<PerfEventSample>),
     Lost(&'a PerfEventLostSamples),
+}
+
+impl Debug for PerfEvent<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                PerfEvent::Sample(s) => {
+                    format!("SAMPLE: {}", s.size)
+                }
+                PerfEvent::Lost(l) => {
+                    format!("LOST: {}", l.count)
+                }
+            }
+        )
+    }
 }
 
 #[repr(align(8), C)]
@@ -230,7 +248,7 @@ impl PerfMap {
         Ok(loaded_perfmaps)
     }
 
-    pub(crate) fn read<'a>(&self) -> Option<PerfEvent<'a>> {
+    pub(crate) fn read<'a>(&self) -> Result<Option<PerfEvent<'a>>, OxidebpfError> {
         let header = self.base_ptr.load(Ordering::SeqCst);
         let raw_size = (self.page_count * self.page_size) as u64;
         let base: *const u8;
@@ -248,7 +266,7 @@ impl PerfMap {
             end = ((data_tail + (*event).size as u64) % raw_size) as usize;
         }
         if data_head == data_tail {
-            return None;
+            return Err(OxidebpfError::NoPerfData);
         }
 
         let mut buf = Vec::<u8>::new();
@@ -272,13 +290,29 @@ impl PerfMap {
             (*header).data_tail += (*event).size as u64;
 
             match (*event).type_ {
-                perf_event_type::PERF_RECORD_SAMPLE => Some(PerfEvent::<'a>::Sample(
-                    &*(buf.as_ptr() as *const PerfEventSample),
-                )),
-                perf_event_type::PERF_RECORD_LOST => Some(PerfEvent::<'a>::Lost(
+                perf_event_type::PERF_RECORD_SAMPLE => {
+                    let header_bytes: Vec<u8> = buf
+                        .drain(..std::mem::size_of::<PerfEventHeader>())
+                        .collect();
+                    let len: Vec<u8> = buf.drain(..std::mem::size_of::<u32>()).collect();
+                    let data: Vec<u8> = buf.drain(..).collect();
+                    let (_, header, _) = header_bytes.align_to::<PerfEventHeader>();
+                    let (_, size, _) = len.align_to::<u32>();
+                    if header.len() != 1 {
+                        return Err(OxidebpfError::BadPerfSample);
+                    }
+                    if size.len() != 1 {
+                        return Err(OxidebpfError::BadPerfSample);
+                    }
+                    let header = *header.get(0).ok_or(OxidebpfError::BadPerfSample)?;
+                    let size = *size.get(0).ok_or(OxidebpfError::BadPerfSample)?;
+                    let sample = Box::new(PerfEventSample { header, size, data });
+                    Ok(Some(PerfEvent::<'a>::Sample(sample)))
+                }
+                perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(
                     &*(buf.as_ptr() as *const PerfEventLostSamples),
-                )),
-                _ => None,
+                ))),
+                _ => Ok(None),
             }
         }
     }

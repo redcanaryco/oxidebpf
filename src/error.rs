@@ -3,6 +3,8 @@ use std::ffi::NulError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    BadPerfSample,
+    NoPerfData,
     EbpfPollerError(String),
     CStrConversionError,
     ThreadPollingError,
