@@ -156,14 +156,14 @@ impl<'a> Program<'a> {
         let mut errs = Vec::<OxidebpfError>::new();
         let mut paths = Vec::<String>::new();
         let mut fds = Vec::<RawFd>::new();
-        for cpu in crate::maps::get_cpus()?.iter() {
+        for cpu in crate::maps::get_cpus()?.into_iter() {
             self.attach_points.iter().for_each(|attach_point| {
                 match attach_kprobe(
                     self.fd,
                     attach_point,
                     self.kind == ProgramType::Kretprobe,
                     None,
-                    *cpu,
+                    cpu,
                 ) {
                     Ok(fd) => fds.push(fd),
                     Err(e) => {
@@ -172,7 +172,7 @@ impl<'a> Program<'a> {
                             attach_point,
                             self.kind == ProgramType::Kretprobe,
                             None,
-                            *cpu,
+                            cpu,
                         ) {
                             Ok(s) => paths.push(s),
                             Err(s) => {
