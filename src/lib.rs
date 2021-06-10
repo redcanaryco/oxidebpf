@@ -290,7 +290,7 @@ impl ProgramGroup<'_> {
     /// # Example
     ///
     /// ```
-    /// use oxidebpf::blueprint::ProgramBlueprint;
+    /// use oxidebpf::ProgramBlueprint;
     /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
     /// use std::path::PathBuf;
     ///
@@ -340,7 +340,7 @@ impl ProgramGroup<'_> {
     /// # Example
     ///
     /// ```
-    /// use oxidebpf::blueprint::ProgramBlueprint;
+    /// use oxidebpf::ProgramBlueprint;
     /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
     /// use std::path::PathBuf;
     ///

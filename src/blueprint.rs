@@ -78,7 +78,7 @@ impl ProgramBlueprint {
     ///
     /// ```
     /// use std::path::PathBuf;
-    /// use oxidebpf::blueprint::ProgramBlueprint;                                                                                        
+    /// use oxidebpf::ProgramBlueprint;                                                                                        
     /// use std::fs;
     ///
     /// ProgramBlueprint::new(
