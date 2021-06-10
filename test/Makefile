@@ -4,7 +4,6 @@ LLC = llc-6.0
 OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
 
-CLAGS ?=
 SOURCES ?= test_program.c
 
 CFLAGS += \
