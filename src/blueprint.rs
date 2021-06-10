@@ -17,7 +17,7 @@ pub struct ProgramBlueprint {
     pub(crate) programs: HashMap<String, ProgramObject>,
 }
 
-/// This enum lets the ProgramBlueprint know how to parse sections not covered in our eBPF ABI.
+/// Enum which describes how the blueprint will parse sections not covered in our eBPF ABI.
 #[derive(Debug, Clone)]
 pub enum SectionType<'a> {
     Map {

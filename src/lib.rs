@@ -21,6 +21,7 @@ use nix::errno::Errno;
 
 pub use crate::blueprint::ProgramBlueprint;
 use crate::blueprint::ProgramObject;
+pub use crate::blueprint::SectionType;
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
@@ -33,7 +34,7 @@ use crate::perf::syscall::{
 };
 use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
 
-pub mod blueprint;
+mod blueprint;
 mod bpf;
 mod error;
 mod maps;
