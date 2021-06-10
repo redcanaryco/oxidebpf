@@ -33,7 +33,7 @@ use crate::perf::syscall::{
 };
 use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
 
-mod blueprint;
+pub mod blueprint;
 mod bpf;
 mod error;
 mod maps;
