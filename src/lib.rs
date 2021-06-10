@@ -11,16 +11,16 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::RawFd;
+use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use libc::{c_int, pid_t};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
+use nix::errno::Errno;
 
-use perf::syscall::{attach_kprobe, attach_uprobe};
-use perf::{PerfEventAttr, PerfSample, PerfWakeup};
-
-use crate::blueprint::{ProgramBlueprint, ProgramObject};
+pub use crate::blueprint::ProgramBlueprint;
+use crate::blueprint::ProgramObject;
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
@@ -28,11 +28,12 @@ use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
-use crate::perf::syscall::{attach_kprobe_debugfs, attach_uprobe_debugfs};
-use nix::errno::Errno;
-use std::time::Duration;
+use crate::perf::syscall::{
+    attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs,
+};
+use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
 
-pub mod blueprint;
+mod blueprint;
 mod bpf;
 mod error;
 mod maps;
