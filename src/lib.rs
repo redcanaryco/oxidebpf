@@ -6,17 +6,18 @@
 //! `new()` and `load()` functions.
 #![allow(dead_code)]
 
-use crossbeam_channel::{bounded, Receiver, Sender};
-use libc::{c_int, pid_t};
-use mio::unix::SourceFd;
-use mio::{Events, Interest, Poll, Token};
-use nix::errno::Errno;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::RawFd;
 use std::time::Duration;
+
+use crossbeam_channel::{bounded, Receiver, Sender};
+use libc::{c_int, pid_t};
+use mio::unix::SourceFd;
+use mio::{Events, Interest, Poll, Token};
+use nix::errno::Errno;
 
 pub use crate::blueprint::ProgramBlueprint;
 use crate::blueprint::ProgramObject;
