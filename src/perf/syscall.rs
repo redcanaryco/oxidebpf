@@ -165,15 +165,12 @@ pub(crate) fn perf_event_open(
     if !((*PERF_PATH).as_path().exists()) {
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
-    let size = attr.size;
-    let p: *const PerfEventAttr = attr;
-    let p = p as *mut u8;
-    let perf_event_attr: &[u8] = unsafe { std::slice::from_raw_parts(p, size as usize) };
+    let ptr: *const PerfEventAttr = attr;
 
     let ret = unsafe {
         syscall(
             (SYS_perf_event_open as i32).into(),
-            perf_event_attr.as_ptr() as *const _,
+            ptr,
             pid,
             cpu,
             group_fd,
