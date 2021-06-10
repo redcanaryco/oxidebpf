@@ -42,16 +42,9 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
 
     let size = arg_bpf_attr.size;
-    let p: *const BpfAttr = &arg_bpf_attr.bpf_attr;
-    let p = p as *mut u8;
-    let bpf_attr: &[u8] = std::slice::from_raw_parts(p, size);
+    let ptr: *const BpfAttr = &arg_bpf_attr.bpf_attr;
 
-    let ret = syscall(
-        (SYS_bpf as i32).into(),
-        cmd,
-        bpf_attr.as_ptr() as *const _,
-        size,
-    );
+    let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
     if ret < 0 {
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
