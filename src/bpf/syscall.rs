@@ -1,158 +1,112 @@
-use libc::{pid_t, syscall, SYS_bpf, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
-use nix::errno::errno;
-use nix::{ioctl_none, ioctl_write_int};
-use std::convert::TryInto;
+#[cfg(not(LOG_BUF = "off"))]
+use lazy_static::lazy_static;
+use std::ffi::CString;
 use std::mem::MaybeUninit;
-use std::os::raw::{c_uint, c_ulong};
 use std::os::unix::io::RawFd;
+
+use libc::{c_uint, syscall, SYS_bpf};
+use nix::errno::errno;
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
-use crate::bpf::{
-    constant::perf_ioctls, BpfAttr, BpfInsn, BpfProgLoad, KeyVal, MapConfig, MapElem, PerfEventAttr,
-};
+use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
-use std::ffi::CString;
 
 type BpfMapType = u32;
 
-/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed `BpfAttr`
-/// union _must_ be zero initialized before being filled and passed to this call.
-unsafe fn sys_bpf(cmd: u32, bpf_attr: Box<BpfAttr>, size: usize) -> Result<usize, OxidebpfError> {
-    // https://man7.org/linux/man-pages/man2/syscall.2.html
-    // Architecture-specific requirements
-    // Each architecture ABI has its own requirements on how system call
-    // arguments are passed to the kernel.  For system calls that have a
-    // glibc wrapper (e.g., most system calls), glibc handles the
-    // details of copying arguments to the right registers in a manner
-    // suitable for the architecture.  However, when using syscall() to
-    // make a system call, the caller might need to handle architecture-
-    // dependent details; this requirement is most commonly encountered
-    // on certain 32-bit architectures.
+#[cfg(not(LOG_BUF = "off"))]
+lazy_static! {
+    static ref LOG_BUF_SIZE_BYTE: usize = option_env!("LOG_SIZE")
+        .unwrap_or("4096")
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(4096);
+}
+
+/// Performs `bpf()` syscalls and returns a formatted `OxidebpfError`. The passed [`SizedBpfAttr`] _must_
+/// indicate the amount of _bytes_ to be used by this call.
+///
+/// # Example
+/// ```ignore
+/// let arg_bpf_attr = SizedBpfAttr {
+///     bpf_attr: SomeStruct {
+///         SomeVal: 123 as u32,
+///         ..Default::default()
+///     },
+///     size: 4, // we instantiated 1 u32 of size 4 bytes
+/// };
+/// sys_bpf(BPF_MAP_CREATE, arg_bpf_attr);
+/// ```
+unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let ret = syscall(
-        (SYS_bpf as i32).into(),
-        cmd,
-        bpf_attr.as_ref() as *const _,
-        size,
-    );
+
+    let size = arg_bpf_attr.size;
+    let ptr: *const BpfAttr = &arg_bpf_attr.bpf_attr;
+
+    let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
     if ret < 0 {
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
     }
     Ok(ret as usize)
-}
-
-/// Checks if `perf_event_open()` is supported and if so, calls the syscall.
-pub(crate) fn perf_event_open(
-    attr: PerfEventAttr,
-    pid: pid_t,
-    cpu: i32,
-    group_fd: RawFd,
-    flags: c_ulong,
-) -> Result<RawFd, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    if !std::path::Path::new("/proc/sys/kernel/perf_event_paranoid").exists() {
-        return Err(OxidebpfError::PerfEventDoesNotExist);
-    }
-    let ret = unsafe {
-        syscall(
-            (SYS_perf_event_open as i32).into(),
-            attr,
-            pid,
-            cpu,
-            group_fd,
-            flags,
-        )
-    };
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-    }
-    Ok(ret as RawFd)
-}
-
-/// Calls the `setns` syscall on the given `fd` with the given `nstype`.
-pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
-    }
-    Ok(ret as usize)
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
-ioctl_write_int!(
-    u_perf_event_ioc_set_bpf,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_SET_BPF
-);
-
-/// Safe wrapper around `u_perf_event_ioc_set_bpf()`
-pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: i32) -> Result<i32, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    let data_unwrapped = match data.try_into() {
-        Ok(d) => d,
-        Err(_e) => 0, // Should be infallible
-    };
-    unsafe {
-        u_perf_event_ioc_set_bpf(perf_fd, data_unwrapped)
-            .map_err(|e| OxidebpfError::PerfIoctlError(e))
-    }
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_ENABLE )` function
-ioctl_none!(
-    u_perf_event_ioc_enable,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_ENABLE
-);
-
-/// Safe wrapper around `u_perf_event_ioc_enable()`
-pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
-}
-
-// unsafe `ioctl( PERF_EVENT_IOC_DISABLE )` function
-ioctl_none!(
-    u_perf_event_ioc_disable,
-    perf_ioctls::PERF_EVENT_IOC_MAGIC,
-    perf_ioctls::PERF_EVENT_IOC_DISABLE
-);
-
-/// Safe wrapper around `u_perf_event_ioc_disable()`
-pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
 /// License should (almost) always be GPL.
 pub(crate) fn bpf_prog_load(
     prog_type: u32,
-    insns: Vec<BpfInsn>,
+    insns: &BpfCode,
     license: String,
+    kernel_version: u32,
 ) -> Result<RawFd, OxidebpfError> {
-    let insn_cnt = insns.len();
-    let insns = Box::new(insns);
+    #![allow(clippy::redundant_closure)] // it's not a function clippy
+    let insn_cnt = insns.0.len();
+    let insns = insns.0.clone().into_boxed_slice();
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
+
+    #[cfg(not(LOG_BUF = "off"))]
+    let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
+    #[cfg(not(LOG_BUF = "off"))]
+    let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
-        insns: insns.as_ref() as *const _ as u64,
-        license: &license as *const _ as u64,
-        log_level: 0,
-        log_size: 0,
-        log_buf: 0,
+        insns: insns.as_ptr() as u64,
+        license: license.as_ptr() as u64,
+        kern_version: kernel_version,
+        #[cfg(not(LOG_BUF = "off"))]
+        log_level: 1,
+        #[cfg(not(LOG_BUF = "off"))]
+        log_size: *LOG_BUF_SIZE_BYTE as u32,
+        #[cfg(not(LOG_BUF = "off"))]
+        log_buf: log_buf.as_ptr() as u64,
+        ..Default::default()
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.bpf_prog_load = bpf_prog_load;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfProgLoad>();
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { bpf_prog_load },
+        size: 48, // 48 = minimum for 4.4
+    };
     unsafe {
-        let fd = sys_bpf(BPF_PROG_LOAD, bpf_attr, bpf_attr_size)?;
-        Ok(fd as RawFd)
+        match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
+            Ok(fd) => Ok(fd as RawFd),
+            Err(e) => {
+                #[cfg(LOG_BUF)]
+                {
+                    Err(OxidebpfError::BpfProgLoadError((
+                        Box::new(e),
+                        String::from_utf8_unchecked(Vec::from(log_buf)),
+                    )))
+                }
+                #[cfg(not(LOG_BUF))]
+                {
+                    Err(OxidebpfError::BpfProgLoadError((
+                        Box::new(e),
+                        "".to_string(),
+                    )))
+                }
+            }
+        }
     }
 }
 
@@ -169,13 +123,13 @@ pub(crate) fn bpf_map_lookup_elem<K, V>(map_fd: RawFd, key: K) -> Result<V, Oxid
         },
         flags: 0,
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_elem = map_elem;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<MapElem>();
+
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_elem },
+        size: std::mem::size_of::<MapElem>(),
+    };
     unsafe {
-        sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_LOOKUP_ELEM, bpf_attr)?;
         Ok(buf.assume_init())
     }
 }
@@ -195,27 +149,35 @@ pub(crate) fn bpf_map_update_elem<K, V>(
         },
         flags: 0,
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_elem = map_elem;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<MapElem>();
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_elem },
+        size: std::mem::size_of::<MapElem>(),
+    };
     unsafe {
-        sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr, bpf_attr_size)?;
+        sys_bpf(BPF_MAP_UPDATE_ELEM, bpf_attr)?;
     }
     Ok(())
 }
 
-pub(crate) fn bpf_map_create_with_config(map_config: MapConfig) -> Result<RawFd, OxidebpfError> {
+pub(crate) unsafe fn bpf_map_create_with_sized_attr(
+    bpf_attr: SizedBpfAttr,
+) -> Result<RawFd, OxidebpfError> {
+    let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
+    Ok(fd as RawFd)
+}
+
+/// The caller must provide a `size` that indicates the amount of _bytes_ used in `map_config`.
+/// See the example for [`sys_bpf`](Fn@sys_bpf).
+pub(crate) unsafe fn bpf_map_create_with_config(
+    map_config: MapConfig,
+    size: usize,
+) -> Result<RawFd, OxidebpfError> {
     let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
+    let mut bpf_attr = bpf_attr.assume_init();
     bpf_attr.map_config = map_config;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
-    unsafe {
-        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
-        Ok(fd as RawFd)
-    }
+    let bpf_attr = SizedBpfAttr { bpf_attr, size };
+    let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
+    Ok(fd as RawFd)
 }
 
 /// Create a map of the given type with given key size, value size, and number of entries.
@@ -232,58 +194,40 @@ pub(crate) fn bpf_map_create(
         key_size,
         value_size,
         max_entries,
+        ..Default::default()
     };
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = unsafe { bpf_attr.assume_init() };
-    bpf_attr.map_config = map_config;
-    let bpf_attr = Box::new(bpf_attr);
-    let bpf_attr_size = std::mem::size_of::<BpfAttr>();
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_config },
+        size: 16,
+    };
 
     unsafe {
-        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr, bpf_attr_size)?;
+        let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
         Ok(fd as RawFd)
     }
 }
 
 #[cfg(test)]
 #[allow(unused_imports)]
-mod tests {
-    use std::os::raw::{c_int, c_uint};
-    use std::os::unix::io::{FromRawFd, RawFd};
-
-    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
-    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
-    use crate::bpf::syscall::{
-        bpf_map_lookup_elem, bpf_prog_load, perf_event_ioc_set_bpf, perf_event_open,
-    };
-    use crate::bpf::{BpfInsn, PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
-    use crate::error::OxidebpfError;
-    use nix::errno::{errno, Errno};
-    use scopeguard::defer;
+pub(crate) mod tests {
     use std::convert::TryInto;
     use std::ffi::c_void;
+    use std::os::raw::{c_int, c_uint};
+    use std::os::unix::io::{FromRawFd, RawFd};
+    use std::path::PathBuf;
 
-    fn bpf_panic_error(err: OxidebpfError) {
-        match err {
-            OxidebpfError::LinuxError(e) => {
-                panic!(
-                    "System error [{:?}]: {:?}",
-                    (e as Errno),
-                    (e as Errno).to_string()
-                );
-            }
-            OxidebpfError::PerfEventDoesNotExist => {
-                panic!("/proc/sys/kernel/perf_event_paranoid does not exist on this system");
-            }
-            OxidebpfError::PerfIoctlError(e) => {
-                panic!("perf IOCTL error: {:?}", e);
-            }
-            OxidebpfError::CStringConversionError(e) => {
-                panic!("could not convert string: {:?}", e)
-            }
-            _ => {}
-        }
-    }
+    use nix::errno::{errno, Errno};
+    use scopeguard::defer;
+
+    use crate::blueprint::ProgramBlueprint;
+    use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_ARRAY;
+    use crate::bpf::constant::bpf_prog_type::BPF_PROG_TYPE_KPROBE;
+    use crate::bpf::syscall::{bpf_map_lookup_elem, bpf_prog_load};
+    use crate::bpf::{BpfCode, BpfInsn};
+    use crate::error::OxidebpfError;
+    use crate::perf::syscall::{perf_event_ioc_set_bpf, perf_event_open};
+    use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
+    use std::fs;
 
     #[test]
     fn bpf_map_create() {
@@ -293,7 +237,6 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             10,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
@@ -308,7 +251,6 @@ mod tests {
             std::mem::size_of::<u32>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
@@ -319,8 +261,7 @@ mod tests {
                 assert_eq!(val, 0);
             }
             Err(e) => {
-                bpf_panic_error(e);
-                panic!()
+                panic!("{:?}", e);
             }
         }
     }
@@ -333,23 +274,19 @@ mod tests {
             std::mem::size_of::<u64>() as c_uint,
             20,
         )
-        .map_err(|e| bpf_panic_error(e))
         .unwrap();
         defer!(unsafe {
             libc::close(fd);
         });
 
-        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50)
-            .map_err(|e| bpf_panic_error(e))
-            .unwrap();
+        crate::bpf::syscall::bpf_map_update_elem::<u32, u64>(fd, 5, 50).unwrap();
 
         match crate::bpf::syscall::bpf_map_lookup_elem::<u32, u64>(fd, 5) {
             Ok(val) => {
                 assert_eq!(val, 50);
             }
             Err(e) => {
-                bpf_panic_error(e);
-                panic!()
+                panic!("{:?}", e)
             }
         }
     }
@@ -395,80 +332,27 @@ mod tests {
             let fd = file.as_raw_fd();
 
             // switch mnt namespace
-            crate::bpf::syscall::setns(fd, CLONE_NEWNS)
-                .map_err(|e| bpf_panic_error(e))
-                .unwrap();
+            crate::perf::syscall::setns(fd, CLONE_NEWNS).unwrap();
         }
-    }
-
-    #[test]
-    fn test_perf_event_open() {
-        #![allow(unreachable_code)]
-        todo!();
-        match perf_event_open(
-            PerfEventAttr {
-                p_type: 0,
-                size: 0,
-                config: 0,
-                sample_union: PerfSample { sample_freq: 0 },
-                sample_type: 0,
-                read_format: 0,
-                flags: 0,
-                wakeup_union: PerfWakeup { wakeup_events: 0 },
-                bp_type: 0,
-                bp_addr_union: PerfBpAddr { bp_addr: 0 },
-                bp_len_union: PerfBpLen { bp_len: 0 },
-                branch_sample_type: 0,
-                sample_regs_user: 0,
-                sample_stack_user: 0,
-                clockid: 0,
-                sample_regs_intr: 0,
-                aux_watermark: 0,
-                __reserved_2: 0,
-            },
-            0,
-            0,
-            0,
-            0,
-        ) {
-            Ok(_) => {}
-            Err(e) => bpf_panic_error(e),
-        }
-    }
-
-    #[test]
-    fn test_perf_event_ioc_set_bpf() {
-        #![allow(unreachable_code)]
-        todo!();
-        let perf_fd: RawFd = 0;
-        match perf_event_ioc_set_bpf(perf_fd, 0) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
-    }
-
-    #[test]
-    fn test_perf_event_ioc_disable() {
-        todo!()
     }
 
     #[test]
     fn test_bpf_prog_load() {
-        #![allow(unreachable_code)]
-        // fails currently, EINVAL
-        todo!();
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        let data = fs::read(program).unwrap();
+        let blueprint = ProgramBlueprint::new(&data, None).unwrap();
+
+        let program_object = blueprint.programs.get("test_program").unwrap();
         match bpf_prog_load(
             BPF_PROG_TYPE_KPROBE,
-            vec![BpfInsn {
-                code: 0,
-                regs: 0,
-                off: 0,
-                imm: 0,
-            }],
-            "GPL".to_string(),
+            &program_object.code,
+            program_object.license.clone(),
+            program_object.kernel_version,
         ) {
             Ok(_fd) => {}
-            Err(e) => bpf_panic_error(e),
+            Err(e) => panic!("{:?}", e),
         };
     }
 }

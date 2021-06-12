@@ -74,26 +74,3 @@ pub(crate) mod bpf_cmd {
     pub const BPF_OBJ_PIN: u32 = 6;
     pub const BPF_OBJ_GET: u32 = 7;
 }
-
-pub(crate) mod perf_ioctls {
-    #![allow(unused)]
-    pub const PERF_EVENT_IOC_MAGIC: u8 = b'$';
-    /// _IO ('$', 0)
-    pub const PERF_EVENT_IOC_ENABLE: u8 = 0;
-    /// _IO ('$', 1)
-    pub const PERF_EVENT_IOC_DISABLE: u8 = 1;
-    /// _IO ('$', 2)
-    pub const PERF_EVENT_IOC_REFRESH: u8 = 2;
-    /// _IO ('$', 3)
-    pub const PERF_EVENT_IOC_RESET: u8 = 3;
-    /// _IOW('$', 4, __u64)
-    pub const PERF_EVENT_IOC_PERIOD: u8 = 4;
-    /// _IO ('$', 5)
-    pub const PERF_EVENT_IOC_SET_OUTPUT: u8 = 5;
-    /// _IOW('$', 6, char *)
-    pub const PERF_EVENT_IOC_SET_FILTER: u8 = 6;
-    /// _IOR('$', 7, __u64 *)
-    pub const PERF_EVENT_IOC_ID: u8 = 7;
-    /// _IOW('$', 8, __u32)
-    pub const PERF_EVENT_IOC_SET_BPF: u8 = 8;
-}
