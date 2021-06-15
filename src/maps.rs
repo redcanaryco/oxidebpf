@@ -326,17 +326,23 @@ impl PerCpu for PerfMap {
     }
 }
 impl<T> ArrayMap<T> {
-    pub fn new(map_name: &String, value_size: c_uint, max_entries: u32,) -> ArrayMap<T> {
+    pub fn new(map_name: &String, max_entries: u32,) -> Result<ArrayMap<T>, OxidebpfError> {
         // Manpages say that key size must be 4 bytes for this type
-        let new_map = bpf_map_create(bpf_map_type::BPF_MAP_TYPE_ARRAY, 4, value_size, max_entries).unwrap();
+        let new_map = bpf_map_create(bpf_map_type::BPF_MAP_TYPE_ARRAY, 4, std::mem::size_of::<T>() as u32, max_entries);
+        let new_map_fd = match new_map {
+            Ok(fd) => {fd},
+            Err(e) => {
+                return Err(e);
+            }
+        };
         let map = Map {
             name: map_name.clone(),
-            fd: new_map,
+            fd: new_map_fd,
             map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_ARRAY),
             map_config_size: std::mem::size_of::<MapConfig>(),
             loaded: false
         };
-        return ArrayMap::<T> {base: map, _t: PhantomData};
+        return Ok(ArrayMap::<T> {base: map, _t: PhantomData});
     }
 }
 
@@ -383,9 +389,14 @@ impl<T> Drop for ArrayMap<T> {
 mod map_tests {
     use crate::maps::process_cpu_string;
     use crate::maps::ArrayMap;
-    use std::os::raw::{c_uint};
     use crate::maps::RWMap;
-
+    
+    /// Doing the rough equivalent of time(NULL);
+    fn time_null() -> u64 {
+        let start = std::time::SystemTime::now();
+        let seed_time = start.duration_since(std::time::UNIX_EPOCH).expect("Time is strange");
+        return seed_time.as_millis() as u64;
+    }
 
     #[test]
     fn test_cpu_formatter() {
@@ -402,8 +413,17 @@ mod map_tests {
 
     #[test]
     fn test_map_array() {
-        let map = ArrayMap::<c_uint>::new(&String::from("mymap"), 4, 10);
-        let _ = map.write(0, 5);
-        assert_eq!(5, map.read(0).unwrap());
+        
+        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), 10).unwrap();
+        
+        // Give it some "randomness"
+        let nums: Vec<u64> = (0..10).map(|v| (v * time_null() + 71) % 100).collect();
+        
+        for i in 1..10 {
+            let _ = map.write(i, nums[i as usize]);
+        }
+        for i in 1..10 {
+            assert_eq!(nums[i as usize], map.read(i).unwrap());
+        }
     }
 }
