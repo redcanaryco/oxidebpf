@@ -13,7 +13,7 @@ use crate::bpf::constant::bpf_cmd::{
 use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
 
-type BpfMapType = u32;
+pub type BpfMapType = u32;
 
 #[cfg(not(LOG_BUF = "off"))]
 lazy_static! {

@@ -33,6 +33,7 @@ pub enum OxidebpfError {
     MultipleErrors(Vec<OxidebpfError>),
     UncaughtMountNsError,
     BpfProgLoadError((Box<OxidebpfError>, String)),
+    MapKeyNotFound,
 }
 
 impl std::fmt::Display for OxidebpfError {

@@ -14,8 +14,8 @@ pub(crate) mod syscall;
 pub(crate) struct MapConfig {
     // Minimum functionality set
     pub(crate) map_type: c_uint,
-    key_size: c_uint,
-    value_size: c_uint,
+    key_size: c_uint, // size of key in bytes
+    value_size: c_uint, // size of value in bytes
     max_entries: c_uint,
     // Optionals as of 5.12.7
     map_flags: c_uint,
@@ -37,6 +37,15 @@ impl From<MapDefinition> for MapConfig {
             value_size: def.value_size,
             max_entries: def.max_entries,
             map_flags: def.map_flags,
+            ..Default::default()
+        }
+    }
+}
+
+impl MapConfig {
+    pub fn new(map_type: c_uint) -> MapConfig {
+        Self {
+            map_type: map_type,
             ..Default::default()
         }
     }

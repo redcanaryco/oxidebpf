@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use nix::errno::errno;
 
 use crate::bpf::MapConfig;
+use crate::bpf::syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem};
+use crate::bpf::constant::{bpf_map_type};
 use crate::error::OxidebpfError;
 use crate::fmt;
 use crate::perf::constant::perf_event_type;
@@ -168,16 +170,16 @@ pub struct ArrayMap<T> {
 }
 
 pub struct Map {
-    name: String,
-    fd: RawFd,
-    map_config: MapConfig,
-    map_config_size: usize,
-    loaded: bool,
+    name: String, // The name of the map
+    fd: RawFd, // The file descriptor that represents the map
+    map_config: MapConfig, // The first struct in the bpf_attr union
+    map_config_size: usize, // The size of the map_config field in bytes
+    loaded: bool, // Whether or not the map has been loaded
 }
 
 pub trait RWMap<T> {
-    fn read(&self) -> Result<T, OxidebpfError>;
-    fn write(&self) -> Result<(), OxidebpfError>;
+    fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
+    fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
 }
 
 pub trait PerCpu {
@@ -324,18 +326,37 @@ impl PerCpu for PerfMap {
     }
 }
 impl<T> ArrayMap<T> {
-    pub fn new() -> ArrayMap<T> {
-        unimplemented!()
+    pub fn new(map_name: &String, value_size: c_uint, max_entries: u32,) -> ArrayMap<T> {
+        // Manpages say that key size must be 4 bytes for this type
+        let new_map = bpf_map_create(bpf_map_type::BPF_MAP_TYPE_ARRAY, 4, value_size, max_entries).unwrap();
+        let map = Map {
+            name: map_name.clone(),
+            fd: new_map,
+            map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_ARRAY),
+            map_config_size: std::mem::size_of::<MapConfig>(),
+            loaded: false
+        };
+        return ArrayMap::<T> {base: map, _t: PhantomData};
     }
 }
 
 impl<T> RWMap<T> for ArrayMap<T> {
-    fn read(&self) -> Result<T, OxidebpfError> {
-        unimplemented!()
+    fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
+        // bpf_lookup_elem(self.base.fd, idx, buf)
+        let _e = match bpf_map_lookup_elem(self.base.fd, key) {
+            Ok(elem) => {
+                return Ok(elem);
+            },
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     }
 
-    fn write(&self) -> Result<(), OxidebpfError> {
-        unimplemented!()
+    fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
+        // bpf_update_elem(self.base.fd, idx, val);
+        return bpf_map_update_elem(self.base.fd, key, value);
     }
 }
 
