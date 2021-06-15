@@ -373,13 +373,19 @@ impl Drop for PerfMap {
 
 impl<T> Drop for ArrayMap<T> {
     fn drop(&mut self) {
-        todo!()
+        unsafe {
+            libc::close(self.base.fd);
+        }
     }
 }
 
 #[cfg(test)]
 mod map_tests {
     use crate::maps::process_cpu_string;
+    use crate::maps::ArrayMap;
+    use std::os::raw::{c_uint};
+    use crate::maps::RWMap;
+
 
     #[test]
     fn test_cpu_formatter() {
@@ -392,5 +398,12 @@ mod map_tests {
             vec![0, 3, 4, 5, 8],
             process_cpu_string("0,3-5,8".to_string()).unwrap()
         );
+    }
+
+    #[test]
+    fn test_map_array() {
+        let map = ArrayMap::<c_uint>::new(&String::from("mymap"), 4, 10);
+        let _ = map.write(0, 5);
+        assert_eq!(5, map.read(0).unwrap());
     }
 }
