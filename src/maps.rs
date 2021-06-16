@@ -356,7 +356,7 @@ impl<T> RWMap<T> for ArrayMap<T> {
         if self.base.fd <= 0 {
             return Err(OxidebpfError::MapNotLoaded);
         }
-        return Ok(bpf_map_lookup_elem(self.base.fd, key)?);
+        return bpf_map_lookup_elem(self.base.fd, key);
     }
 
     fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
