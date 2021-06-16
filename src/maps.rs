@@ -435,7 +435,6 @@ mod map_tests {
 
         // Give it some "randomness"
         let nums: Vec<u64> = (1..array_size+1).map(|v| (v * time_null() + 71) % 128).collect();
-        println!("Nums1: {:?}", nums);
 
         // Write 
         for (idx, num) in nums.iter().enumerate() {
@@ -450,7 +449,6 @@ mod map_tests {
 
         // Updates the entries and retrieves them again
         let nums: Vec<u64> = nums.iter().map(|v| (v * time_null() + 71) % 128).collect();
-        println!("Nums2: {:?}", nums);
         for (idx, num) in nums.iter().enumerate() {
             let _ = map.write(idx as u32, *num);
         }
