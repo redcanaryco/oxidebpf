@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use nix::errno::errno;
 
-use crate::bpf::MapConfig;
+use crate::bpf::constant::bpf_map_type;
 use crate::bpf::syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem};
-use crate::bpf::constant::{bpf_map_type};
+use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
 use crate::fmt;
 use crate::perf::constant::perf_event_type;
@@ -170,11 +170,11 @@ pub struct ArrayMap<T> {
 }
 
 pub struct Map {
-    name: String, // The name of the map
-    fd: RawFd, // The file descriptor that represents the map
-    map_config: MapConfig, // The first struct in the bpf_attr union
+    name: String,           // The name of the map
+    fd: RawFd,              // The file descriptor that represents the map
+    map_config: MapConfig,  // The first struct in the bpf_attr union
     map_config_size: usize, // The size of the map_config field in bytes
-    loaded: bool, // Whether or not the map has been loaded
+    loaded: bool,           // Whether or not the map has been loaded
 }
 
 pub trait RWMap<T> {
@@ -326,11 +326,16 @@ impl PerCpu for PerfMap {
     }
 }
 impl<T> ArrayMap<T> {
-    pub fn new(map_name: &String, max_entries: u32,) -> Result<ArrayMap<T>, OxidebpfError> {
+    pub fn new(map_name: &String, max_entries: u32) -> Result<ArrayMap<T>, OxidebpfError> {
         // Manpages say that key size must be 4 bytes for this type
-        let new_map = bpf_map_create(bpf_map_type::BPF_MAP_TYPE_ARRAY, 4, std::mem::size_of::<T>() as u32, max_entries);
+        let new_map = bpf_map_create(
+            bpf_map_type::BPF_MAP_TYPE_ARRAY,
+            4,
+            std::mem::size_of::<T>() as u32,
+            max_entries,
+        );
         let new_map_fd = match new_map {
-            Ok(fd) => {fd},
+            Ok(fd) => fd,
             Err(e) => {
                 return Err(e);
             }
@@ -340,9 +345,12 @@ impl<T> ArrayMap<T> {
             fd: new_map_fd,
             map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_ARRAY),
             map_config_size: std::mem::size_of::<MapConfig>(),
-            loaded: false
+            loaded: false,
         };
-        return Ok(ArrayMap::<T> {base: map, _t: PhantomData});
+        return Ok(ArrayMap::<T> {
+            base: map,
+            _t: PhantomData,
+        });
     }
 }
 
@@ -352,12 +360,11 @@ impl<T> RWMap<T> for ArrayMap<T> {
         let _e = match bpf_map_lookup_elem(self.base.fd, key) {
             Ok(elem) => {
                 return Ok(elem);
-            },
+            }
             Err(error) => {
                 return Err(error);
             }
         };
-
     }
 
     fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
@@ -390,11 +397,13 @@ mod map_tests {
     use crate::maps::process_cpu_string;
     use crate::maps::ArrayMap;
     use crate::maps::RWMap;
-    
+
     /// Doing the rough equivalent of time(NULL);
     fn time_null() -> u64 {
         let start = std::time::SystemTime::now();
-        let seed_time = start.duration_since(std::time::UNIX_EPOCH).expect("Time is strange");
+        let seed_time = start
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time is strange");
         return seed_time.as_millis() as u64;
     }
 
@@ -413,17 +422,20 @@ mod map_tests {
 
     #[test]
     fn test_map_array() {
-        
-        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), 10).expect("Failed to create new map");
-        
+        let map: ArrayMap<u64> =
+            ArrayMap::new(&String::from("mymap"), 10).expect("Failed to create new map");
+
         // Give it some "randomness"
         let nums: Vec<u64> = (0..10).map(|v| (v * time_null() + 71) % 128).collect();
 
-        for i in 1..10 {
-            let _ = map.write(i, nums[i as usize]);
+        for (idx, num) in nums.iter().enumerate() {
+            let _ = map.write(idx as u32, *num);
         }
-        for i in 1..10 {
-            assert_eq!(nums[i as usize], map.read(i).expect("Failed to read value from map"));
+        for (idx, num) in nums.iter().enumerate() {
+            assert_eq!(
+                *num,
+                map.read(idx as u32).expect("Failed to read value from map")
+            );
         }
     }
 }

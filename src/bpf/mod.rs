@@ -14,7 +14,7 @@ pub(crate) mod syscall;
 pub(crate) struct MapConfig {
     // Minimum functionality set
     pub(crate) map_type: c_uint,
-    key_size: c_uint, // size of key in bytes
+    key_size: c_uint,   // size of key in bytes
     value_size: c_uint, // size of value in bytes
     max_entries: c_uint,
     // Optionals as of 5.12.7
