@@ -392,13 +392,11 @@ impl<T> Drop for ArrayMap<T> {
 
 #[cfg(test)]
 mod map_tests {
+    use crate::error::OxidebpfError;
     use crate::maps::process_cpu_string;
     use crate::maps::ArrayMap;
     use crate::maps::RWMap;
-    use crate::error::OxidebpfError;
     use nix::errno::Errno;
-
-
 
     /// Doing the rough equivalent of C's time(NULL);
     fn time_null() -> u64 {
@@ -423,20 +421,22 @@ mod map_tests {
     }
 
     /// Test the normal behavior of the array map type
-    /// 
+    ///
     /// This test simply writes to all the entries in the map and then tries to read
     /// them back. If it successfully reads the values back from the map then it
     /// is considered passing
     #[test]
     fn test_map_array() {
         let array_size: u64 = 100;
-        let map: ArrayMap<u64> =
-            ArrayMap::new(&String::from("mymap"), array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
+            .expect("Failed to create new map");
 
         // Give it some "randomness"
-        let nums: Vec<u64> = (1..array_size+1).map(|v| (v * time_null() + 71) % 128).collect();
+        let nums: Vec<u64> = (1..array_size + 1)
+            .map(|v| (v * time_null() + 71) % 128)
+            .collect();
 
-        // Write 
+        // Write
         for (idx, num) in nums.iter().enumerate() {
             let _ = map.write(idx as u32, *num);
         }
@@ -464,11 +464,13 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> =
-            ArrayMap::new(&String::from("mymap"), array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
+            .expect("Failed to create new map");
 
         // Give it some "randomness"
-        let nums: Vec<u64> = (0..array_size).map(|v| (v * time_null() + 71) % 128).collect();
+        let nums: Vec<u64> = (0..array_size)
+            .map(|v| (v * time_null() + 71) % 128)
+            .collect();
 
         for (idx, num) in nums.iter().enumerate() {
             let _ = map.write(idx as u32, *num);
@@ -481,11 +483,13 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_write_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> =
-            ArrayMap::new(&String::from("mymap"), array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
+            .expect("Failed to create new map");
 
         // Give it some "randomness"
-        let nums: Vec<u64> = (0..array_size).map(|v| (v * time_null() + 71) % 128).collect();
+        let nums: Vec<u64> = (0..array_size)
+            .map(|v| (v * time_null() + 71) % 128)
+            .collect();
 
         for (idx, num) in nums.iter().enumerate() {
             let _ = map.write(idx as u32, *num);
@@ -504,20 +508,23 @@ mod map_tests {
             durp0: u64,
             durp1: String,
             durp2: f64,
-            durp3: bool
+            durp3: bool,
         }
 
         // Create the map and initialize a vector of TestStructure
         let array_size: u64 = 10;
         let map: ArrayMap<&TestStructure> =
-            ArrayMap::new(&String::from("mymap"), array_size as u32).expect("Failed to create new map");
+            ArrayMap::new(&String::from("mymap"), array_size as u32)
+                .expect("Failed to create new map");
 
-        let data: Vec<TestStructure> = (0..array_size).map(|v| TestStructure {
-            durp0: v,
-            durp1: format!("Durp {}", v),
-            durp2: 0.1234,
-            durp3: v % 2 == 0
-        }).collect();
+        let data: Vec<TestStructure> = (0..array_size)
+            .map(|v| TestStructure {
+                durp0: v,
+                durp1: format!("Durp {}", v),
+                durp2: 0.1234,
+                durp3: v % 2 == 0,
+            })
+            .collect();
 
         // Write the test structures to the map
         for (i, tmp) in data.iter().enumerate() {
