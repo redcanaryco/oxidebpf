@@ -164,7 +164,6 @@ pub struct PerfMap {
 }
 
 pub struct ArrayMap<T> {
-    // TODO: read/write functions
     base: Map,
     _t: PhantomData<T>,
 }
@@ -326,7 +325,21 @@ impl PerCpu for PerfMap {
     }
 }
 impl<T> ArrayMap<T> {
-    pub fn new(map_name: &String, max_entries: u32) -> Result<ArrayMap<T>, OxidebpfError> {
+    /// Create a new ArrayMap
+    ///
+    /// Calling new will create a new BPF_MAP_TYPE_ARRAY map. It stores some meta data
+    /// to track it. The array map supports read and write operations to access the
+    /// members of the map
+    ///
+    /// NOTE: `T` needs to match exactly (e.g., with `#[repr(C)]`) with the struct/type used
+    /// by any other bpf program that might be sharing the map
+    ///
+    /// # Examples
+    /// ```
+    /// let map: oxidebpf::maps::ArrayMap<u64> = oxidebpf::maps::ArrayMap::new("mymap", 5 as u32)
+    ///     .expect("Failed to create new map");
+    /// ```
+    pub fn new(map_name: &str, max_entries: u32) -> Result<ArrayMap<T>, OxidebpfError> {
         // Manpages say that key size must be 4 bytes for BPF_MAP_TYPE_ARRAY
         let new_map_fd = bpf_map_create(
             bpf_map_type::BPF_MAP_TYPE_ARRAY,
@@ -335,20 +348,36 @@ impl<T> ArrayMap<T> {
             max_entries,
         )?;
         let map = Map {
-            name: map_name.clone(),
+            name: map_name.to_string(),
             fd: new_map_fd,
             map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_ARRAY),
             map_config_size: std::mem::size_of::<MapConfig>(),
             loaded: true,
         };
-        return Ok(ArrayMap::<T> {
+        Ok(ArrayMap::<T> {
             base: map,
             _t: PhantomData,
-        });
+        })
     }
 }
 
 impl<T> RWMap<T> for ArrayMap<T> {
+    /// Reads an index from a map of type BPF_MAP_TYPE_ARRAY
+    ///
+    /// Initiates a read from `key`. Read verifies that the map has been initialized.
+    /// The value returned will be of the same type that was used when the ArrayMap
+    /// was created
+    ///
+    /// # Example
+    /// ```
+    /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
+    ///     .expect("Failed to create new map");
+    /// let _ = map.write(0, 12345);
+    /// assert_eq!(
+    ///     12345,
+    ///     map.read(0).expect("Failed to read value from map")
+    /// );
+    /// ```
     fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
@@ -356,9 +385,24 @@ impl<T> RWMap<T> for ArrayMap<T> {
         if self.base.fd <= 0 {
             return Err(OxidebpfError::MapNotLoaded);
         }
-        return bpf_map_lookup_elem(self.base.fd, key);
+        bpf_map_lookup_elem(self.base.fd, key)
     }
 
+    /// Writes an index to and index of a map of type BPF_MAP_TYPE_ARRAY
+    ///
+    /// Initiates a write to `key` of `value`. The value needs to match the array
+    /// type that was used when the map was created
+    ///
+    /// # Example
+    /// ```
+    /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
+    ///     .expect("Failed to create new map");
+    /// let _ = map.write(0, 12345);
+    /// assert_eq!(
+    ///     12345,
+    ///     map.read(0).expect("Failed to read value from map")
+    /// );
+    /// ```
     fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
@@ -366,7 +410,7 @@ impl<T> RWMap<T> for ArrayMap<T> {
         if self.base.fd <= 0 {
             return Err(OxidebpfError::MapNotLoaded);
         }
-        return bpf_map_update_elem(self.base.fd, key, value);
+        bpf_map_update_elem(self.base.fd, key, value)
     }
 }
 
@@ -398,7 +442,7 @@ mod map_tests {
     use crate::maps::RWMap;
     use nix::errno::Errno;
 
-    /// Doing the rough equivalent of C's time(NULL);
+    // Doing the rough equivalent of C's time(NULL);
     fn time_null() -> u64 {
         let start = std::time::SystemTime::now();
         let seed_time = start
@@ -420,16 +464,16 @@ mod map_tests {
         );
     }
 
-    /// Test the normal behavior of the array map type
-    ///
-    /// This test simply writes to all the entries in the map and then tries to read
-    /// them back. If it successfully reads the values back from the map then it
-    /// is considered passing
+    // Test the normal behavior of the array map type
+    //
+    // This test simply writes to all the entries in the map and then tries to read
+    // them back. If it successfully reads the values back from the map then it
+    // is considered passing
     #[test]
     fn test_map_array() {
         let array_size: u64 = 100;
-        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
-            .expect("Failed to create new map");
+        let map: ArrayMap<u64> =
+            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
 
         // Give it some "randomness"
         let nums: Vec<u64> = (1..array_size + 1)
@@ -460,12 +504,12 @@ mod map_tests {
         }
     }
 
-    /// Tests a trying to read an element from outside the bounds of the array
+    // Tests a trying to read an element from outside the bounds of the array
     #[test]
     fn test_map_array_bad_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
-            .expect("Failed to create new map");
+        let map: ArrayMap<u64> =
+            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -483,8 +527,8 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_write_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), array_size as u32)
-            .expect("Failed to create new map");
+        let map: ArrayMap<u64> =
+            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -500,7 +544,7 @@ mod map_tests {
         assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::E2BIG));
     }
 
-    /// Test storing a more complex structure
+    // Test storing a more complex structure
     #[test]
     fn test_map_array_complex_structure() {
         // A made up structure for this test
@@ -514,8 +558,7 @@ mod map_tests {
         // Create the map and initialize a vector of TestStructure
         let array_size: u64 = 10;
         let map: ArrayMap<&TestStructure> =
-            ArrayMap::new(&String::from("mymap"), array_size as u32)
-                .expect("Failed to create new map");
+            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
 
         let data: Vec<TestStructure> = (0..array_size)
             .map(|v| TestStructure {

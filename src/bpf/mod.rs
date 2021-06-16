@@ -45,7 +45,7 @@ impl From<MapDefinition> for MapConfig {
 impl MapConfig {
     pub fn new(map_type: c_uint) -> MapConfig {
         Self {
-            map_type: map_type,
+            map_type,
             ..Default::default()
         }
     }
