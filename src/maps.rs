@@ -414,16 +414,16 @@ mod map_tests {
     #[test]
     fn test_map_array() {
         
-        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), 10).unwrap();
+        let map: ArrayMap<u64> = ArrayMap::new(&String::from("mymap"), 10).expect("Failed to create new map");
         
         // Give it some "randomness"
-        let nums: Vec<u64> = (0..10).map(|v| (v * time_null() + 71) % 100).collect();
-        
+        let nums: Vec<u64> = (0..10).map(|v| (v * time_null() + 71) % 128).collect();
+
         for i in 1..10 {
             let _ = map.write(i, nums[i as usize]);
         }
         for i in 1..10 {
-            assert_eq!(nums[i as usize], map.read(i).unwrap());
+            assert_eq!(nums[i as usize], map.read(i).expect("Failed to read value from map"));
         }
     }
 }
