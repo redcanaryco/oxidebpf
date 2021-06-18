@@ -26,6 +26,7 @@ use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
 use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
+pub use crate::maps::{ArrayMap, RWMap};
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crate::perf::syscall::{

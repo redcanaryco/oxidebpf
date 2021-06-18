@@ -336,7 +336,7 @@ impl<T> ArrayMap<T> {
     ///
     /// # Examples
     /// ```
-    /// let map: oxidebpf::maps::ArrayMap<u64> = oxidebpf::maps::ArrayMap::new("mymap", 5 as u32)
+    /// let map: oxidebpf::ArrayMap<u64> = oxidebpf::ArrayMap::new("mymap", 5 as u32)
     ///     .expect("Failed to create new map");
     /// ```
     pub fn new(map_name: &str, max_entries: u32) -> Result<ArrayMap<T>, OxidebpfError> {
@@ -370,6 +370,8 @@ impl<T> RWMap<T> for ArrayMap<T> {
     ///
     /// # Example
     /// ```
+    /// use oxidebpf::{ArrayMap, RWMap};
+    ///
     /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
     ///     .expect("Failed to create new map");
     /// let _ = map.write(0, 12345);
@@ -395,6 +397,8 @@ impl<T> RWMap<T> for ArrayMap<T> {
     ///
     /// # Example
     /// ```
+    /// use oxidebpf::{ArrayMap, RWMap};
+    ///
     /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
     ///     .expect("Failed to create new map");
     /// let _ = map.write(0, 12345);
