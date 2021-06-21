@@ -1,7 +1,7 @@
 [package]
 name = "oxidebpf"
 version = "0.1.0"
-license = "MIT"
+license = "BSD-3-Clause"
 authors = [
     "Carl Petty <carl.petty@redcanary.com>",
     "Brandon Jackson <brandon.jackson@redcanary.com>",
