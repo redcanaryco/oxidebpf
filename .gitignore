@@ -1,0 +1,6 @@
+**/.DS_Store
+/target
+Cargo.lock
+.idea
+.vagrant
+test_program_*

@@ -1,0 +1,32 @@
+[package]
+name = "oxidebpf"
+version = "0.1.0"
+license = "MIT"
+authors = [
+    "Carl Petty <carl.petty@redcanary.com>",
+    "Brandon Jackson <brandon.jackson@redcanary.com>",
+    "Rafael Ortiz <rafael.ortiz@redcanary.com>",
+    "Dave Bogle <dave.bogle@redcanary.com>",
+]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+libc = "0.2.94"
+goblin = "0.4.0"
+nix = "0.20.0"
+itertools = "0.10.0"
+crossbeam-channel = "0.5.1"
+lazy_static = "1.4.0"
+uuid = { version = "0.8.2", features = ["v4"] }
+mio = { version="0.7.11", features=["os-poll", "os-ext"] }
+slog = "2.7.0"
+slog-stdlog = "4.1.0"
+slog-term = "2.8.0"
+slog-async = "2.6.0"
+
+[dev-dependencies]
+memmap = "0.7.0"
+scopeguard = "1.1.0"
+ctrlc = "3.1.9"
