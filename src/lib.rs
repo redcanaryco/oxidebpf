@@ -28,8 +28,6 @@ use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use nix::errno::Errno;
 use slog::{crit, o, Drain, Logger};
-use slog_stdlog;
-use slog_term;
 
 use crate::blueprint::ProgramObject;
 pub use crate::blueprint::{ProgramBlueprint, SectionType};
@@ -46,6 +44,7 @@ use crate::perf::syscall::{
 };
 use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
 use lazy_static::lazy_static;
+use slog_term::TermDecorator;
 
 mod blueprint;
 mod bpf;
@@ -60,16 +59,18 @@ pub struct Oxidebpf {
 impl Oxidebpf {
     pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
         Oxidebpf {
-            logger: logger.into().unwrap_or(slog::Logger::root(
-                slog_async::Async::new(
-                    slog_term::FullFormat::new(slog_term::TermDecorator::new().build())
-                        .build()
-                        .fuse(),
+            logger: logger.into().unwrap_or_else(|| {
+                slog::Logger::root(
+                    slog_async::Async::new(
+                        slog_term::FullFormat::new(TermDecorator::new().build())
+                            .build()
+                            .fuse(),
+                    )
+                    .build()
+                    .fuse(),
+                    o!(),
                 )
-                .build()
-                .fuse(),
-                o!(),
-            )),
+            }),
         }
     }
 }
@@ -525,7 +526,11 @@ impl ProgramVersion<'_> {
                         }
                     }
                 })
-                .map_err(|_e| OxidebpfError::ThreadPollingError);
+                .map_err(|_e| OxidebpfError::ThreadPollingError)
+                .unwrap_or_else(|e| {
+                    crit!(LOGGER, "error in thread polling: {:?}", e);
+                    panic!()
+                });
         })
         .map_err(|_| OxidebpfError::ThreadPollingError)?;
         Ok(())
@@ -701,12 +706,9 @@ impl<'a> Drop for ProgramVersion<'a> {
         for line in up_reader.lines() {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
-                match up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    Err(e) => {
-                        crit!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
-                        return;
-                    }
-                    _ => {}
+                if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
+                    crit!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
+                    return;
                 }
             }
         }
@@ -728,12 +730,9 @@ impl<'a> Drop for ProgramVersion<'a> {
         for line in kp_reader.lines() {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
-                match kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    Err(e) => {
-                        crit!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
-                        return;
-                    }
-                    _ => {}
+                if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
+                    crit!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
+                    return;
                 }
             }
         }
@@ -745,8 +744,6 @@ mod program_tests {
     use std::path::PathBuf;
 
     use crate::blueprint::ProgramBlueprint;
-    use crate::maps::PerfMap;
-    use crate::perf::PerfEventAttr;
     use crate::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
 
