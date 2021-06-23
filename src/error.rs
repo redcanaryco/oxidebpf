@@ -34,6 +34,7 @@ pub enum OxidebpfError {
     UncaughtMountNsError,
     BpfProgLoadError((Box<OxidebpfError>, String)),
     MapKeyNotFound,
+    MapValueSizeMismatch,
 }
 
 impl std::fmt::Display for OxidebpfError {

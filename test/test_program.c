@@ -27,16 +27,16 @@ struct map_t __test_map __attribute__((section("maps/test_map"), used)) = {
     1024};
 
 struct map_t __map_combined_section1 __attribute__((section("maps"), used)) = {
-        BPF_MAP_TYPE_ARRAY,
-        sizeof(u32),
-        8,
-        1024};
+    BPF_MAP_TYPE_ARRAY,
+    sizeof(u32),
+    8,
+    1024};
 
 struct map_t __map_combined_section2 __attribute__((section("maps"), used)) = {
-        BPF_MAP_TYPE_ARRAY,
-        sizeof(u32),
-        12,
-        1024};
+    BPF_MAP_TYPE_ARRAY,
+    sizeof(u32),
+    12,
+    1024};
 
 __attribute__((section("kprobe/test_program"), used)) int test_program(struct pt_regs *regs)
 {

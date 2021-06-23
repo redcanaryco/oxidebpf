@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
@@ -163,13 +162,14 @@ pub struct PerfMap {
     ev_name: String,
 }
 
-pub struct ArrayMap<T> {
-    base: Map,
-    _t: PhantomData<T>,
+#[derive(Clone, Debug)]
+pub struct ArrayMap {
+    pub base: Map,
 }
 
+#[derive(Clone, Debug)]
 pub struct Map {
-    name: String,           // The name of the map
+    pub name: String,       // The name of the map
     fd: RawFd,              // The file descriptor that represents the map
     map_config: MapConfig,  // The first struct in the bpf_attr union
     map_config_size: usize, // The size of the map_config field in bytes
@@ -324,7 +324,8 @@ impl PerCpu for PerfMap {
         self.cpuid
     }
 }
-impl<T> ArrayMap<T> {
+
+impl ArrayMap {
     /// Create a new ArrayMap
     ///
     /// Calling new will create a new BPF_MAP_TYPE_ARRAY map. It stores some meta data
@@ -336,32 +337,60 @@ impl<T> ArrayMap<T> {
     ///
     /// # Examples
     /// ```
-    /// let map: oxidebpf::ArrayMap<u64> = oxidebpf::ArrayMap::new("mymap", 5 as u32)
-    ///     .expect("Failed to create new map");
+    /// use oxidebpf::ArrayMap;
+    /// let map: ArrayMap = ArrayMap::new(
+    ///    "mymap",
+    ///    std::mem::size_of::<u64>() as u32,
+    ///    1024,
+    /// ).expect("Failed to create map");
     /// ```
-    pub fn new(map_name: &str, max_entries: u32) -> Result<ArrayMap<T>, OxidebpfError> {
+    pub fn new(
+        map_name: &str,
+        value_size: u32,
+        max_entries: u32,
+    ) -> Result<ArrayMap, OxidebpfError> {
         // Manpages say that key size must be 4 bytes for BPF_MAP_TYPE_ARRAY
-        let new_map_fd = bpf_map_create(
+        let fd = bpf_map_create(
             bpf_map_type::BPF_MAP_TYPE_ARRAY,
             4,
-            std::mem::size_of::<T>() as c_uint,
+            value_size as c_uint,
             max_entries,
         )?;
         let map = Map {
             name: map_name.to_string(),
-            fd: new_map_fd,
-            map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_ARRAY),
+            fd,
+            map_config: MapConfig::new(
+                bpf_map_type::BPF_MAP_TYPE_ARRAY,
+                4,
+                value_size,
+                max_entries,
+            ),
             map_config_size: std::mem::size_of::<MapConfig>(),
             loaded: true,
         };
-        Ok(ArrayMap::<T> {
-            base: map,
-            _t: PhantomData,
-        })
+        Ok(ArrayMap { base: map })
+    }
+
+    pub(crate) fn set_fd(&mut self, fd: RawFd) {
+        self.base.fd = fd;
+    }
+
+    pub(crate) fn get_fd(&self) -> &RawFd {
+        &self.base.fd
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.base.loaded
     }
 }
 
-impl<T> RWMap<T> for ArrayMap<T> {
+impl fmt::Display for ArrayMap {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Name: {}, loaded: {}", self.base.name, self.base.loaded)
+    }
+}
+
+impl<T> RWMap<T> for ArrayMap {
     /// Reads an index from a map of type BPF_MAP_TYPE_ARRAY
     ///
     /// Initiates a read from `key`. Read verifies that the map has been initialized.
@@ -372,11 +401,14 @@ impl<T> RWMap<T> for ArrayMap<T> {
     /// ```
     /// use oxidebpf::{ArrayMap, RWMap};
     ///
-    /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
-    ///     .expect("Failed to create new map");
-    /// let _ = map.write(0, 12345);
+    /// let map: ArrayMap = ArrayMap::new(
+    ///    "mymap",
+    ///    std::mem::size_of::<u64>() as u32,
+    ///    1024,
+    /// ).expect("Failed to create map");
+    /// let _ = map.write(0, 12345u64);
     /// assert_eq!(
-    ///     12345,
+    ///     12345u64,
     ///     map.read(0).expect("Failed to read value from map")
     /// );
     /// ```
@@ -384,8 +416,11 @@ impl<T> RWMap<T> for ArrayMap<T> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
-        if self.base.fd <= 0 {
+        if self.base.fd < 0 {
             return Err(OxidebpfError::MapNotLoaded);
+        }
+        if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            return Err(OxidebpfError::MapValueSizeMismatch);
         }
         bpf_map_lookup_elem(self.base.fd, key)
     }
@@ -399,11 +434,14 @@ impl<T> RWMap<T> for ArrayMap<T> {
     /// ```
     /// use oxidebpf::{ArrayMap, RWMap};
     ///
-    /// let map: ArrayMap<u64> = ArrayMap::new("mymap", 5 as u32)
-    ///     .expect("Failed to create new map");
-    /// let _ = map.write(0, 12345);
+    /// let map: ArrayMap = ArrayMap::new(
+    ///    "mymap",
+    ///    std::mem::size_of::<u64>() as u32,
+    ///    1024,
+    /// ).expect("Failed to create map");
+    /// let _ = map.write(0, 12345u64);
     /// assert_eq!(
-    ///     12345,
+    ///     12345u64,
     ///     map.read(0).expect("Failed to read value from map")
     /// );
     /// ```
@@ -411,8 +449,13 @@ impl<T> RWMap<T> for ArrayMap<T> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
-        if self.base.fd <= 0 {
+        if self.base.fd < 0 {
             return Err(OxidebpfError::MapNotLoaded);
+        }
+
+        // Try and verify that size of the value type matches the size of the value field in the map
+        if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            return Err(OxidebpfError::MapValueSizeMismatch);
         }
         bpf_map_update_elem(self.base.fd, key, value)
     }
@@ -429,7 +472,7 @@ impl Drop for PerfMap {
     }
 }
 
-impl<T> Drop for ArrayMap<T> {
+impl Drop for ArrayMap {
     fn drop(&mut self) {
         self.base.loaded = false;
         unsafe {
@@ -452,7 +495,7 @@ mod map_tests {
         let seed_time = start
             .duration_since(std::time::UNIX_EPOCH)
             .expect("All time is broken!!");
-        return seed_time.as_millis() as u64;
+        seed_time.as_millis() as u64
     }
 
     #[test]
@@ -476,11 +519,15 @@ mod map_tests {
     #[test]
     fn test_map_array() {
         let array_size: u64 = 100;
-        let map: ArrayMap<u64> =
-            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap = ArrayMap::new(
+            "mymap",
+            std::mem::size_of::<u64>() as u32,
+            array_size as u32,
+        )
+        .expect("Failed to create new map");
 
         // Give it some "randomness"
-        let nums: Vec<u64> = (1..array_size + 1)
+        let nums: Vec<u64> = (0..array_size)
             .map(|v| (v * time_null() + 71) % 128)
             .collect();
 
@@ -512,8 +559,12 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> =
-            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap = ArrayMap::new(
+            "mymap",
+            std::mem::size_of::<u64>() as u32,
+            array_size as u32,
+        )
+        .expect("Failed to create new map");
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -523,16 +574,23 @@ mod map_tests {
         for (idx, num) in nums.iter().enumerate() {
             let _ = map.write(idx as u32, *num);
         }
-        let should_fail = map.read(100).err().unwrap();
-        assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::ENOENT));
+        let should_fail: Result<u64, OxidebpfError> = map.read(100);
+        assert_eq!(
+            should_fail.err().unwrap(),
+            OxidebpfError::LinuxError(Errno::ENOENT)
+        );
     }
 
-    /// Test writing outside the size of the array
+    // Test writing outside the size of the array
     #[test]
     fn test_map_array_bad_write_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap<u64> =
-            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap = ArrayMap::new(
+            "mymap",
+            std::mem::size_of::<u64>() as u32,
+            array_size as u32,
+        )
+        .expect("Failed to create new map");
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -544,7 +602,7 @@ mod map_tests {
         }
 
         // Should return E2BIG
-        let should_fail = map.write(100, 12345).err().unwrap();
+        let should_fail = map.write(100, 12345u64).err().unwrap();
         assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::E2BIG));
     }
 
@@ -561,8 +619,12 @@ mod map_tests {
 
         // Create the map and initialize a vector of TestStructure
         let array_size: u64 = 10;
-        let map: ArrayMap<&TestStructure> =
-            ArrayMap::new("mymap", array_size as u32).expect("Failed to create new map");
+        let map: ArrayMap = ArrayMap::new(
+            "mymap",
+            std::mem::size_of::<u64>() as u32,
+            array_size as u32,
+        )
+        .expect("Failed to create new map");
 
         let data: Vec<TestStructure> = (0..array_size)
             .map(|v| TestStructure {
@@ -580,7 +642,7 @@ mod map_tests {
 
         // Read the test structures from the map and compare with originals
         for (i, item) in data.iter().enumerate() {
-            let val = map.read(i as u32).expect("Failed to read value from array");
+            let val: &TestStructure = map.read(i as u32).expect("Failed to read value from array");
             assert_eq!(val.durp0, item.durp0);
             assert_eq!(val.durp1, item.durp1);
             assert_eq!(val.durp2, item.durp2);

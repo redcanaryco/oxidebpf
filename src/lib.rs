@@ -109,6 +109,7 @@ pub struct ProgramGroup<'a> {
     program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
     channel: Channel,
+    maps: Option<HashMap<String, ArrayMap>>,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -116,6 +117,7 @@ pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
+    maps: Option<HashMap<String, ArrayMap>>,
 }
 
 /// The description of an individual eBPF program. Note: This is _not_ the same
@@ -363,6 +365,7 @@ impl ProgramGroup<'_> {
             program_versions,
             event_buffer_size,
             channel,
+            maps: None,
         }
     }
 
@@ -408,11 +411,19 @@ impl ProgramGroup<'_> {
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
-                Ok(r) => return Ok(r),
+                Ok(r) => {
+                    self.maps = program_version.maps.clone();
+                    return Ok(r);
+                }
                 Err(e) => errors.push(e),
             };
         }
         Err(OxidebpfError::NoProgramVersionLoaded(errors))
+    }
+
+    /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
+    pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
+        self.maps.as_ref()
     }
 }
 
@@ -455,6 +466,7 @@ impl ProgramVersion<'_> {
             programs,
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
+            maps: None,
         }
     }
 
@@ -596,6 +608,41 @@ impl ProgramVersion<'_> {
 
                             perfmaps.append(&mut perfmap);
                         }
+                        bpf_map_type::BPF_MAP_TYPE_ARRAY => {
+                            // Create the new array Map
+                            match ArrayMap::new(
+                                &name.clone(),
+                                std::mem::size_of::<u32>() as u32,
+                                1024,
+                            ) {
+                                Ok(new_map) => {
+                                    // If there is no hash map for the ProgramVersion then create it
+                                    // else get a reference and add a new entry
+                                    let fd = new_map.get_fd();
+                                    self.fds.insert(*fd);
+                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    match self.maps.as_mut() {
+                                        Some(hash_map) => {
+                                            hash_map.insert(name.clone(), new_map);
+                                        }
+                                        None => {
+                                            let mut new_hash_map: HashMap<String, ArrayMap> =
+                                                HashMap::new();
+                                            new_hash_map.insert(name.clone(), new_map);
+                                            self.maps = Some(new_hash_map);
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    // Todo: How should we handle it if the map failed to be created?
+                                    println!(
+                                        "!!! Failed to create map. Aborting program load !!!: {:?}",
+                                        err
+                                    );
+                                    //return new_map;
+                                }
+                            };
+                        }
                         _ => {
                             let fd =
                                 unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
@@ -609,7 +656,6 @@ impl ProgramVersion<'_> {
                 }
             }
         }
-
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
             let fd = syscall::bpf_prog_load(
@@ -745,8 +791,7 @@ mod program_tests {
     use std::path::PathBuf;
 
     use crate::blueprint::ProgramBlueprint;
-    use crate::maps::PerfMap;
-    use crate::perf::PerfEventAttr;
+    use crate::maps::RWMap;
     use crate::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
 
@@ -773,6 +818,51 @@ mod program_tests {
         );
 
         program_group.load().expect("Could not load programs");
+    }
+
+    #[test]
+    fn test_program_group_array_maps() {
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    vec!["do_mount"],
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+            ])],
+            None,
+        );
+
+        program_group.load().expect("Could not load programs");
+        //std::thread::sleep(std::time::Duration::from_millis(1000 * 3));
+
+        match program_group.get_array_maps() {
+            Some(hash_map) => {
+                let array_map = match hash_map.get("__test_map") {
+                    Some(map) => map,
+                    None => {
+                        panic!("There should have been a map with that name")
+                    }
+                };
+                //println!("My pid is: {}", std::process::id());
+                //std::thread::sleep(std::time::Duration::from_millis(1000 * 100));
+                let val: u32 = array_map.read(0).expect("Failed to read from map");
+                // TODO: Need to figure out how to get the bpf program to actually fire
+                assert_eq!(val, 0);
+            }
+            None => {
+                panic!("Failed to get maps when they should have been present");
+            }
+        };
     }
 }
 
