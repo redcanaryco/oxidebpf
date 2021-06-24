@@ -120,6 +120,7 @@ pub struct ProgramVersion<'a> {
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
     maps: Option<HashMap<String, ArrayMap>>,
+    has_perfmaps: bool,
 }
 
 /// The description of an individual eBPF program. Note: This is _not_ the same
@@ -406,7 +407,7 @@ impl ProgramGroup<'_> {
     ///
     /// program_group.load().expect("Could not load programs");
     /// ```
-    pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
+    pub fn load(&mut self) -> Result<(), OxidebpfError> {
         let mut errors = Vec::<OxidebpfError>::new();
         for mut program_version in self.program_versions.drain(..) {
             match program_version.load_program_version(
@@ -414,14 +415,37 @@ impl ProgramGroup<'_> {
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
-                Ok(r) => {
+                Ok(()) => {
                     self.loaded_version = Some(program_version);
-                    return Ok(r);
+                    break;
                 }
                 Err(e) => errors.push(e),
             };
         }
-        Err(OxidebpfError::NoProgramVersionLoaded(errors))
+
+        self.program_versions.shrink_to_fit();
+
+        match &self.loaded_version {
+            None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Returns the receiver channel for this `ProgramGroup`, if it exists.
+    ///
+    /// This will become available when perfmaps are successfully loaded by any
+    /// `ProgramVersion`.
+    pub fn get_receiver(&self) -> Option<Receiver<PerfChannelMessage>> {
+        match &self.loaded_version {
+            None => None,
+            Some(lv) => {
+                if lv.has_perfmaps {
+                    Some(self.channel.clone().rx)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
@@ -473,6 +497,7 @@ impl ProgramVersion<'_> {
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
             maps: None,
+            has_perfmaps: false,
         }
     }
 
@@ -558,7 +583,7 @@ impl ProgramVersion<'_> {
         mut program_blueprint: ProgramBlueprint,
         channel: Channel,
         event_buffer_size: usize,
-    ) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
+    ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs
             .iter()
@@ -708,12 +733,11 @@ impl ProgramVersion<'_> {
         }
 
         // start event poller and pass back channel, if one exists
-        if perfmaps.is_empty() {
-            Ok(None)
-        } else {
+        if !perfmaps.is_empty() {
+            self.has_perfmaps = true;
             self.event_poller(perfmaps, channel.tx)?;
-            Ok(Some(channel.rx))
         }
+        Ok(())
     }
 }
 
@@ -846,6 +870,8 @@ mod program_tests {
 
         // Load the bpf program
         program_group.load().expect("Could not load programs");
+        let rx = program_group.get_receiver();
+        assert!(rx.is_none());
 
         // Get a particular array map and try and read a value from it
         match program_group.get_array_maps() {
