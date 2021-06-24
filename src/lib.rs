@@ -109,10 +109,11 @@ pub struct ProgramGroup<'a> {
     program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
     channel: Channel,
-    maps: Option<HashMap<String, ArrayMap>>,
+    loaded_version: Option<ProgramVersion<'a>>,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
+#[derive(Clone)]
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
@@ -123,6 +124,7 @@ pub struct ProgramVersion<'a> {
 /// The description of an individual eBPF program. Note: This is _not_ the same
 /// as the eBPF program itself, the actual binary is loaded from a
 /// [`ProgramBlueprint`](struct@ProgramBlueprint).
+#[derive(Clone)]
 pub struct Program<'a> {
     kind: ProgramType,
     name: &'a str,
@@ -365,7 +367,7 @@ impl ProgramGroup<'_> {
             program_versions,
             event_buffer_size,
             channel,
-            maps: None,
+            loaded_version: None,
         }
     }
 
@@ -412,7 +414,9 @@ impl ProgramGroup<'_> {
                 self.event_buffer_size,
             ) {
                 Ok(r) => {
-                    self.maps = program_version.maps.clone();
+                    // TODO: Not sure if want to/can move this instead of cloning it. I assume though
+                    // that once we have the loaded version we should only reference self.loaded_version
+                    self.loaded_version = Some(program_version.clone());
                     return Ok(r);
                 }
                 Err(e) => errors.push(e),
@@ -423,7 +427,10 @@ impl ProgramGroup<'_> {
 
     /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
     pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
-        self.maps.as_ref()
+        match &self.loaded_version {
+            Some(ver) => ver.maps.as_ref(),
+            None => None,
+        }
     }
 }
 
