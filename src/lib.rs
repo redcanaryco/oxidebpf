@@ -114,7 +114,7 @@ pub struct ProgramGroup<'a> {
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
@@ -125,7 +125,7 @@ pub struct ProgramVersion<'a> {
 /// The description of an individual eBPF program. Note: This is _not_ the same
 /// as the eBPF program itself, the actual binary is loaded from a
 /// [`ProgramBlueprint`](struct@ProgramBlueprint).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Program<'a> {
     kind: ProgramType,
     name: &'a str,
@@ -415,9 +415,8 @@ impl ProgramGroup<'_> {
                 self.event_buffer_size,
             ) {
                 Ok(r) => {
-                    // TODO: Not sure if want to/can move this instead of cloning it. I assume though
-                    // that once we have the loaded version we should only reference self.loaded_version
-                    self.loaded_version = Some(program_version.clone());
+                    let ver = std::mem::take(program_version);
+                    self.loaded_version = Some(ver);
                     return Ok(r);
                 }
                 Err(e) => errors.push(e),
@@ -624,7 +623,7 @@ impl ProgramVersion<'_> {
                             // Create the new array Map
                             match ArrayMap::new(
                                 &name.clone(),
-                                std::mem::size_of::<u32>() as u32,
+                                map.definition.value_size as u32,
                                 1024,
                             ) {
                                 Ok(new_map) => {
@@ -645,14 +644,7 @@ impl ProgramVersion<'_> {
                                         }
                                     }
                                 }
-                                Err(err) => {
-                                    // Todo: How should we handle it if the map failed to be created?
-                                    println!(
-                                        "!!! Failed to create map. Aborting program load !!!: {:?}",
-                                        err
-                                    );
-                                    //return new_map;
-                                }
+                                Err(err) => return Err(err),
                             };
                         }
                         _ => {
@@ -845,7 +837,7 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_map_update",
-                    vec!["do_mount"],
+                    vec!["__x64_sys_open", "__x64_sys_write"],
                 )
                 .syscall(true),
                 Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
@@ -865,10 +857,12 @@ mod program_tests {
                         panic!("There should have been a map with that name")
                     }
                 };
-                // TODO: Need to figure out how to get the bpf program to actually fire
-                // Based on our test program this value should be 1 not 0
+                // Get the bpf program to update the map
+                std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
                 let val: u32 = array_map.read(0).expect("Failed to read from map");
-                assert_eq!(val, 0);
+                assert_eq!(val, 1234);
+
+                // Show that we can read and write from the map from user space
                 let _ = array_map
                     .write(0, 0xAAAAAAAAu32)
                     .expect("Failed to write from map");
@@ -899,6 +893,12 @@ pub enum ProgramType {
     Tracepoint,
     /// A tracepoint with raw arguments accessible, without `TP_fast_assign()` applied.
     RawTracepoint,
+}
+
+impl Default for ProgramType {
+    fn default() -> Self {
+        ProgramType::Unspec
+    }
 }
 
 impl From<&str> for ProgramType {
