@@ -408,15 +408,14 @@ impl ProgramGroup<'_> {
     /// ```
     pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
         let mut errors = Vec::<OxidebpfError>::new();
-        for program_version in self.program_versions.iter_mut() {
+        for mut program_version in self.program_versions.drain(..) {
             match program_version.load_program_version(
                 self.program_blueprint.to_owned(),
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
                 Ok(r) => {
-                    let ver = std::mem::take(program_version);
-                    self.loaded_version = Some(ver);
+                    self.loaded_version = Some(program_version);
                     return Ok(r);
                 }
                 Err(e) => errors.push(e),
