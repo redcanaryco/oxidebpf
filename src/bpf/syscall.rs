@@ -1,4 +1,4 @@
-#[cfg(not(LOG_BUF = "off"))]
+#[cfg(feature = "log_buf")]
 use lazy_static::lazy_static;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
@@ -15,7 +15,7 @@ use crate::error::*;
 
 pub type BpfMapType = u32;
 
-#[cfg(not(LOG_BUF = "off"))]
+#[cfg(feature = "log_buf")]
 lazy_static! {
     static ref LOG_BUF_SIZE_BYTE: usize = option_env!("LOG_SIZE")
         .unwrap_or("4096")
@@ -65,9 +65,9 @@ pub(crate) fn bpf_prog_load(
     let license =
         CString::new(license.as_bytes()).map_err(|e| OxidebpfError::CStringConversionError(e))?;
 
-    #[cfg(not(LOG_BUF = "off"))]
+    #[cfg(feature = "log_buf")]
     let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
-    #[cfg(not(LOG_BUF = "off"))]
+    #[cfg(feature = "log_buf")]
     let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
@@ -75,11 +75,11 @@ pub(crate) fn bpf_prog_load(
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,
         kern_version: kernel_version,
-        #[cfg(not(LOG_BUF = "off"))]
+        #[cfg(feature = "log_buf")]
         log_level: 1,
-        #[cfg(not(LOG_BUF = "off"))]
+        #[cfg(feature = "log_buf")]
         log_size: *LOG_BUF_SIZE_BYTE as u32,
-        #[cfg(not(LOG_BUF = "off"))]
+        #[cfg(feature = "log_buf")]
         log_buf: log_buf.as_ptr() as u64,
         ..Default::default()
     };
@@ -91,14 +91,14 @@ pub(crate) fn bpf_prog_load(
         match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
-                #[cfg(not(LOG_BUF = "off"))]
+                #[cfg(feature = "log_buf")]
                 {
                     Err(OxidebpfError::BpfProgLoadError((
                         Box::new(e),
                         String::from_utf8_unchecked(Vec::from(log_buf)),
                     )))
                 }
-                #[cfg(LOG_BUF = "off")]
+                #[cfg(not(feature = "log_buf"))]
                 {
                     Err(OxidebpfError::BpfProgLoadError((
                         Box::new(e),
