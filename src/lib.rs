@@ -822,12 +822,17 @@ mod program_tests {
 
     #[test]
     fn test_program_group_array_maps() {
+        // Build the path to the test bpf program
         let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test")
             .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the test program to hook points in the kernel
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
@@ -842,9 +847,10 @@ mod program_tests {
             None,
         );
 
+        // Load the bpf program
         program_group.load().expect("Could not load programs");
-        //std::thread::sleep(std::time::Duration::from_millis(1000 * 3));
 
+        // Get a particular array map and try and read a value from it
         match program_group.get_array_maps() {
             Some(hash_map) => {
                 let array_map = match hash_map.get("__test_map") {
@@ -853,11 +859,15 @@ mod program_tests {
                         panic!("There should have been a map with that name")
                     }
                 };
-                //println!("My pid is: {}", std::process::id());
-                //std::thread::sleep(std::time::Duration::from_millis(1000 * 100));
-                let val: u32 = array_map.read(0).expect("Failed to read from map");
                 // TODO: Need to figure out how to get the bpf program to actually fire
+                // Based on our test program this value should be 1 not 0
+                let val: u32 = array_map.read(0).expect("Failed to read from map");
                 assert_eq!(val, 0);
+                let _ = array_map
+                    .write(0, 0xAAAAAAAAu32)
+                    .expect("Failed to write from map");
+                let val: u32 = array_map.read(0).expect("Failed to read from map");
+                assert_eq!(val, 0xAAAAAAAA);
             }
             None => {
                 panic!("Failed to get maps when they should have been present");

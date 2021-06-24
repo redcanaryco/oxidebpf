@@ -397,6 +397,10 @@ impl<T> RWMap<T> for ArrayMap {
     /// The value returned will be of the same type that was used when the ArrayMap
     /// was created
     ///
+    /// NOTE: This method calls into an unsafe function that will read a certain amount
+    /// of memory based on what T is. Make sure that T matches the type of the value
+    /// that is being used in the map.
+    ///
     /// # Example
     /// ```
     /// use oxidebpf::{ArrayMap, RWMap};
@@ -429,6 +433,10 @@ impl<T> RWMap<T> for ArrayMap {
     ///
     /// Initiates a write to `key` of `value`. The value needs to match the array
     /// type that was used when the map was created
+    ///
+    /// NOTE: This method calls into an unsafe function that will write a certain amount
+    /// of memory based on what T is. Make sure that T matches the type of the value
+    /// that is being used in the map.
     ///
     /// # Example
     /// ```
