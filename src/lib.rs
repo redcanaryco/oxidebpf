@@ -5,13 +5,11 @@
 //! For a quick getting-started, see the documentation for [`ProgramGroup`](struct@ProgramGroup)'s
 //! `new()` and `load()` functions.
 //!
-//! Note: by default, `oxidebpf` will load BPF programs with logging enabled. If the
+//! Note: by default, `oxidebpf` will load BPF programs with logging disabled. If you
+//! wish to enable logging, enable the `log_buf` feature. If the
 //! default log size (4096) is not large enough to hold the verifier's logs, the load
 //! will fail. If you need more space, `oxidebpf` will pull a log size in bytes from the
 //! `LOG_SIZE` environment variable (e.g., `LOG_SIZE=8192 ./my_program`).
-//!
-//! If you wish to disable logging completely, build your program with the flag `LOG_BUF`
-//! explicitly set to `"off"` (e.g., ` RUSTFLAGS='--cfg LOG_BUF="off"' cargo build`).
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
@@ -52,11 +50,14 @@ mod error;
 mod maps;
 mod perf;
 
+/// Helper struct for library logging.
 pub struct Oxidebpf {
     logger: slog::Logger,
 }
 
 impl Oxidebpf {
+    /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
+    /// everything goes to the terminal.
     pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
         Oxidebpf {
             logger: logger.into().unwrap_or_else(|| {

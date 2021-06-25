@@ -176,6 +176,7 @@ pub struct Map {
     loaded: bool,           // Whether or not the map has been loaded
 }
 
+/// This trait specifies a map that can be read from or written to (e.g., array types).
 pub trait RWMap<T> {
     unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
     unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
