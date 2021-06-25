@@ -177,8 +177,8 @@ pub struct Map {
 }
 
 pub trait RWMap<T> {
-    fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
-    fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
+    unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
+    unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
 }
 
 pub trait PerCpu {
@@ -332,19 +332,23 @@ impl ArrayMap {
     /// to track it. The array map supports read and write operations to access the
     /// members of the map
     ///
-    /// NOTE: `T` needs to match exactly (e.g., with `#[repr(C)]`) with the struct/type used
-    /// by any other bpf program that might be sharing the map
+    /// NOTE: The `value_size` you pass in needs to match exactly with the size of the struct/type
+    /// used by any other BPF program that might be using this map. Any `T` you use in subsequent
+    /// `read()` and `write()` calls needs to match exactly (e.g., with `#[repr(C)]`) with
+    /// the struct/type used by the BPF program as well. Additionally, `std::mem::size_of::<T>()`
+    /// must match the given `value_size` here exactly. If this conditions are not met, the
+    /// `ArrayMap` behavior is undefined.
     ///
     /// # Examples
     /// ```
     /// use oxidebpf::ArrayMap;
-    /// let map: ArrayMap = ArrayMap::new(
+    /// let map: ArrayMap = unsafe {ArrayMap::new(
     ///    "mymap",
     ///    std::mem::size_of::<u64>() as u32,
     ///    1024,
-    /// ).expect("Failed to create map");
+    /// ).expect("Failed to create map") };
     /// ```
-    pub fn new(
+    pub unsafe fn new(
         map_name: &str,
         value_size: u32,
         max_entries: u32,
@@ -397,26 +401,31 @@ impl<T> RWMap<T> for ArrayMap {
     /// The value returned will be of the same type that was used when the ArrayMap
     /// was created
     ///
-    /// NOTE: This method calls into an unsafe function that will read a certain amount
-    /// of memory based on what T is. Make sure that T matches the type of the value
+    /// NOTE: This method calls will read a certain amount of memory based on what the
+    /// size of `T` is. Make sure that `T` matches the type of the value (e.g., with `#[repr(C)]`)
     /// that is being used in the map.
     ///
     /// # Example
     /// ```
     /// use oxidebpf::{ArrayMap, RWMap};
     ///
-    /// let map: ArrayMap = ArrayMap::new(
-    ///    "mymap",
-    ///    std::mem::size_of::<u64>() as u32,
-    ///    1024,
-    /// ).expect("Failed to create map");
-    /// let _ = map.write(0, 12345u64);
-    /// assert_eq!(
-    ///     12345u64,
-    ///     map.read(0).expect("Failed to read value from map")
-    /// );
+    /// // this is safe because we are reading and writing a u64, and the value_size we
+    /// // pass into new() is a u64
+    ///
+    /// unsafe {
+    ///     let map: ArrayMap = ArrayMap::new(
+    ///        "mymap",
+    ///        std::mem::size_of::<u64>() as u32,
+    ///        1024,
+    ///     ).expect("Failed to create map");
+    ///     let _ = map.write(0, 12345u64);
+    ///     assert_eq!(
+    ///         12345u64,
+    ///         unsafe { map.read(0).expect("Failed to read value from map") }
+    ///     );
+    /// }
     /// ```
-    fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
+    unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
@@ -434,26 +443,31 @@ impl<T> RWMap<T> for ArrayMap {
     /// Initiates a write to `key` of `value`. The value needs to match the array
     /// type that was used when the map was created
     ///
-    /// NOTE: This method calls into an unsafe function that will write a certain amount
-    /// of memory based on what T is. Make sure that T matches the type of the value
+    /// NOTE: This method calls will write a certain amount of memory based on what the
+    /// size of `T` is. Make sure that `T` matches the type of the value (e.g., with `#[repr(C)]`)
     /// that is being used in the map.
     ///
     /// # Example
     /// ```
     /// use oxidebpf::{ArrayMap, RWMap};
     ///
-    /// let map: ArrayMap = ArrayMap::new(
-    ///    "mymap",
-    ///    std::mem::size_of::<u64>() as u32,
-    ///    1024,
-    /// ).expect("Failed to create map");
-    /// let _ = map.write(0, 12345u64);
-    /// assert_eq!(
-    ///     12345u64,
-    ///     map.read(0).expect("Failed to read value from map")
-    /// );
+    /// // this is safe because we are reading and writing a u64, and the value_size we
+    /// // pass into new() is a u64
+    ///
+    /// unsafe {
+    ///     let map: ArrayMap = ArrayMap::new(
+    ///        "mymap",
+    ///        std::mem::size_of::<u64>() as u32,
+    ///        1024,
+    ///     ).expect("Failed to create map");
+    ///     let _ = map.write(0, 12345u64);
+    ///     assert_eq!(
+    ///         12345u64,
+    ///         map.read(0).expect("Failed to read value from map")
+    ///     );
+    /// }
     /// ```
-    fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
+    unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
@@ -527,12 +541,14 @@ mod map_tests {
     #[test]
     fn test_map_array() {
         let array_size: u64 = 100;
-        let map: ArrayMap = ArrayMap::new(
-            "mymap",
-            std::mem::size_of::<u64>() as u32,
-            array_size as u32,
-        )
-        .expect("Failed to create new map");
+        let map: ArrayMap = unsafe {
+            ArrayMap::new(
+                "mymap",
+                std::mem::size_of::<u64>() as u32,
+                array_size as u32,
+            )
+            .expect("Failed to create new map")
+        };
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -541,25 +557,23 @@ mod map_tests {
 
         // Write
         for (idx, num) in nums.iter().enumerate() {
-            let _ = map.write(idx as u32, *num);
+            unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
         for (idx, num) in nums.iter().enumerate() {
-            assert_eq!(
-                *num,
+            assert_eq!(*num, unsafe {
                 map.read(idx as u32).expect("Failed to read value from map")
-            );
+            });
         }
 
         // Updates the entries and retrieves them again
         let nums: Vec<u64> = nums.iter().map(|v| (v * time_null() + 71) % 128).collect();
         for (idx, num) in nums.iter().enumerate() {
-            let _ = map.write(idx as u32, *num);
+            unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
         for (idx, num) in nums.iter().enumerate() {
-            assert_eq!(
-                *num,
+            assert_eq!(*num, unsafe {
                 map.read(idx as u32).expect("Failed to read value from map")
-            );
+            });
         }
     }
 
@@ -567,12 +581,14 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap = ArrayMap::new(
-            "mymap",
-            std::mem::size_of::<u64>() as u32,
-            array_size as u32,
-        )
-        .expect("Failed to create new map");
+        let map: ArrayMap = unsafe {
+            ArrayMap::new(
+                "mymap",
+                std::mem::size_of::<u64>() as u32,
+                array_size as u32,
+            )
+            .expect("Failed to create new map")
+        };
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -580,9 +596,9 @@ mod map_tests {
             .collect();
 
         for (idx, num) in nums.iter().enumerate() {
-            let _ = map.write(idx as u32, *num);
+            unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
-        let should_fail: Result<u64, OxidebpfError> = map.read(100);
+        let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(100) };
         assert_eq!(
             should_fail.err().unwrap(),
             OxidebpfError::LinuxError(Errno::ENOENT)
@@ -593,12 +609,14 @@ mod map_tests {
     #[test]
     fn test_map_array_bad_write_index() {
         let array_size: u64 = 10;
-        let map: ArrayMap = ArrayMap::new(
-            "mymap",
-            std::mem::size_of::<u64>() as u32,
-            array_size as u32,
-        )
-        .expect("Failed to create new map");
+        let map: ArrayMap = unsafe {
+            ArrayMap::new(
+                "mymap",
+                std::mem::size_of::<u64>() as u32,
+                array_size as u32,
+            )
+            .expect("Failed to create new map")
+        };
 
         // Give it some "randomness"
         let nums: Vec<u64> = (0..array_size)
@@ -606,11 +624,11 @@ mod map_tests {
             .collect();
 
         for (idx, num) in nums.iter().enumerate() {
-            let _ = map.write(idx as u32, *num);
+            unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
 
         // Should return E2BIG
-        let should_fail = map.write(100, 12345u64).err().unwrap();
+        let should_fail = unsafe { map.write(100, 12345u64).err().unwrap() };
         assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::E2BIG));
     }
 
@@ -627,12 +645,14 @@ mod map_tests {
 
         // Create the map and initialize a vector of TestStructure
         let array_size: u64 = 10;
-        let map: ArrayMap = ArrayMap::new(
-            "mymap",
-            std::mem::size_of::<u64>() as u32,
-            array_size as u32,
-        )
-        .expect("Failed to create new map");
+        let map: ArrayMap = unsafe {
+            ArrayMap::new(
+                "mymap",
+                std::mem::size_of::<u64>() as u32,
+                array_size as u32,
+            )
+            .expect("Failed to create new map")
+        };
 
         let data: Vec<TestStructure> = (0..array_size)
             .map(|v| TestStructure {
@@ -645,12 +665,13 @@ mod map_tests {
 
         // Write the test structures to the map
         for (i, tmp) in data.iter().enumerate() {
-            let _ = map.write(i as u32, tmp);
+            unsafe { map.write(i as u32, tmp).expect("could not write to map") };
         }
 
         // Read the test structures from the map and compare with originals
         for (i, item) in data.iter().enumerate() {
-            let val: &TestStructure = map.read(i as u32).expect("Failed to read value from array");
+            let val: &TestStructure =
+                unsafe { map.read(i as u32).expect("Failed to read value from array") };
             assert_eq!(val.durp0, item.durp0);
             assert_eq!(val.durp1, item.durp1);
             assert_eq!(val.durp2, item.durp2);

@@ -119,8 +119,8 @@ pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
-    maps: Option<HashMap<String, ArrayMap>>,
-    has_perfmaps: bool,
+    array_maps: HashMap<String, ArrayMap>,
+    has_perf_maps: bool,
 }
 
 /// The description of an individual eBPF program. Note: This is _not_ the same
@@ -282,13 +282,17 @@ impl<'a> Program<'a> {
     fn attach(&mut self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         match self.attach_probes() {
             Ok(res) => Ok(res),
-            Err(_e) => {
-                self.attach_points = self
-                    .attach_points
-                    .iter()
-                    .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
-                    .collect();
-                self.attach_probes()
+            Err(e) => {
+                if self.is_syscall {
+                    self.attach_points = self
+                        .attach_points
+                        .iter()
+                        .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
+                        .collect();
+                    self.attach_probes()
+                } else {
+                    Err(e)
+                }
             }
         }
     }
@@ -439,7 +443,7 @@ impl ProgramGroup<'_> {
         match &self.loaded_version {
             None => None,
             Some(lv) => {
-                if lv.has_perfmaps {
+                if lv.has_perf_maps {
                     Some(self.channel.clone().rx)
                 } else {
                     None
@@ -451,7 +455,7 @@ impl ProgramGroup<'_> {
     /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
     pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
         match &self.loaded_version {
-            Some(ver) => ver.maps.as_ref(),
+            Some(ver) => Some(&ver.array_maps),
             None => None,
         }
     }
@@ -496,8 +500,8 @@ impl ProgramVersion<'_> {
             programs,
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
-            maps: None,
-            has_perfmaps: false,
+            array_maps: HashMap::<String, ArrayMap>::new(),
+            has_perf_maps: false,
         }
     }
 
@@ -645,31 +649,21 @@ impl ProgramVersion<'_> {
                         }
                         bpf_map_type::BPF_MAP_TYPE_ARRAY => {
                             // Create the new array Map
-                            match ArrayMap::new(
-                                &name.clone(),
-                                map.definition.value_size as u32,
-                                1024,
-                            ) {
-                                Ok(new_map) => {
-                                    // If there is no hash map for the ProgramVersion then create it
-                                    // else get a reference and add a new entry
-                                    let fd = new_map.get_fd();
-                                    self.fds.insert(*fd);
-                                    program_object.fixup_map_relocation(*fd, map)?;
-                                    match self.maps.as_mut() {
-                                        Some(hash_map) => {
-                                            hash_map.insert(name.clone(), new_map);
-                                        }
-                                        None => {
-                                            let mut new_hash_map: HashMap<String, ArrayMap> =
-                                                HashMap::new();
-                                            new_hash_map.insert(name.clone(), new_map);
-                                            self.maps = Some(new_hash_map);
-                                        }
+                            unsafe {
+                                match ArrayMap::new(
+                                    &name.clone(),
+                                    map.definition.value_size as u32,
+                                    1024,
+                                ) {
+                                    Ok(new_map) => {
+                                        let fd = new_map.get_fd();
+                                        self.fds.insert(*fd);
+                                        program_object.fixup_map_relocation(*fd, map)?;
+                                        self.array_maps.insert(name.clone(), new_map);
                                     }
-                                }
-                                Err(err) => return Err(err),
-                            };
+                                    Err(err) => return Err(err),
+                                };
+                            }
                         }
                         _ => {
                             let fd =
@@ -734,7 +728,7 @@ impl ProgramVersion<'_> {
 
         // start event poller and pass back channel, if one exists
         if !perfmaps.is_empty() {
-            self.has_perfmaps = true;
+            self.has_perf_maps = true;
             self.event_poller(perfmaps, channel.tx)?;
         }
         Ok(())
@@ -860,7 +854,7 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_map_update",
-                    vec!["__x64_sys_open", "__x64_sys_write"],
+                    vec!["sys_open", "sys_write"],
                 )
                 .syscall(true),
                 Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
@@ -884,14 +878,16 @@ mod program_tests {
                 };
                 // Get the bpf program to update the map
                 std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
-                let val: u32 = array_map.read(0).expect("Failed to read from map");
+                let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
                 assert_eq!(val, 1234);
 
                 // Show that we can read and write from the map from user space
-                let _ = array_map
-                    .write(0, 0xAAAAAAAAu32)
-                    .expect("Failed to write from map");
-                let val: u32 = array_map.read(0).expect("Failed to read from map");
+                let _ = unsafe {
+                    array_map
+                        .write(0, 0xAAAAAAAAu32)
+                        .expect("Failed to write from map")
+                };
+                let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
                 assert_eq!(val, 0xAAAAAAAA);
             }
             None => {
