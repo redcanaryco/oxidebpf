@@ -670,6 +670,7 @@ impl ProgramVersion<'_> {
                                     Ok(new_map) => {
                                         let fd = new_map.get_fd();
                                         self.fds.insert(*fd);
+                                        map.set_loaded(*fd);
                                         program_object.fixup_map_relocation(*fd, map)?;
                                         self.array_maps.insert(name.clone(), new_map);
                                     }
@@ -681,6 +682,7 @@ impl ProgramVersion<'_> {
                             let fd =
                                 unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
                             self.fds.insert(fd);
+                            map.set_loaded(fd);
                             program_object.fixup_map_relocation(fd, map)?;
                         }
                     }
