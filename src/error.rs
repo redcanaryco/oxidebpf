@@ -35,6 +35,7 @@ pub enum OxidebpfError {
     BpfProgLoadError((Box<OxidebpfError>, String)),
     MapKeyNotFound,
     MapValueSizeMismatch,
+    ProgramGroupAlreadyLoaded,
 }
 
 impl std::fmt::Display for OxidebpfError {

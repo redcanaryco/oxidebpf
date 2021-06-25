@@ -111,6 +111,7 @@ pub struct ProgramGroup<'a> {
     event_buffer_size: usize,
     channel: Channel,
     loaded_version: Option<ProgramVersion<'a>>,
+    loaded: bool,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -374,6 +375,7 @@ impl ProgramGroup<'_> {
             event_buffer_size,
             channel,
             loaded_version: None,
+            loaded: false,
         }
     }
 
@@ -385,6 +387,9 @@ impl ProgramGroup<'_> {
     /// a [`PerfChannelMessage`](struct@PerfChannelMessage) receiver crossbeam channel
     /// is returned. If none load, a `NoProgramVersionLoaded` error is returned, along
     /// with all the internal errors generated during attempted loading.
+    ///
+    /// NOTE: Loading the `ProgramGroup` consumes the internal vector of `ProgramVersion`s.
+    /// Once you call `load()`, it cannot be called again without re-creating the `ProgramGroup`.
     ///
     /// # Example
     ///
@@ -412,6 +417,9 @@ impl ProgramGroup<'_> {
     /// program_group.load().expect("Could not load programs");
     /// ```
     pub fn load(&mut self) -> Result<(), OxidebpfError> {
+        if self.loaded {
+            return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
+        }
         let mut errors = Vec::<OxidebpfError>::new();
         for mut program_version in self.program_versions.drain(..) {
             match program_version.load_program_version(
@@ -431,7 +439,10 @@ impl ProgramGroup<'_> {
 
         match &self.loaded_version {
             None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
-            Some(_) => Ok(()),
+            Some(_) => {
+                self.loaded = true;
+                Ok(())
+            }
         }
     }
 
