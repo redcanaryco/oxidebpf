@@ -5,13 +5,11 @@
 //! For a quick getting-started, see the documentation for [`ProgramGroup`](struct@ProgramGroup)'s
 //! `new()` and `load()` functions.
 //!
-//! Note: by default, `oxidebpf` will load BPF programs with logging enabled. If the
+//! Note: by default, `oxidebpf` will load BPF programs with logging disabled. If you
+//! wish to enable logging, enable the `log_buf` feature. If the
 //! default log size (4096) is not large enough to hold the verifier's logs, the load
 //! will fail. If you need more space, `oxidebpf` will pull a log size in bytes from the
 //! `LOG_SIZE` environment variable (e.g., `LOG_SIZE=8192 ./my_program`).
-//!
-//! If you wish to disable logging completely, build your program with the flag `LOG_BUF`
-//! explicitly set to `"off"` (e.g., ` RUSTFLAGS='--cfg LOG_BUF="off"' cargo build`).
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
@@ -52,11 +50,14 @@ mod error;
 mod maps;
 mod perf;
 
+/// Helper struct for library logging.
 pub struct Oxidebpf {
     logger: slog::Logger,
 }
 
 impl Oxidebpf {
+    /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
+    /// everything goes to the terminal.
     pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
         Oxidebpf {
             logger: logger.into().unwrap_or_else(|| {
@@ -110,18 +111,24 @@ pub struct ProgramGroup<'a> {
     program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
     channel: Channel,
+    loaded_version: Option<ProgramVersion<'a>>,
+    loaded: bool,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
+#[derive(Clone, Default)]
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
+    array_maps: HashMap<String, ArrayMap>,
+    has_perf_maps: bool,
 }
 
 /// The description of an individual eBPF program. Note: This is _not_ the same
 /// as the eBPF program itself, the actual binary is loaded from a
 /// [`ProgramBlueprint`](struct@ProgramBlueprint).
+#[derive(Clone, Default)]
 pub struct Program<'a> {
     kind: ProgramType,
     name: &'a str,
@@ -277,13 +284,17 @@ impl<'a> Program<'a> {
     fn attach(&mut self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         match self.attach_probes() {
             Ok(res) => Ok(res),
-            Err(_e) => {
-                self.attach_points = self
-                    .attach_points
-                    .iter()
-                    .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
-                    .collect();
-                self.attach_probes()
+            Err(e) => {
+                if self.is_syscall {
+                    self.attach_points = self
+                        .attach_points
+                        .iter()
+                        .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
+                        .collect();
+                    self.attach_probes()
+                } else {
+                    Err(e)
+                }
             }
         }
     }
@@ -364,6 +375,8 @@ impl ProgramGroup<'_> {
             program_versions,
             event_buffer_size,
             channel,
+            loaded_version: None,
+            loaded: false,
         }
     }
 
@@ -375,6 +388,9 @@ impl ProgramGroup<'_> {
     /// a [`PerfChannelMessage`](struct@PerfChannelMessage) receiver crossbeam channel
     /// is returned. If none load, a `NoProgramVersionLoaded` error is returned, along
     /// with all the internal errors generated during attempted loading.
+    ///
+    /// NOTE: Loading the `ProgramGroup` consumes the internal vector of `ProgramVersion`s.
+    /// Once you call `load()`, it cannot be called again without re-creating the `ProgramGroup`.
     ///
     /// # Example
     ///
@@ -401,19 +417,59 @@ impl ProgramGroup<'_> {
     ///
     /// program_group.load().expect("Could not load programs");
     /// ```
-    pub fn load(&mut self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
+    pub fn load(&mut self) -> Result<(), OxidebpfError> {
+        if self.loaded {
+            return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
+        }
         let mut errors = Vec::<OxidebpfError>::new();
-        for program_version in self.program_versions.iter_mut() {
+        for mut program_version in self.program_versions.drain(..) {
             match program_version.load_program_version(
                 self.program_blueprint.to_owned(),
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
-                Ok(r) => return Ok(r),
+                Ok(()) => {
+                    self.loaded_version = Some(program_version);
+                    break;
+                }
                 Err(e) => errors.push(e),
             };
         }
-        Err(OxidebpfError::NoProgramVersionLoaded(errors))
+
+        self.program_versions.shrink_to_fit();
+
+        match &self.loaded_version {
+            None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
+            Some(_) => {
+                self.loaded = true;
+                Ok(())
+            }
+        }
+    }
+
+    /// Returns the receiver channel for this `ProgramGroup`, if it exists.
+    ///
+    /// This will become available when perfmaps are successfully loaded by any
+    /// `ProgramVersion`.
+    pub fn get_receiver(&self) -> Option<Receiver<PerfChannelMessage>> {
+        match &self.loaded_version {
+            None => None,
+            Some(lv) => {
+                if lv.has_perf_maps {
+                    Some(self.channel.clone().rx)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
+    pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
+        match &self.loaded_version {
+            Some(ver) => Some(&ver.array_maps),
+            None => None,
+        }
     }
 }
 
@@ -456,6 +512,8 @@ impl ProgramVersion<'_> {
             programs,
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
+            array_maps: HashMap::<String, ArrayMap>::new(),
+            has_perf_maps: false,
         }
     }
 
@@ -541,7 +599,7 @@ impl ProgramVersion<'_> {
         mut program_blueprint: ProgramBlueprint,
         channel: Channel,
         event_buffer_size: usize,
-    ) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
+    ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs
             .iter()
@@ -601,6 +659,24 @@ impl ProgramVersion<'_> {
 
                             perfmaps.append(&mut perfmap);
                         }
+                        bpf_map_type::BPF_MAP_TYPE_ARRAY => {
+                            // Create the new array Map
+                            unsafe {
+                                match ArrayMap::new(
+                                    &name.clone(),
+                                    map.definition.value_size as u32,
+                                    1024,
+                                ) {
+                                    Ok(new_map) => {
+                                        let fd = new_map.get_fd();
+                                        self.fds.insert(*fd);
+                                        program_object.fixup_map_relocation(*fd, map)?;
+                                        self.array_maps.insert(name.clone(), new_map);
+                                    }
+                                    Err(err) => return Err(err),
+                                };
+                            }
+                        }
                         _ => {
                             let fd =
                                 unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
@@ -614,7 +690,6 @@ impl ProgramVersion<'_> {
                 }
             }
         }
-
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
             let fd = syscall::bpf_prog_load(
@@ -664,12 +739,11 @@ impl ProgramVersion<'_> {
         }
 
         // start event poller and pass back channel, if one exists
-        if perfmaps.is_empty() {
-            Ok(None)
-        } else {
+        if !perfmaps.is_empty() {
+            self.has_perf_maps = true;
             self.event_poller(perfmaps, channel.tx)?;
-            Ok(Some(channel.rx))
         }
+        Ok(())
     }
 }
 
@@ -744,6 +818,7 @@ mod program_tests {
     use std::path::PathBuf;
 
     use crate::blueprint::ProgramBlueprint;
+    use crate::maps::RWMap;
     use crate::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
 
@@ -771,6 +846,67 @@ mod program_tests {
 
         program_group.load().expect("Could not load programs");
     }
+
+    #[test]
+    fn test_program_group_array_maps() {
+        // Build the path to the test bpf program
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the test program to hook points in the kernel
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    vec!["sys_open", "sys_write"],
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+            ])],
+            None,
+        );
+
+        // Load the bpf program
+        program_group.load().expect("Could not load programs");
+        let rx = program_group.get_receiver();
+        assert!(rx.is_none());
+
+        // Get a particular array map and try and read a value from it
+        match program_group.get_array_maps() {
+            Some(hash_map) => {
+                let array_map = match hash_map.get("__test_map") {
+                    Some(map) => map,
+                    None => {
+                        panic!("There should have been a map with that name")
+                    }
+                };
+                // Get the bpf program to update the map
+                std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
+                let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
+                assert_eq!(val, 1234);
+
+                // Show that we can read and write from the map from user space
+                let _ = unsafe {
+                    array_map
+                        .write(0, 0xAAAAAAAAu32)
+                        .expect("Failed to write from map")
+                };
+                let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
+                assert_eq!(val, 0xAAAAAAAA);
+            }
+            None => {
+                panic!("Failed to get maps when they should have been present");
+            }
+        };
+    }
 }
 
 /// An enum of the different BPF program types.
@@ -790,6 +926,12 @@ pub enum ProgramType {
     Tracepoint,
     /// A tracepoint with raw arguments accessible, without `TP_fast_assign()` applied.
     RawTracepoint,
+}
+
+impl Default for ProgramType {
+    fn default() -> Self {
+        ProgramType::Unspec
+    }
 }
 
 impl From<&str> for ProgramType {
