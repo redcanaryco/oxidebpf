@@ -1,5 +1,6 @@
 use nix::errno::Errno;
 use std::ffi::NulError;
+use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
@@ -38,9 +39,30 @@ pub enum OxidebpfError {
     ProgramGroupAlreadyLoaded,
 }
 
-impl std::fmt::Display for OxidebpfError {
+impl Display for OxidebpfError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            OxidebpfError::NoProgramVersionLoaded(e) => {
+                for err in e {
+                    match err {
+                        OxidebpfError::BpfProgLoadError(e) => {
+                            if let Err(e) = write!(f, "{}", &e.1) {
+                                return Err(e);
+                            };
+                        }
+                        _ => {
+                            if let Err(e) = write!(f, "{:?}", err) {
+                                return Err(e);
+                            };
+                        }
+                    }
+                }
+                Ok(())
+            }
+            _ => {
+                write!(f, "{:?}", self)
+            }
+        }
     }
 }
 

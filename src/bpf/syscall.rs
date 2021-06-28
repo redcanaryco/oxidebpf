@@ -95,7 +95,7 @@ pub(crate) fn bpf_prog_load(
                 {
                     Err(OxidebpfError::BpfProgLoadError((
                         Box::new(e),
-                        String::from_utf8_unchecked(Vec::from(log_buf)),
+                        String::from_utf8(Vec::from(log_buf)).unwrap_or(String::from("")),
                     )))
                 }
                 #[cfg(not(feature = "log_buf"))]

@@ -32,7 +32,7 @@ pub use crate::blueprint::{ProgramBlueprint, SectionType};
 use crate::bpf::constant::bpf_map_type;
 use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
-use crate::error::OxidebpfError;
+pub use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
 pub use crate::maps::{ArrayMap, RWMap};
 use crate::maps::{PerCpu, PerfMap};

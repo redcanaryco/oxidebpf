@@ -178,7 +178,16 @@ pub struct Map {
 
 /// This trait specifies a map that can be read from or written to (e.g., array types).
 pub trait RWMap<T> {
+    /// # Safety
+    ///
+    /// This function should only be called when `std::mem::size_of::<T>()` matches
+    /// the value in the map being read from.
     unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
+
+    /// # Safety
+    ///
+    /// This function should only be called when `std::mem::size_of::<T>()` matches
+    /// the value in the map being written to.
     unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
 }
 
@@ -333,7 +342,9 @@ impl ArrayMap {
     /// to track it. The array map supports read and write operations to access the
     /// members of the map
     ///
-    /// NOTE: The `value_size` you pass in needs to match exactly with the size of the struct/type
+    /// # Safety
+    ///
+    /// The `value_size` you pass in needs to match exactly with the size of the struct/type
     /// used by any other BPF program that might be using this map. Any `T` you use in subsequent
     /// `read()` and `write()` calls needs to match exactly (e.g., with `#[repr(C)]`) with
     /// the struct/type used by the BPF program as well. Additionally, `std::mem::size_of::<T>()`
