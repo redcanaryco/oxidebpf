@@ -1,10 +1,10 @@
 # oxidebpf
 
-`oxidebpf` is a fully MIT licensed Rust library for managing eBPF programs.
+`oxidebpf` is a permissive licensed Rust library for managing eBPF programs.
 
 ## Motivation
 
-The motivation behind `oxidebpf` is to create a fully MIT licensed Rust library
+The motivation behind `oxidebpf` is to create a permissive licensed Rust library
 for managing long-running eBPF programs that operate in as many environments
 as possible. Doing this required breaking some pre-set patterns on how eBPF
 applications are developed and deployed. We wanted to be able to easily deploy
@@ -21,7 +21,7 @@ slowly be adding to the feature list over time.
 
 We want `oxidebpf` to meet the following goals.
 
-*  Fully MIT licensed with no GPL dependencies.
+*  Permissive licensed with no GPL dependencies.
 *  Support custom CO-RE eBPF
 *  Run eBPF programs on Linux 4.4+
 *  Written in pure Rust, or as close to pure Rust as possible.
