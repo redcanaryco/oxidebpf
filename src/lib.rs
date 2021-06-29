@@ -559,23 +559,37 @@ impl ProgramVersion<'_> {
                                 }
                             },
                         }
-                        let events: Vec<(String, i32, Result<Option<PerfEvent>, OxidebpfError>)> =
-                            events
-                                .iter()
-                                .filter(|event| event.is_readable())
-                                .filter_map(|e| tokens.get(&e.token()))
-                                .map(|perfmap| {
-                                    (perfmap.name.clone(), perfmap.cpuid() as i32, perfmap.read())
-                                })
-                                .collect();
-                        for event in events.into_iter() {
+                        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
+                        events
+                            .iter()
+                            .filter(|event| event.is_readable())
+                            .filter_map(|e| tokens.get(&e.token()))
+                            .for_each(|perfmap| loop {
+                                match perfmap.read() {
+                                    Ok(perf_event) => {
+                                        perf_events.push((
+                                            perfmap.name.clone(),
+                                            perfmap.cpuid() as i32,
+                                            perf_event,
+                                        ));
+                                    }
+                                    Err(OxidebpfError::NoPerfData) => {
+                                        // we're done reading
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        crit!(LOGGER, "unrecoverable perfmap read error: {:?}", e);
+                                        panic!()
+                                    }
+                                }
+                            });
+                        for event in perf_events.into_iter() {
                             let message = match event.2 {
-                                Ok(None) => continue,
-                                Ok(Some(PerfEvent::Lost(_))) => continue, // TODO: count losses
-                                Ok(Some(PerfEvent::Sample(e))) => {
+                                None => continue,
+                                Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                                Some(PerfEvent::Sample(e)) => {
                                     PerfChannelMessage(event.0, event.1, e.data.clone())
                                 }
-                                Err(_) => continue, // ignore any errors
                             };
                             match tx.send(message) {
                                 Ok(_) => {}
