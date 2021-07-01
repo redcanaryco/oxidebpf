@@ -34,7 +34,7 @@ use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
 pub use crate::error::OxidebpfError;
 use crate::maps::PerfEvent;
-pub use crate::maps::{ArrayMap, RWMap};
+pub use crate::maps::{ArrayMap, BpfHashMap, RWMap};
 use crate::maps::{PerCpu, PerfMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crate::perf::syscall::{
@@ -122,6 +122,7 @@ pub struct ProgramVersion<'a> {
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
     array_maps: HashMap<String, ArrayMap>,
+    hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
 }
 
@@ -471,6 +472,14 @@ impl ProgramGroup<'_> {
             None => None,
         }
     }
+
+    /// Get a reference to the hash maps in the ['Program'](struct@ProgramGroup)s.
+    pub fn get_hash_maps(&self) -> Option<&HashMap<String, BpfHashMap>> {
+        match &self.loaded_version {
+            Some(ver) => Some(&ver.hash_maps),
+            None => None,
+        }
+    }
 }
 
 impl ProgramVersion<'_> {
@@ -513,6 +522,7 @@ impl ProgramVersion<'_> {
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
             array_maps: HashMap::<String, ArrayMap>::new(),
+            hash_maps: HashMap::<String, BpfHashMap>::new(),
             has_perf_maps: false,
         }
     }
@@ -679,7 +689,7 @@ impl ProgramVersion<'_> {
                                 match ArrayMap::new(
                                     &name.clone(),
                                     map.definition.value_size as u32,
-                                    1024,
+                                    map.definition.max_entries,
                                 ) {
                                     Ok(new_map) => {
                                         let fd = new_map.get_fd();
@@ -692,6 +702,23 @@ impl ProgramVersion<'_> {
                                 };
                             }
                         }
+                        bpf_map_type::BPF_MAP_TYPE_HASH => unsafe {
+                            match BpfHashMap::new(
+                                &name.clone(),
+                                map.definition.key_size as u32,
+                                map.definition.value_size as u32,
+                                map.definition.max_entries,
+                            ) {
+                                Ok(new_map) => {
+                                    let fd = new_map.get_fd();
+                                    self.fds.insert(*fd);
+                                    map.set_loaded(*fd);
+                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    self.hash_maps.insert(name.clone(), new_map);
+                                }
+                                Err(err) => return Err(err),
+                            };
+                        },
                         _ => {
                             let fd =
                                 unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
@@ -916,6 +943,71 @@ mod program_tests {
                         .expect("Failed to write from map")
                 };
                 let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
+                assert_eq!(val, 0xAAAAAAAA);
+            }
+            None => {
+                panic!("Failed to get maps when they should have been present");
+            }
+        };
+    }
+    #[test]
+    fn test_program_group_hash_maps() {
+        // Build the path to the test bpf program
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the test program to hook points in the kernel
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    vec!["sys_open", "sys_write"],
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+            ])],
+            None,
+        );
+
+        // Load the bpf program
+        program_group.load().expect("Could not load programs");
+        let rx = program_group.get_receiver();
+        assert!(rx.is_none());
+
+        // Get a particular array map and try and read a value from it
+        match program_group.get_hash_maps() {
+            Some(map) => {
+                let hash_map = match map.get("__test_hash_map") {
+                    Some(m) => m,
+                    None => {
+                        panic!("There should have been a map with that name")
+                    }
+                };
+                // Get the bpf program to update the map
+                std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
+                let val: u64 =
+                    unsafe { hash_map.read(0x12345u64).expect("Failed to read from map") };
+                assert_eq!(val, 1234);
+
+                // Show that we can read and write from the map from user space
+                let _ = unsafe {
+                    hash_map
+                        .write(std::process::id() as u64, 0xAAAAAAAAu64)
+                        .expect("Failed to write from map")
+                };
+                let val: u64 = unsafe {
+                    hash_map
+                        .read(std::process::id() as u64)
+                        .expect("Failed to read from map")
+                };
                 assert_eq!(val, 0xAAAAAAAA);
             }
             None => {
