@@ -486,7 +486,7 @@ impl fmt::Display for ArrayMap {
     }
 }
 
-impl<T, U> RWMap<T, U> for ArrayMap {
+impl<T> RWMap<T, c_uint> for ArrayMap {
     /// Reads an index from a map of type BPF_MAP_TYPE_ARRAY
     ///
     /// Initiates a read from `key`. Read verifies that the map has been initialized.
@@ -517,7 +517,7 @@ impl<T, U> RWMap<T, U> for ArrayMap {
     ///     );
     /// }
     /// ```
-    unsafe fn read(&self, key: U) -> Result<T, OxidebpfError> {
+    unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
@@ -526,9 +526,6 @@ impl<T, U> RWMap<T, U> for ArrayMap {
         }
         if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
             return Err(OxidebpfError::MapValueSizeMismatch);
-        }
-        if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
-            return Err(OxidebpfError::MapKeySizeMismatch);
         }
         bpf_map_lookup_elem(self.base.fd, key)
     }
@@ -562,7 +559,7 @@ impl<T, U> RWMap<T, U> for ArrayMap {
     ///     );
     /// }
     /// ```
-    unsafe fn write(&self, key: U, value: T) -> Result<(), OxidebpfError> {
+    unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
         if !self.base.loaded {
             return Err(OxidebpfError::MapNotLoaded);
         }
@@ -573,9 +570,6 @@ impl<T, U> RWMap<T, U> for ArrayMap {
         // Try and verify that size of the value type matches the size of the value field in the map
         if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
             return Err(OxidebpfError::MapValueSizeMismatch);
-        }
-        if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
-            return Err(OxidebpfError::MapKeySizeMismatch);
         }
         bpf_map_update_elem(self.base.fd, key, value)
     }
@@ -768,7 +762,7 @@ mod map_tests {
         }
         for (idx, num) in nums.iter().enumerate() {
             assert_eq!(*num, unsafe {
-                map.read(idx as u32).expect("Failed to read value from map")
+                map.read(idx as u64).expect("Failed to read value from map")
             });
         }
     }
