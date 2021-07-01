@@ -38,6 +38,12 @@ struct map_t __map_combined_section2 __attribute__((section("maps"), used)) = {
     12,
     1024};
 
+struct map_t __test_hash_map __attribute__((section("maps/test_hash_map"), used)) = {
+    BPF_MAP_TYPE_HASH,
+    sizeof(u64),
+    sizeof(u64),
+    1024};
+
 __attribute__((section("kprobe/test_program"), used)) int test_program(struct pt_regs *regs)
 {
     (void)bpf_get_current_pid_tgid();
@@ -47,6 +53,7 @@ __attribute__((section("kprobe/test_program"), used)) int test_program(struct pt
 __attribute__((section("kprobe/test_program_map_update"), used)) int test_program_map_update(struct pt_regs *regs)
 {
     u32 index = 0;
+    u64 key = 0x12345;
     u32 *value = bpf_map_lookup_elem(&__test_map, &index);
     if (!value)
     {
@@ -55,7 +62,9 @@ __attribute__((section("kprobe/test_program_map_update"), used)) int test_progra
     else
     {
         u32 new_value = 1234;
+        u64 new_value64 = 1234;
         bpf_map_update_elem(&__test_map, &index, &new_value, BPF_ANY);
+        bpf_map_update_elem(&__test_hash_map, &key, &new_value64, BPF_ANY);
     }
     return 0;
 }

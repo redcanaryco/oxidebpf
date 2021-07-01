@@ -36,6 +36,7 @@ pub enum OxidebpfError {
     BpfProgLoadError((Box<OxidebpfError>, String)),
     MapKeyNotFound,
     MapValueSizeMismatch,
+    MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
 }
 
