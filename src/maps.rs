@@ -352,11 +352,11 @@ impl BpfHashMap {
     /// # Safety
     ///
     /// The `value_size` and `key_size` you pass in needs to match exactly with the size of the struct/type
-    /// used by any other BPF program that might be using this map. Any `T` you use in subsequent
-    /// `read()` and `write()` calls needs to match exactly (e.g., with `#[repr(C)]`) with
-    /// the struct/type used by the BPF program as well. Additionally, `std::mem::size_of::<T>()`
-    /// must match the given `value_size` here exactly. If this conditions are not met, the
-    /// `BpfHashMap` behavior is undefined.
+    /// used by any other BPF program that might be using this map. Any `T` or `U` you use in subsequent
+    /// `read()` and `write()` calls needs to match exactly (e.g., with `#[repr(C)]`) with the struct/type
+    /// used by the BPF program as well. Additionally, `std::mem::size_of::<T>()` must match the given
+    /// `value_size` here exactly and `std::mem::size_of::<U>() for the key`. If this conditions are not met,
+    /// the `BpfHashMap` behavior is undefined.
     ///
     /// # Examples
     /// ```
@@ -762,7 +762,7 @@ mod map_tests {
         }
         for (idx, num) in nums.iter().enumerate() {
             assert_eq!(*num, unsafe {
-                map.read(idx as u64).expect("Failed to read value from map")
+                map.read(idx as u32).expect("Failed to read value from map")
             });
         }
     }
@@ -894,33 +894,6 @@ mod map_tests {
                     .expect("Failed to read value from hashmap");
                 assert_eq!(val, *num);
             }
-        }
-    }
-
-    #[test]
-    #[ignore]
-    // Need to add support for allowing the key type to be any size and accessible
-    // from an eBPF program
-    fn test_hash_map_string_key() {
-        println!("size_of<&str>: {}", std::mem::size_of::<&str>());
-        let map: BpfHashMap = unsafe {
-            BpfHashMap::new(
-                "mymap",
-                std::mem::size_of::<&str>() as u32,
-                std::mem::size_of::<u64>() as u32,
-                1024,
-            )
-            .expect("Failed to create new hash map")
-        };
-        unsafe {
-            let _ = map.write("current", 12345u64);
-        }
-
-        unsafe {
-            let offset: u64 = map
-                .read("current")
-                .expect("Failed to read value from 'current'");
-            assert_eq!(offset, 12345u64);
         }
     }
 
