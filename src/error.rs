@@ -23,7 +23,7 @@ pub enum OxidebpfError {
     CStringConversionError(NulError),
     MapNotLoaded,
     ProgramNotFound,
-    MapNotFound,
+    MapNotFound(String),
     NoProgramVersionLoaded(Vec<OxidebpfError>),
     FileIOError,
     Utf8StringConversionError,

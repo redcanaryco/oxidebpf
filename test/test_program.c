@@ -1,7 +1,7 @@
 #include <linux/kconfig.h>
 #include <linux/ptrace.h>
 #include <linux/version.h>
-#include <linux/bpf.h>
+#include <uapi/linux/bpf.h>
 #include <linux/uio.h>
 #include <linux/types.h>
 
@@ -11,6 +11,8 @@ static int (*bpf_map_update_elem)(void *map, void *key, void *value, unsigned lo
     (void *)2;
 static unsigned long long (*bpf_get_current_pid_tgid)(void) =
     (void *)14;
+static unsigned long long (*bpf_tail_call)(void *ctx, void *map, void *index) =
+    (void *)12;
 
 struct map_t
 {
@@ -44,9 +46,29 @@ struct map_t __test_hash_map __attribute__((section("maps/test_hash_map"), used)
     sizeof(u64),
     1024};
 
+struct map_t __test_tailcall_map __attribute__((section("maps/test_tailcall"), used)) = {
+        BPF_MAP_TYPE_PROG_ARRAY,
+        4,
+        4,
+        32};
+
 __attribute__((section("kprobe/test_program"), used)) int test_program(struct pt_regs *regs)
 {
     (void)bpf_get_current_pid_tgid();
+    return 0;
+}
+
+__attribute__((section("kprobe/test_program_tailcall_update_map"), used)) int test_program_tailcall_update_map(void *ctx)
+{
+    u32 value = 111;
+    u32 idx = 150;
+    bpf_map_update_elem(&__test_map, &idx, &value, BPF_ANY);
+    return 0;
+}
+
+__attribute__((section("kprobe/test_program_tailcall"), used)) int test_program_tailcall(struct pt_regs *regs)
+{
+    bpf_tail_call(regs, &__test_tailcall_map, 0);
     return 0;
 }
 
