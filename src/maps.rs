@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use nix::errno::errno;
 
 use crate::bpf::constant::bpf_map_type;
+use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY;
 use crate::bpf::syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem};
 use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
-use crate::fmt;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -86,7 +86,7 @@ pub(crate) enum PerfEvent<'a> {
 }
 
 impl Debug for PerfEvent<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -115,7 +115,7 @@ union PerfMemCapabilitiesBitfield {
 }
 
 impl Debug for PerfMemCapabilitiesBitfield {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "debug not implemented")
     }
 }
@@ -163,6 +163,11 @@ pub struct PerfMap {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ProgMap {
+    pub base: Map,
+}
+
+#[derive(Clone, Debug)]
 pub struct ArrayMap {
     pub base: Map,
 }
@@ -200,6 +205,33 @@ pub trait RWMap<T, U> {
 
 pub trait PerCpu {
     fn cpuid(&self) -> i32;
+}
+
+impl ProgMap {
+    pub(crate) fn new(map_name: &str, max_entries: u32) -> Result<Self, OxidebpfError> {
+        let fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, 4u32, 4u32, max_entries)?;
+        let map = Map {
+            name: map_name.to_string(),
+            fd,
+            map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY, 4, 4, max_entries),
+            map_config_size: std::mem::size_of::<MapConfig>(),
+            loaded: true,
+        };
+        Ok(ProgMap { base: map })
+    }
+
+    // TODO: these functions are a good candidate for a trait
+    pub(crate) fn set_fd(&mut self, fd: RawFd) {
+        self.base.fd = fd;
+    }
+
+    pub(crate) fn get_fd(&self) -> &RawFd {
+        &self.base.fd
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.base.loaded
+    }
 }
 
 impl PerfMap {
@@ -409,8 +441,8 @@ impl BpfHashMap {
     }
 }
 
-impl fmt::Display for BpfHashMap {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for BpfHashMap {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "Name: {}, loaded: {}", self.base.name, self.base.loaded)
     }
 }
@@ -480,8 +512,8 @@ impl ArrayMap {
     }
 }
 
-impl fmt::Display for ArrayMap {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for ArrayMap {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "Name: {}, loaded: {}", self.base.name, self.base.loaded)
     }
 }
