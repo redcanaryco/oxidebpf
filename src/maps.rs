@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use nix::errno::errno;
 
 use crate::bpf::constant::bpf_map_type;
+use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY;
 use crate::bpf::syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem};
 use crate::bpf::MapConfig;
 use crate::error::OxidebpfError;
-use crate::fmt;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -86,7 +86,7 @@ pub(crate) enum PerfEvent<'a> {
 }
 
 impl Debug for PerfEvent<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -115,7 +115,7 @@ union PerfMemCapabilitiesBitfield {
 }
 
 impl Debug for PerfMemCapabilitiesBitfield {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "debug not implemented")
     }
 }
@@ -163,7 +163,17 @@ pub struct PerfMap {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ProgMap {
+    pub base: Map,
+}
+
+#[derive(Clone, Debug)]
 pub struct ArrayMap {
+    pub base: Map,
+}
+
+#[derive(Clone, Debug)]
+pub struct BpfHashMap {
     pub base: Map,
 }
 
@@ -177,22 +187,51 @@ pub struct Map {
 }
 
 /// This trait specifies a map that can be read from or written to (e.g., array types).
-pub trait RWMap<T> {
+pub trait RWMap<T, U> {
     /// # Safety
     ///
     /// This function should only be called when `std::mem::size_of::<T>()` matches
-    /// the value in the map being read from.
-    unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError>;
+    /// the value in the map being read from and when `std::mem::size_of::<U>()`
+    /// matches the key.
+    unsafe fn read(&self, key: U) -> Result<T, OxidebpfError>;
 
     /// # Safety
     ///
     /// This function should only be called when `std::mem::size_of::<T>()` matches
-    /// the value in the map being written to.
-    unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError>;
+    /// the value in the map being written to and when `std::mem::size_of::<U>()`
+    /// matches the key.
+    unsafe fn write(&self, key: U, value: T) -> Result<(), OxidebpfError>;
 }
 
 pub trait PerCpu {
     fn cpuid(&self) -> i32;
+}
+
+impl ProgMap {
+    pub(crate) fn new(map_name: &str, max_entries: u32) -> Result<Self, OxidebpfError> {
+        let fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, 4u32, 4u32, max_entries)?;
+        let map = Map {
+            name: map_name.to_string(),
+            fd,
+            map_config: MapConfig::new(bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY, 4, 4, max_entries),
+            map_config_size: std::mem::size_of::<MapConfig>(),
+            loaded: true,
+        };
+        Ok(ProgMap { base: map })
+    }
+
+    // TODO: these functions are a good candidate for a trait
+    pub(crate) fn set_fd(&mut self, fd: RawFd) {
+        self.base.fd = fd;
+    }
+
+    pub(crate) fn get_fd(&self) -> &RawFd {
+        &self.base.fd
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.base.loaded
+    }
 }
 
 impl PerfMap {
@@ -335,6 +374,79 @@ impl PerCpu for PerfMap {
     }
 }
 
+impl BpfHashMap {
+    /// Create a new BpfHashMap
+    ///
+    /// Calling new will create a new BPF_MAP_TYPE_HASH map. It stores some meta data
+    /// to track it. The array map supports read and write operations to access the
+    /// members of the map
+    ///
+    /// # Safety
+    ///
+    /// The `value_size` and `key_size` you pass in needs to match exactly with the size of the struct/type
+    /// used by any other BPF program that might be using this map. Any `T` or `U` you use in subsequent
+    /// `read()` and `write()` calls needs to match exactly (e.g., with `#[repr(C)]`) with the struct/type
+    /// used by the BPF program as well. Additionally, `std::mem::size_of::<T>()` must match the given
+    /// `value_size` here exactly and `std::mem::size_of::<U>() for the key`. If this conditions are not met,
+    /// the `BpfHashMap` behavior is undefined.
+    ///
+    /// # Examples
+    /// ```
+    /// use oxidebpf::BpfHashMap;
+    /// let map: BpfHashMap = unsafe {BpfHashMap::new(
+    ///    "mymap",
+    ///    std::mem::size_of::<u64>() as u32,
+    ///    std::mem::size_of::<u64>() as u32,
+    ///    1024,
+    /// ).expect("Failed to create map") };
+    /// ```
+    pub unsafe fn new(
+        map_name: &str,
+        key_size: u32,
+        value_size: u32,
+        max_entries: u32,
+    ) -> Result<BpfHashMap, OxidebpfError> {
+        // Manpages say that key size must be 4 bytes for BPF_MAP_TYPE_ARRAY
+        let fd = bpf_map_create(
+            bpf_map_type::BPF_MAP_TYPE_HASH,
+            key_size as c_uint,
+            value_size as c_uint,
+            max_entries,
+        )?;
+        let map = Map {
+            name: map_name.to_string(),
+            fd,
+            map_config: MapConfig::new(
+                bpf_map_type::BPF_MAP_TYPE_HASH,
+                key_size,
+                value_size,
+                max_entries,
+            ),
+            map_config_size: std::mem::size_of::<MapConfig>(),
+            loaded: true,
+        };
+        Ok(BpfHashMap { base: map })
+    }
+
+    pub(crate) fn set_fd(&mut self, fd: RawFd) {
+        self.base.fd = fd;
+    }
+
+    pub(crate) fn get_fd(&self) -> &RawFd {
+        &self.base.fd
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.base.loaded
+    }
+}
+
+impl Display for BpfHashMap {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "Name: {}, loaded: {}", self.base.name, self.base.loaded)
+    }
+}
+
 impl ArrayMap {
     /// Create a new ArrayMap
     ///
@@ -400,13 +512,13 @@ impl ArrayMap {
     }
 }
 
-impl fmt::Display for ArrayMap {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for ArrayMap {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "Name: {}, loaded: {}", self.base.name, self.base.loaded)
     }
 }
 
-impl<T> RWMap<T> for ArrayMap {
+impl<T> RWMap<T, c_uint> for ArrayMap {
     /// Reads an index from a map of type BPF_MAP_TYPE_ARRAY
     ///
     /// Initiates a read from `key`. Read verifies that the map has been initialized.
@@ -495,6 +607,104 @@ impl<T> RWMap<T> for ArrayMap {
     }
 }
 
+impl<T, U> RWMap<T, U> for BpfHashMap {
+    /// Reads an index from a map of type BPF_MAP_TYPE_HASH
+    ///
+    /// Initiates a read from `key`. Read verifies that the map has been initialized.
+    /// The value returned will be of the same type that was used when the BpfHashMap
+    /// was created
+    ///
+    /// NOTE: This method calls will read a certain amount of memory based on what the
+    /// size of `T` and `U` is. Make sure that `T` and `U` matches the type of the value and key
+    /// (e.g., with `#[repr(C)]`) that is being used in the map.
+    ///
+    /// # Example
+    /// ```
+    /// use oxidebpf::{BpfHashMap, RWMap};
+    ///
+    /// // this is safe because we are reading and writing a u64, and the value_size we
+    /// // pass into new() is a u64
+    ///
+    /// unsafe {
+    ///     let map: BpfHashMap = BpfHashMap::new(
+    ///        "mymap",
+    ///        std::mem::size_of::<u64>() as u32,
+    ///        std::mem::size_of::<u64>() as u32,
+    ///        1024,
+    ///     ).expect("Failed to create map");
+    ///     let _ = map.write(87654321u64, 12345u64);
+    ///     assert_eq!(
+    ///         12345u64,
+    ///         unsafe { map.read(87654321u64).expect("Failed to read value from map") }
+    ///     );
+    /// }
+    /// ```
+    unsafe fn read(&self, key: U) -> Result<T, OxidebpfError> {
+        if !self.base.loaded {
+            return Err(OxidebpfError::MapNotLoaded);
+        }
+        if self.base.fd < 0 {
+            return Err(OxidebpfError::MapNotLoaded);
+        }
+        if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            return Err(OxidebpfError::MapValueSizeMismatch);
+        }
+        if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
+            return Err(OxidebpfError::MapKeySizeMismatch);
+        }
+        bpf_map_lookup_elem(self.base.fd, key)
+    }
+
+    /// Writes an index to and index of a map of type BPF_MAP_TYPE_ARRAY
+    ///
+    /// Initiates a write to `key` of `value`. The value needs to match the array
+    /// type that was used when the map was created
+    ///
+    /// NOTE: This method calls will write a certain amount of memory based on what the
+    /// size of `T` is. Make sure that `T` matches the type of the value (e.g., with `#[repr(C)]`)
+    /// that is being used in the map.
+    ///
+    /// # Example
+    /// ```
+    /// use oxidebpf::{BpfHashMap, RWMap};
+    /// use std::process;
+    ///
+    /// // this is safe because we are reading and writing a u64, and the value_size we
+    /// // pass into new() is a u64
+    ///
+    /// unsafe {
+    ///     let map: BpfHashMap = BpfHashMap::new(
+    ///        "mymap",
+    ///        std::mem::size_of::<u32>() as u32,
+    ///        std::mem::size_of::<u64>() as u32,
+    ///        1024,
+    ///     ).expect("Failed to create map");
+    ///     let _ = map.write(process::id(), 12345u64);
+    ///     assert_eq!(
+    ///         12345u64,
+    ///         map.read(process::id()).expect("Failed to read value from map")
+    ///     );
+    /// }
+    /// ```
+    unsafe fn write(&self, key: U, value: T) -> Result<(), OxidebpfError> {
+        if !self.base.loaded {
+            return Err(OxidebpfError::MapNotLoaded);
+        }
+        if self.base.fd < 0 {
+            return Err(OxidebpfError::MapNotLoaded);
+        }
+
+        // Try and verify that size of the value type matches the size of the value field in the map
+        if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            return Err(OxidebpfError::MapValueSizeMismatch);
+        }
+        if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
+            return Err(OxidebpfError::MapKeySizeMismatch);
+        }
+        bpf_map_update_elem(self.base.fd, key, value)
+    }
+}
+
 impl Drop for PerfMap {
     fn drop(&mut self) {
         // if it doesn't work, we're gonna close it anyway so :shrug:
@@ -519,8 +729,8 @@ impl Drop for ArrayMap {
 mod map_tests {
     use crate::error::OxidebpfError;
     use crate::maps::process_cpu_string;
-    use crate::maps::ArrayMap;
     use crate::maps::RWMap;
+    use crate::maps::{ArrayMap, BpfHashMap};
     use nix::errno::Errno;
 
     // Doing the rough equivalent of C's time(NULL);
@@ -684,6 +894,102 @@ mod map_tests {
         for (i, item) in data.iter().enumerate() {
             let val: &TestStructure =
                 unsafe { map.read(i as u32).expect("Failed to read value from array") };
+            assert_eq!(val.durp0, item.durp0);
+            assert_eq!(val.durp1, item.durp1);
+            assert_eq!(val.durp2, item.durp2);
+            assert_eq!(val.durp3, item.durp3);
+        }
+    }
+
+    #[test]
+    fn test_hash_map() {
+        let array_size: u64 = 100;
+
+        let map: BpfHashMap = unsafe {
+            BpfHashMap::new(
+                "mymap",
+                std::mem::size_of::<u32>() as u32,
+                std::mem::size_of::<u64>() as u32,
+                1024,
+            )
+            .expect("Failed to create new map")
+        };
+        // Give it some "randomness"
+        let nums: Vec<u64> = (0..array_size)
+            .map(|v| (v * time_null() + 71) % 128)
+            .collect();
+        for num in nums.iter() {
+            unsafe {
+                let _ = map.write(std::process::id(), *num);
+                let val: u64 = map
+                    .read(std::process::id())
+                    .expect("Failed to read value from hashmap");
+                assert_eq!(val, *num);
+            }
+        }
+    }
+
+    #[test]
+    fn test_hash_map_bad_index() {
+        let map: BpfHashMap = unsafe {
+            BpfHashMap::new(
+                "mymap",
+                std::mem::size_of::<u32>() as u32,
+                std::mem::size_of::<u64>() as u32,
+                1024,
+            )
+            .expect("Failed to create new map")
+        };
+        let _ = unsafe { map.write(1234, 1234) };
+        let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(4321) };
+        assert_eq!(
+            should_fail.err().unwrap(),
+            OxidebpfError::LinuxError(Errno::ENOENT)
+        );
+    }
+
+    #[test]
+    fn test_hash_map_complex_key_value() {
+        // A made up structure for this test
+        #[derive(Clone, Copy)]
+        struct TestStructure<'a> {
+            durp0: u64,
+            durp1: &'a str,
+            durp2: f64,
+            durp3: bool,
+        }
+
+        // Create the map and initialize a vector of TestStructure
+        let array_size: u32 = 10;
+        let map: BpfHashMap = unsafe {
+            BpfHashMap::new(
+                "mymap",
+                std::mem::size_of::<u32>() as u32,
+                std::mem::size_of::<TestStructure>() as u32,
+                array_size as u32,
+            )
+            .expect("Failed to create new map")
+        };
+
+        let data: Vec<TestStructure> = (0..array_size)
+            .map(|v| TestStructure {
+                durp0: v as u64,
+                durp1: "Durp",
+                durp2: 0.1234,
+                durp3: v % 2 == 0,
+            })
+            .collect();
+
+        // Write the test structures to the map
+        for (i, item) in data.iter().enumerate() {
+            unsafe {
+                map.write(std::process::id() + i as u32, *item)
+                    .expect("could not write to map");
+            }
+            let val: TestStructure = unsafe {
+                map.read(std::process::id() + i as u32)
+                    .expect("Failed to read value from array")
+            };
             assert_eq!(val.durp0, item.durp0);
             assert_eq!(val.durp1, item.durp1);
             assert_eq!(val.durp2, item.durp2);

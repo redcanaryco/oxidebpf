@@ -18,7 +18,7 @@ pub type BpfMapType = u32;
 #[cfg(feature = "log_buf")]
 lazy_static! {
     static ref LOG_BUF_SIZE_BYTE: usize = std::env::var("LOG_SIZE")
-        .unwrap_or("4096".to_string())
+        .unwrap_or_else(|_| "4096".to_string())
         .trim()
         .parse::<usize>()
         .unwrap_or(4096);
@@ -95,7 +95,10 @@ pub(crate) fn bpf_prog_load(
                 {
                     Err(OxidebpfError::BpfProgLoadError((
                         Box::new(e),
-                        String::from_utf8(Vec::from(log_buf)).unwrap_or(String::from("")),
+                        String::from_utf8(Vec::from(log_buf))
+                            .unwrap_or_else(|_| String::from(""))
+                            .trim_matches('\0')
+                            .to_string(),
                     )))
                 }
                 #[cfg(not(feature = "log_buf"))]

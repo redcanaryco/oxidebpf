@@ -545,7 +545,7 @@ mod tests {
         );
         assert_eq!(
             prog.required_maps(),
-            vec!["__test_map".to_string()],
+            vec!["__test_map".to_string(), "__test_hash_map".to_string()],
             "expected program to depend on 'test_map'"
         );
 
@@ -576,6 +576,17 @@ mod tests {
         assert_eq!(map.definition.map_type, bpf_map_type::BPF_MAP_TYPE_ARRAY);
         assert_eq!(map.definition.key_size, 4);
         assert_eq!(map.definition.value_size, 12);
+        assert_eq!(map.definition.max_entries, 1024);
+
+        let map = blueprint
+            .maps
+            .get("__test_hash_map")
+            .expect("expecting '__test_hash_map' to exist");
+        assert_eq!(map.symbol_name, "__test_hash_map");
+        assert_eq!(map.name, "test_hash_map");
+        assert_eq!(map.definition.map_type, bpf_map_type::BPF_MAP_TYPE_HASH);
+        assert_eq!(map.definition.key_size, 8);
+        assert_eq!(map.definition.value_size, 8);
         assert_eq!(map.definition.max_entries, 1024);
     }
 }

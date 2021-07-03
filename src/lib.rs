@@ -33,9 +33,9 @@ use crate::bpf::constant::bpf_map_type;
 use crate::bpf::syscall::bpf_map_update_elem;
 use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
 pub use crate::error::OxidebpfError;
-use crate::maps::PerfEvent;
-pub use crate::maps::{ArrayMap, RWMap};
+pub use crate::maps::{ArrayMap, BpfHashMap, RWMap};
 use crate::maps::{PerCpu, PerfMap};
+use crate::maps::{PerfEvent, ProgMap};
 use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
 use crate::perf::syscall::{
     attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs,
@@ -122,7 +122,14 @@ pub struct ProgramVersion<'a> {
     fds: HashSet<RawFd>,
     ev_names: HashSet<String>,
     array_maps: HashMap<String, ArrayMap>,
+    hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
+}
+
+#[derive(Clone, Default)]
+struct TailCallMapping {
+    map: String,
+    index: u32,
 }
 
 /// The description of an individual eBPF program. Note: This is _not_ the same
@@ -138,6 +145,7 @@ pub struct Program<'a> {
     is_syscall: bool,
     fd: RawFd,
     pid: Option<pid_t>,
+    tail_call_mapping: Option<TailCallMapping>,
 }
 
 impl<'a> Program<'a> {
@@ -168,6 +176,7 @@ impl<'a> Program<'a> {
             is_syscall: false,
             fd: 0,
             pid: None,
+            tail_call_mapping: None,
         }
     }
 
@@ -197,6 +206,33 @@ impl<'a> Program<'a> {
     /// `sys_ptrace` as the attachment point.
     pub fn syscall(mut self, syscall: bool) -> Self {
         self.is_syscall = syscall;
+        self
+    }
+
+    /// Specify that the program should be loaded into the given tail call map at the given index.
+    ///
+    /// The `tail_call_index` argument is used to know which indices to insert programs
+    /// at in the program's tail call map. The map that it is inserted into is the map with
+    /// the given `map_name`. If no map exists with `map_name`, a runtime
+    /// `OxidebpfError::MapNotFound` error will be thrown.
+    ///
+    /// # Example
+    ///
+    /// If another one of your programs will tail call into this program and expects it to
+    /// exist at index 5, you should call this function with 5 as the argument.
+    ///
+    /// ```no_run
+    /// use oxidebpf::{Program, ProgramType};
+    ///
+    /// let program = Program::new(
+    ///     ProgramType::Kprobe, "my_program", vec!["do_mount"]
+    /// ).tail_call_map_index("my_map", 5);
+    /// ```
+    pub fn tail_call_map_index(mut self, map_name: &str, tail_call_index: u32) -> Self {
+        self.tail_call_mapping = Some(TailCallMapping {
+            map: map_name.to_string(),
+            index: tail_call_index,
+        });
         self
     }
 
@@ -471,6 +507,14 @@ impl ProgramGroup<'_> {
             None => None,
         }
     }
+
+    /// Get a reference to the hash maps in the ['Program'](struct@ProgramGroup)s.
+    pub fn get_hash_maps(&self) -> Option<&HashMap<String, BpfHashMap>> {
+        match &self.loaded_version {
+            Some(ver) => Some(&ver.hash_maps),
+            None => None,
+        }
+    }
 }
 
 impl ProgramVersion<'_> {
@@ -513,6 +557,7 @@ impl ProgramVersion<'_> {
             fds: HashSet::<RawFd>::new(),
             ev_names: HashSet::<String>::new(),
             array_maps: HashMap::<String, ArrayMap>::new(),
+            hash_maps: HashMap::<String, BpfHashMap>::new(),
             has_perf_maps: false,
         }
     }
@@ -559,23 +604,37 @@ impl ProgramVersion<'_> {
                                 }
                             },
                         }
-                        let events: Vec<(String, i32, Result<Option<PerfEvent>, OxidebpfError>)> =
-                            events
-                                .iter()
-                                .filter(|event| event.is_readable())
-                                .filter_map(|e| tokens.get(&e.token()))
-                                .map(|perfmap| {
-                                    (perfmap.name.clone(), perfmap.cpuid() as i32, perfmap.read())
-                                })
-                                .collect();
-                        for event in events.into_iter() {
+                        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
+                        events
+                            .iter()
+                            .filter(|event| event.is_readable())
+                            .filter_map(|e| tokens.get(&e.token()))
+                            .for_each(|perfmap| loop {
+                                match perfmap.read() {
+                                    Ok(perf_event) => {
+                                        perf_events.push((
+                                            perfmap.name.clone(),
+                                            perfmap.cpuid() as i32,
+                                            perf_event,
+                                        ));
+                                    }
+                                    Err(OxidebpfError::NoPerfData) => {
+                                        // we're done reading
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        crit!(LOGGER, "unrecoverable perfmap read error: {:?}", e);
+                                        panic!()
+                                    }
+                                }
+                            });
+                        for event in perf_events.into_iter() {
                             let message = match event.2 {
-                                Ok(None) => continue,
-                                Ok(Some(PerfEvent::Lost(_))) => continue, // TODO: count losses
-                                Ok(Some(PerfEvent::Sample(e))) => {
+                                None => continue,
+                                Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                                Some(PerfEvent::Sample(e)) => {
                                     PerfChannelMessage(event.0, event.1, e.data.clone())
                                 }
-                                Err(_) => continue, // ignore any errors
                             };
                             match tx.send(message) {
                                 Ok(_) => {}
@@ -616,12 +675,13 @@ impl ProgramVersion<'_> {
         let mut perfmaps = Vec::<PerfMap>::new();
         // load maps and save fds and apply relocations
         let mut loaded_maps = HashSet::<String>::new();
+        let mut tailcall_tables = HashMap::<String, ProgMap>::new();
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
                 let map = program_blueprint
                     .maps
                     .get_mut(name)
-                    .ok_or(OxidebpfError::MapNotFound)?;
+                    .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
 
                 if !loaded_maps.contains(&map.name.clone()) {
                     let sized_attr = SizedBpfAttr {
@@ -665,7 +725,7 @@ impl ProgramVersion<'_> {
                                 match ArrayMap::new(
                                     &name.clone(),
                                     map.definition.value_size as u32,
-                                    1024,
+                                    map.definition.max_entries,
                                 ) {
                                     Ok(new_map) => {
                                         let fd = new_map.get_fd();
@@ -677,6 +737,34 @@ impl ProgramVersion<'_> {
                                     Err(err) => return Err(err),
                                 };
                             }
+                        }
+                        bpf_map_type::BPF_MAP_TYPE_HASH => unsafe {
+                            match BpfHashMap::new(
+                                &name.clone(),
+                                map.definition.key_size as u32,
+                                map.definition.value_size as u32,
+                                map.definition.max_entries,
+                            ) {
+                                Ok(new_map) => {
+                                    let fd = new_map.get_fd();
+                                    self.fds.insert(*fd);
+                                    map.set_loaded(*fd);
+                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    self.hash_maps.insert(name.clone(), new_map);
+                                }
+                                Err(err) => return Err(err),
+                            };
+                        },
+                        bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY => {
+                            match ProgMap::new(&name.clone(), map.definition.max_entries) {
+                                Ok(new_map) => {
+                                    let fd = new_map.get_fd();
+                                    self.fds.insert(*fd);
+                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    tailcall_tables.insert(new_map.base.name.clone(), new_map);
+                                }
+                                Err(err) => return Err(err),
+                            };
                         }
                         _ => {
                             let fd =
@@ -692,6 +780,7 @@ impl ProgramVersion<'_> {
                 }
             }
         }
+
         // load and attach programs
         for blueprint in matching_blueprints.iter() {
             let fd = syscall::bpf_prog_load(
@@ -720,6 +809,18 @@ impl ProgramVersion<'_> {
             }
             let fd = fd?;
             for p in programs {
+                // fix up any tail call mapping that might exist
+                p.tail_call_mapping
+                    .as_ref()
+                    .map(|tcm| {
+                        let table = tailcall_tables.get(&tcm.map);
+                        table.map_or_else(
+                            || Err(OxidebpfError::MapNotFound(tcm.map.clone())),
+                            |map| bpf_map_update_elem(*map.get_fd(), tcm.index, fd),
+                        )
+                    })
+                    .map_or(Ok(()), |v| v)?;
+
                 p.loaded_as(fd);
                 match p.attach() {
                     Err(e) => {
@@ -891,7 +992,7 @@ mod program_tests {
                     }
                 };
                 // Get the bpf program to update the map
-                std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
+                std::fs::write("/tmp/baz", "some data").expect("Unable to write file");
                 let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
                 assert_eq!(val, 1234);
 
@@ -902,6 +1003,129 @@ mod program_tests {
                         .expect("Failed to write from map")
                 };
                 let val: u32 = unsafe { array_map.read(0).expect("Failed to read from map") };
+                assert_eq!(val, 0xAAAAAAAA);
+            }
+            None => {
+                panic!("Failed to get maps when they should have been present");
+            }
+        };
+    }
+
+    #[test]
+    fn test_program_group_tail_call() {
+        // Build the path to the test bpf program
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the test program to hook points in the kernel
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_tailcall",
+                    vec!["sys_open", "sys_write"],
+                )
+                .syscall(true),
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_tailcall_update_map",
+                    vec![],
+                )
+                .tail_call_map_index("__test_tailcall_map", 0),
+            ])],
+            None,
+        );
+
+        // Load the bpf program
+        program_group.load().expect("Could not load programs");
+
+        // Get a particular array map and try and read a value from it
+        match program_group.get_array_maps() {
+            Some(hash_map) => {
+                let array_map = match hash_map.get("__test_map") {
+                    Some(map) => map,
+                    None => {
+                        panic!("There should have been a map with that name")
+                    }
+                };
+                // Get the bpf program to update the map
+                std::fs::write("/tmp/bar", "some data").expect("Unable to write file");
+
+                // the tail-called program should set this value
+                let val: u32 = unsafe { array_map.read(150).expect("Failed to read from map") };
+                assert_eq!(val, 111);
+            }
+            None => {
+                panic!("Failed to get maps when they should have been present");
+            }
+        };
+    }
+
+    #[test]
+    fn test_program_group_hash_maps() {
+        // Build the path to the test bpf program
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the test program to hook points in the kernel
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    vec!["sys_open", "sys_write"],
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+            ])],
+            None,
+        );
+
+        // Load the bpf program
+        program_group.load().expect("Could not load programs");
+        let rx = program_group.get_receiver();
+        assert!(rx.is_none());
+
+        // Get a particular array map and try and read a value from it
+        match program_group.get_hash_maps() {
+            Some(map) => {
+                let hash_map = match map.get("__test_hash_map") {
+                    Some(m) => m,
+                    None => {
+                        panic!("There should have been a map with that name")
+                    }
+                };
+                // Get the bpf program to update the map
+                std::fs::write("/tmp/foo", "some data").expect("Unable to write file");
+                let val: u64 =
+                    unsafe { hash_map.read(0x12345u64).expect("Failed to read from map") };
+                assert_eq!(val, 1234);
+
+                // Show that we can read and write from the map from user space
+                let _ = unsafe {
+                    hash_map
+                        .write(std::process::id() as u64, 0xAAAAAAAAu64)
+                        .expect("Failed to write from map")
+                };
+                let val: u64 = unsafe {
+                    hash_map
+                        .read(std::process::id() as u64)
+                        .expect("Failed to read from map")
+                };
                 assert_eq!(val, 0xAAAAAAAA);
             }
             None => {
