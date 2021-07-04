@@ -14,6 +14,23 @@ static unsigned long long (*bpf_get_current_pid_tgid)(void) =
 static unsigned long long (*bpf_tail_call)(void *ctx, void *map, void *index) =
     (void *)12;
 
+struct xdp_md {
+    u32 data;
+    u32 data_end;
+    u32 data_meta;
+    u32 ingress_ifindex;
+    u32 rx_queue_index;
+    u32 egress_ifindex;
+};
+
+enum xdp_action {
+    XDP_ABORTED = 0,
+    XDP_DROP,
+    XDP_PASS,
+    XDP_TX,
+    XDP_REDIRECT,
+};
+
 struct map_t
 {
     u32 map_type;
@@ -89,6 +106,11 @@ __attribute__((section("kprobe/test_program_map_update"), used)) int test_progra
         bpf_map_update_elem(&__test_hash_map, &key, &new_value64, BPF_ANY);
     }
     return 0;
+}
+
+__attribute__((section("xdp/test_filter"), used)) int test_filter(struct xdp_md *ctx)
+{
+    return XDP_PASS;
 }
 
 char _license[] __attribute__((section("license"), used)) = "Proprietary";

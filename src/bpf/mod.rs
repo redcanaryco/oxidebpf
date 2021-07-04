@@ -517,6 +517,7 @@ impl From<&ProgramType> for u32 {
             ProgramType::Tracepoint => bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT,
             ProgramType::RawTracepoint => bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
             ProgramType::Unspec => bpf_prog_type::BPF_PROG_TYPE_UNSPEC,
+            ProgramType::Xdp => bpf_prog_type::BPF_PROG_TYPE_XDP,
         }
     }
 }

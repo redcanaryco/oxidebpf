@@ -167,7 +167,7 @@ impl ProgramBlueprint {
                     }
                     continue;
                 }
-                "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => {
+                "xdp" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => {
                     let program_type = prefix.into();
                     let obj = ProgramObject::from_section(
                         &program_type,

@@ -41,6 +41,8 @@ use crate::perf::syscall::{
     attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs,
 };
 use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
+use crate::xdp::constant::XdpFlag::Unset;
+use crate::xdp::syscall::attach_xdp;
 use lazy_static::lazy_static;
 use slog_term::TermDecorator;
 
@@ -49,6 +51,7 @@ mod bpf;
 mod error;
 mod maps;
 mod perf;
+mod xdp;
 
 /// Helper struct for library logging.
 pub struct Oxidebpf {
@@ -236,6 +239,14 @@ impl<'a> Program<'a> {
         self
     }
 
+    fn attach_xdp(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
+        self.attach_points
+            .iter()
+            .map(|attach_point| attach_xdp(self.fd, attach_point, Unset))
+            .collect::<Result<Vec<()>, OxidebpfError>>()
+            .map(|_| (Vec::<String>::new(), Vec::<RawFd>::new()))
+    }
+
     fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         let mut errs = Vec::<OxidebpfError>::new();
         let mut paths = Vec::<String>::new();
@@ -343,6 +354,7 @@ impl<'a> Program<'a> {
         match self.kind {
             ProgramType::Kprobe | ProgramType::Kretprobe => self.attach_kprobe(),
             ProgramType::Uprobe | ProgramType::Uretprobe => self.attach_uprobe(),
+            ProgramType::Xdp => self.attach_xdp(),
             _ => Err(OxidebpfError::UnsupportedProgramType),
         }
     }
@@ -924,6 +936,7 @@ mod program_tests {
     use crate::maps::RWMap;
     use crate::ProgramType;
     use crate::{Program, ProgramGroup, ProgramVersion};
+    use std::process::Command;
 
     #[test]
     fn test_program_group() {
@@ -1133,6 +1146,49 @@ mod program_tests {
             }
         };
     }
+
+    #[test]
+    fn test_program_group_xdp() {
+        // Build the path to the test bpf program
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+
+        // Create a blueprint from the test bpf program
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+
+        // Create a program group that will try and attach the xdp filter to the loopback interface
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![Program::new(
+                ProgramType::Xdp,
+                "test_filter",
+                vec!["lo"],
+            )])],
+            None,
+        );
+
+        // Load the XDP program
+        program_group.load().expect("Could not load programs");
+        let rx = program_group.get_receiver();
+        assert!(rx.is_none());
+
+        // check that it's appearing on the interface
+        let output = Command::new("ip")
+            .arg("link")
+            .arg("show")
+            .arg("dev")
+            .arg("lo")
+            .output()
+            .expect("could not list interface");
+        let output = String::from_utf8(output.stdout).unwrap();
+        assert!(output.contains("prog/xdp id"));
+
+        // check that it gets removed properly
+        todo!()
+    }
 }
 
 /// An enum of the different BPF program types.
@@ -1152,6 +1208,8 @@ pub enum ProgramType {
     Tracepoint,
     /// A tracepoint with raw arguments accessible, without `TP_fast_assign()` applied.
     RawTracepoint,
+    /// An XDP filter that can be attached to an interface.
+    Xdp,
 }
 
 impl Default for ProgramType {
@@ -1169,6 +1227,7 @@ impl From<&str> for ProgramType {
             "uretprobe" => ProgramType::Uretprobe,
             "tracepoint" => ProgramType::Tracepoint,
             "rawtracepoint" => ProgramType::RawTracepoint,
+            "xdp" => ProgramType::Xdp,
             _ => ProgramType::Unspec,
         }
     }
@@ -1187,6 +1246,7 @@ impl Display for ProgramType {
                 ProgramType::Uretprobe => "uretprobe",
                 ProgramType::Tracepoint => "tracepoint",
                 ProgramType::RawTracepoint => "rawtracepoint",
+                ProgramType::Xdp => "xdp",
             }
         )
     }

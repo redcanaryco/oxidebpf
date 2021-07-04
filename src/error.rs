@@ -38,6 +38,7 @@ pub enum OxidebpfError {
     MapValueSizeMismatch,
     MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
+    NetlinkError(String),
 }
 
 impl Display for OxidebpfError {
