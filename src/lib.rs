@@ -760,6 +760,7 @@ impl ProgramVersion<'_> {
                                 Ok(new_map) => {
                                     let fd = new_map.get_fd();
                                     self.fds.insert(*fd);
+                                    map.set_loaded(*fd);
                                     program_object.fixup_map_relocation(*fd, map)?;
                                     tailcall_tables.insert(new_map.base.name.clone(), new_map);
                                 }
