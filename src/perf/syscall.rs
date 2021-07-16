@@ -361,7 +361,20 @@ pub(crate) fn attach_kprobe_debugfs(
         attach_point,
     )?;
 
-    perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
+    match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu.clone()) {
+        Err(OxidebpfError::FileIOError) => {
+            if is_return {
+                // depending on the kernel version, we may need to have either `kprobe`
+                // or `kretprobe` as the path
+                let new_path = event_path.replace("kretprobe", "kprobe");
+                perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
+            } else {
+                Err(OxidebpfError::FileIOError)
+            }
+        }
+        Ok(v) => Ok(v),
+        Err(e) => Err(e),
+    }
 }
 
 pub(crate) fn attach_kprobe(
