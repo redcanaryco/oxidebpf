@@ -361,7 +361,7 @@ pub(crate) fn attach_kprobe_debugfs(
         attach_point,
     )?;
 
-    match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu.clone()) {
+    match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu) {
         Err(OxidebpfError::FileIOError) => {
             if is_return {
                 // depending on the kernel version, we may need to have either `kprobe`
