@@ -25,7 +25,7 @@ use libc::{c_int, pid_t};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, o, Drain, Logger};
+use slog::{crit, o, warn, Drain, Logger};
 
 use crate::blueprint::ProgramObject;
 pub use crate::blueprint::{ProgramBlueprint, SectionType};
@@ -873,7 +873,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                crit!(LOGGER, "could not close uprobes: {:?}", e);
+                warn!(LOGGER, "could not close uprobes: {:?}", e);
                 return;
             }
         };
@@ -883,7 +883,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    crit!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
+                    warn!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
                     return;
                 }
             }
@@ -897,7 +897,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                crit!(LOGGER, "could not close uprobes: {:?}", e);
+                warn!(LOGGER, "could not close kprobes: {:?}", e);
                 return;
             }
         };
@@ -907,7 +907,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    crit!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
+                    warn!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
                     return;
                 }
             }
