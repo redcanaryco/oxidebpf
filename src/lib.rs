@@ -12,43 +12,46 @@
 //! `LOG_SIZE` environment variable (e.g., `LOG_SIZE=8192 ./my_program`).
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::format;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::io::RawFd;
-use std::time::Duration;
-
-use crossbeam_channel::{bounded, Receiver, Sender};
-use libc::{c_int, pid_t};
-use mio::unix::SourceFd;
-use mio::{Events, Interest, Poll, Token};
-use nix::errno::Errno;
-use slog::{crit, o, warn, Drain, Logger};
-
-use crate::blueprint::ProgramObject;
-pub use crate::blueprint::{ProgramBlueprint, SectionType};
-use crate::bpf::constant::bpf_map_type;
-use crate::bpf::syscall::bpf_map_update_elem;
-use crate::bpf::{syscall, BpfAttr, MapConfig, SizedBpfAttr};
-pub use crate::error::OxidebpfError;
-pub use crate::maps::{ArrayMap, BpfHashMap, RWMap};
-use crate::maps::{PerCpu, PerfMap};
-use crate::maps::{PerfEvent, ProgMap};
-use crate::perf::constant::{perf_event_sample_format, perf_sw_ids, perf_type_id};
-use crate::perf::syscall::{
-    attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs,
-};
-use crate::perf::{PerfEventAttr, PerfSample, PerfWakeup};
-use lazy_static::lazy_static;
-use slog_term::TermDecorator;
-
 mod blueprint;
 mod bpf;
 mod error;
 mod maps;
 mod perf;
+
+pub use blueprint::{ProgramBlueprint, SectionType};
+pub use error::OxidebpfError;
+pub use maps::{ArrayMap, BpfHashMap, RWMap};
+
+use blueprint::ProgramObject;
+use bpf::{
+    constant::bpf_map_type,
+    syscall::{self, bpf_map_update_elem},
+    BpfAttr, MapConfig, SizedBpfAttr,
+};
+
+use maps::{PerCpu, PerfEvent, PerfMap, ProgMap};
+use perf::{
+    constant::{perf_event_sample_format, perf_sw_ids, perf_type_id},
+    syscall::{attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs},
+    PerfEventAttr, PerfSample, PerfWakeup,
+};
+
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{self, Display, Formatter},
+    format,
+    io::{BufRead, BufReader, BufWriter, Write},
+    os::unix::io::RawFd,
+    time::Duration,
+};
+
+use crossbeam_channel::{bounded, Receiver, Sender};
+use lazy_static::lazy_static;
+use libc::{c_int, pid_t};
+use mio::{unix::SourceFd, Events, Interest, Poll, Token};
+use nix::errno::Errno;
+use slog::{crit, o, warn, Drain, Logger};
+use slog_term::TermDecorator;
 
 /// Helper struct for library logging.
 pub struct Oxidebpf {
@@ -163,10 +166,10 @@ impl<'a> Program<'a> {
     /// Program::new(
     ///     ProgramType::Kprobe,
     ///     "sys_ptrace_write",
-    ///     vec!["do_mount"],
+    ///     &["do_mount"],
     /// ).optional(false).syscall(true);
     /// ```
-    pub fn new(kind: ProgramType, name: &'a str, attach_points: Vec<&'a str>) -> Program<'a> {
+    pub fn new(kind: ProgramType, name: &'a str, attach_points: &[&str]) -> Program<'a> {
         Self {
             kind,
             name,
@@ -225,7 +228,7 @@ impl<'a> Program<'a> {
     /// use oxidebpf::{Program, ProgramType};
     ///
     /// let program = Program::new(
-    ///     ProgramType::Kprobe, "my_program", vec!["do_mount"]
+    ///     ProgramType::Kprobe, "my_program", &["do_mount"]
     /// ).tail_call_map_index("my_map", 5);
     /// ```
     pub fn tail_call_map_index(mut self, map_name: &str, tail_call_index: u32) -> Self {
@@ -237,82 +240,84 @@ impl<'a> Program<'a> {
     }
 
     fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
-        let mut errs = Vec::<OxidebpfError>::new();
-        let mut paths = Vec::<String>::new();
-        let mut fds = Vec::<RawFd>::new();
-        self.attach_points.iter().for_each(|attach_point| {
-            match attach_kprobe(
-                self.fd,
-                attach_point,
-                self.kind == ProgramType::Kretprobe,
-                None,
-                0,
-            ) {
-                Ok(fd) => fds.push(fd),
-                Err(e) => {
-                    match attach_kprobe_debugfs(
-                        self.fd,
-                        attach_point,
-                        self.kind == ProgramType::Kretprobe,
-                        None,
-                        0,
-                    ) {
-                        Ok(s) => paths.push(s),
-                        Err(s) => {
-                            errs.push(e);
-                            errs.push(s);
+        let is_return = self.kind == ProgramType::Kretprobe;
+
+        self.attach_points
+            .iter()
+            .fold(Ok((vec![], vec![])), |mut result, attach_point| {
+                match attach_kprobe(self.fd, attach_point, is_return, None, 0) {
+                    Ok(fd) => {
+                        // skip if we already failed
+                        if let Ok((_, fds)) = &mut result {
+                            fds.push(fd);
+                        }
+                    }
+                    Err(e) => {
+                        match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
+                            Ok(path) => {
+                                // skip if we already failed
+                                if let Ok((paths, _)) = &mut result {
+                                    paths.push(path);
+                                }
+                            }
+                            Err(s) => match &mut result {
+                                Ok(_) => result = Err(vec![e, s]),
+                                Err(errors) => errors.extend([e, s]),
+                            },
                         }
                     }
                 }
-            }
-        });
 
-        if errs.is_empty() {
-            Ok((paths, fds))
-        } else {
-            Err(OxidebpfError::MultipleErrors(errs))
-        }
+                result
+            })
+            .map_err(OxidebpfError::MultipleErrors)
     }
 
     fn attach_uprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
-        let mut errs = Vec::<OxidebpfError>::new();
-        let mut paths = Vec::<String>::new();
-        let mut fds = Vec::<RawFd>::new();
-        for cpu in crate::maps::get_cpus()?.iter() {
-            self.attach_points.iter().for_each(|attach_point| {
-                match attach_uprobe(
-                    self.fd,
-                    attach_point,
-                    self.kind == ProgramType::Uretprobe,
-                    None,
-                    *cpu,
-                    self.pid.unwrap_or(-1),
-                ) {
-                    Ok(fd) => fds.push(fd),
+        let is_return = self.kind == ProgramType::Uretprobe;
+        let pid = self.pid.unwrap_or(-1);
+
+        maps::get_cpus()?
+            .into_iter()
+            .flat_map(|cpu| {
+                self.attach_points
+                    .iter()
+                    .map(move |attach_point| (cpu, attach_point))
+            })
+            .fold(Ok((vec![], vec![])), |mut result, (cpu, attach_point)| {
+                match attach_uprobe(self.fd, attach_point, is_return, None, cpu, pid) {
+                    Ok(fd) => {
+                        // skip if we already failed
+                        if let Ok((_, fds)) = &mut result {
+                            fds.push(fd);
+                        }
+                    }
                     Err(e) => {
                         match attach_uprobe_debugfs(
                             self.fd,
                             attach_point,
-                            self.kind == ProgramType::Uretprobe,
+                            is_return,
                             None,
-                            *cpu,
-                            self.pid.unwrap_or(-1),
+                            cpu,
+                            pid,
                         ) {
-                            Ok(s) => paths.push(s),
-                            Err(s) => {
-                                errs.push(e);
-                                errs.push(s)
+                            Ok(path) => {
+                                // skip if we already failed
+                                if let Ok((paths, _)) = &mut result {
+                                    paths.push(path);
+                                }
                             }
+                            Err(s) => match &mut result {
+                                Ok(_) => result = Err(vec![e, s]),
+                                Err(errors) => errors.extend([e, s]),
+                            },
                         }
                     }
                 }
-            });
-        }
-        if errs.is_empty() {
-            Ok((paths, fds))
-        } else {
-            Err(OxidebpfError::MultipleErrors(errs))
-        }
+
+                result
+            })
+            .map_err(OxidebpfError::MultipleErrors)
     }
 
     fn attach(&mut self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
@@ -320,11 +325,10 @@ impl<'a> Program<'a> {
             Ok(res) => Ok(res),
             Err(e) => {
                 if self.is_syscall {
-                    self.attach_points = self
-                        .attach_points
-                        .iter()
-                        .map(|ap| format!("{}{}", ARCH_SYSCALL_PREFIX, ap))
-                        .collect();
+                    self.attach_points
+                        .iter_mut()
+                        .for_each(|ap| *ap = format!("{}{}", ARCH_SYSCALL_PREFIX, ap));
+
                     self.attach_probes()
                 } else {
                     Err(e)
@@ -353,6 +357,7 @@ impl<'a> Program<'a> {
     fn set_fd(&mut self, fd: RawFd) {
         self.fd = fd
     }
+
     fn get_fd(&self) -> Result<RawFd, OxidebpfError> {
         if self.loaded {
             Ok(self.fd)
@@ -390,7 +395,7 @@ impl ProgramGroup<'_> {
     ///     vec![ProgramVersion::new(vec![Program::new(
     ///         ProgramType::Kprobe,
     ///         "test_program",
-    ///         vec!["do_mount"],
+    ///         &["do_mount"],
     ///     ).syscall(true)])],
     ///     None,
     /// );
@@ -444,7 +449,7 @@ impl ProgramGroup<'_> {
     ///     vec![ProgramVersion::new(vec![Program::new(
     ///         ProgramType::Kprobe,
     ///         "test_program",
-    ///         vec!["do_mount"],
+    ///         &["do_mount"],
     ///     ).syscall(true)])],
     ///     None,
     /// );
@@ -455,10 +460,10 @@ impl ProgramGroup<'_> {
         if self.loaded {
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
-        let mut errors = Vec::<OxidebpfError>::new();
+        let mut errors = vec![];
         for mut program_version in self.program_versions.drain(..) {
             match program_version.load_program_version(
-                self.program_blueprint.to_owned(),
+                self.program_blueprint.clone(),
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
@@ -538,12 +543,12 @@ impl ProgramVersion<'_> {
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_ptrace_write",
-    ///         vec!["sys_ptrace"],
+    ///         &["sys_ptrace"],
     ///     ).syscall(true),
     ///     Program::new(
     ///         ProgramType::Kprobe,
     ///         "sys_process_vm_writev",
-    ///         vec!["sys_process_vm_writev"],
+    ///         &["sys_process_vm_writev"],
     ///     ).syscall(true)
     /// ];
     ///
@@ -552,10 +557,10 @@ impl ProgramVersion<'_> {
     pub fn new(programs: Vec<Program>) -> ProgramVersion {
         ProgramVersion {
             programs,
-            fds: HashSet::<RawFd>::new(),
-            ev_names: HashSet::<String>::new(),
-            array_maps: HashMap::<String, ArrayMap>::new(),
-            hash_maps: HashMap::<String, BpfHashMap>::new(),
+            fds: HashSet::new(),
+            ev_names: HashSet::new(),
+            array_maps: HashMap::new(),
+            hash_maps: HashMap::new(),
             has_perf_maps: false,
         }
     }
@@ -565,90 +570,89 @@ impl ProgramVersion<'_> {
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
     ) -> Result<(), OxidebpfError> {
-        std::panic::catch_unwind(|| {
-            std::thread::Builder::new()
-                .name("PerfMapPoller".to_string())
-                .spawn(move || {
-                    let mut poll = Poll::new()
-                        .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))
-                        .unwrap_or_else(|e| {
-                            crit!(LOGGER, "error creating poller: {:?}", e);
-                            panic!()
-                        });
-                    let tokens: HashMap<Token, &PerfMap> = perfmaps
-                        .iter()
-                        .map(|p: &PerfMap| -> Result<(Token, &PerfMap), OxidebpfError> {
-                            let token = Token(p.ev_fd as usize);
-                            poll.registry()
-                                .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
-                                .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))?;
+        let result = std::thread::Builder::new()
+            .name("PerfMapPoller".to_string())
+            .spawn(move || {
+                let mut poll = Poll::new()
+                    .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))
+                    .unwrap_or_else(|e| {
+                        crit!(LOGGER, "error creating poller: {:?}", e);
+                        panic!()
+                    });
+                let tokens: HashMap<Token, &PerfMap> = perfmaps
+                    .iter()
+                    .map(|p: &PerfMap| -> Result<(Token, &PerfMap), OxidebpfError> {
+                        let token = Token(p.ev_fd as usize);
+                        poll.registry()
+                            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
+                            .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))?;
 
-                            Ok((token, p))
-                        })
-                        .collect::<Result<HashMap<Token, &PerfMap>, OxidebpfError>>()
-                        .unwrap_or_else(|e| {
-                            crit!(LOGGER, "could not establish polling registry: {:?}", e);
-                            panic!()
-                        });
-                    let mut events = Events::with_capacity(1024);
-                    'outer: loop {
-                        match poll.poll(&mut events, Some(Duration::from_millis(100))) {
-                            Ok(_) => {}
-                            Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
-                                Errno::EINTR => continue,
-                                _ => {
-                                    crit!(LOGGER, "unrecoverable polling error: {:?}", e);
+                        Ok((token, p))
+                    })
+                    .collect::<Result<HashMap<Token, &PerfMap>, OxidebpfError>>()
+                    .unwrap_or_else(|e| {
+                        crit!(LOGGER, "could not establish polling registry: {:?}", e);
+                        panic!()
+                    });
+                let mut events = Events::with_capacity(1024);
+                'outer: loop {
+                    match poll.poll(&mut events, Some(Duration::from_millis(100))) {
+                        Ok(_) => {}
+                        Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
+                            Errno::EINTR => continue,
+                            _ => {
+                                crit!(LOGGER, "unrecoverable polling error: {:?}", e);
+                                panic!()
+                            }
+                        },
+                    }
+                    let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
+                    events
+                        .iter()
+                        .filter(|event| event.is_readable())
+                        .filter_map(|e| tokens.get(&e.token()))
+                        .for_each(|perfmap| loop {
+                            match perfmap.read() {
+                                Ok(perf_event) => {
+                                    perf_events.push((
+                                        perfmap.name.to_string(),
+                                        perfmap.cpuid() as i32,
+                                        perf_event,
+                                    ));
+                                }
+                                Err(OxidebpfError::NoPerfData) => {
+                                    // we're done reading
+                                    return;
+                                }
+                                Err(e) => {
+                                    crit!(LOGGER, "unrecoverable perfmap read error: {:?}", e);
                                     panic!()
                                 }
-                            },
-                        }
-                        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
-                        events
-                            .iter()
-                            .filter(|event| event.is_readable())
-                            .filter_map(|e| tokens.get(&e.token()))
-                            .for_each(|perfmap| loop {
-                                match perfmap.read() {
-                                    Ok(perf_event) => {
-                                        perf_events.push((
-                                            perfmap.name.clone(),
-                                            perfmap.cpuid() as i32,
-                                            perf_event,
-                                        ));
-                                    }
-                                    Err(OxidebpfError::NoPerfData) => {
-                                        // we're done reading
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        crit!(LOGGER, "unrecoverable perfmap read error: {:?}", e);
-                                        panic!()
-                                    }
-                                }
-                            });
-                        for event in perf_events.into_iter() {
-                            let message = match event.2 {
-                                None => continue,
-                                Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
-                                Some(PerfEvent::Sample(e)) => {
-                                    PerfChannelMessage(event.0, event.1, e.data.clone())
-                                }
-                            };
-                            match tx.send(message) {
-                                Ok(_) => {}
-                                Err(_) => break 'outer,
-                            };
-                        }
+                            }
+                        });
+                    for event in perf_events.into_iter() {
+                        let message = match event.2 {
+                            None => continue,
+                            Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                            Some(PerfEvent::Sample(e)) => {
+                                PerfChannelMessage(event.0, event.1, e.data)
+                            }
+                        };
+                        match tx.send(message) {
+                            Ok(_) => {}
+                            Err(_) => break 'outer,
+                        };
                     }
-                })
-                .map_err(|_e| OxidebpfError::ThreadPollingError)
-                .unwrap_or_else(|e| {
-                    crit!(LOGGER, "error in thread polling: {:?}", e);
-                    panic!()
-                });
-        })
-        .map_err(|_| OxidebpfError::ThreadPollingError)?;
-        Ok(())
+                }
+            });
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                crit!(LOGGER, "error in thread polling: {:?}", e);
+                Err(OxidebpfError::ThreadPollingError)
+            }
+        }
     }
 
     fn load_program_version(
@@ -663,17 +667,16 @@ impl ProgramVersion<'_> {
             .map(|p| {
                 program_blueprint
                     .programs
-                    .get(&*p.name)
+                    .get(p.name)
+                    .cloned()
                     .ok_or(OxidebpfError::ProgramNotFound)
             })
-            .collect::<Result<Vec<&ProgramObject>, OxidebpfError>>()?
-            .into_iter()
-            .map(|p| p.to_owned())
-            .collect();
-        let mut perfmaps = Vec::<PerfMap>::new();
+            .collect::<Result<_, OxidebpfError>>()?;
+
+        let mut perfmaps = vec![];
         // load maps and save fds and apply relocations
-        let mut loaded_maps = HashSet::<String>::new();
-        let mut tailcall_tables = HashMap::<String, ProgMap>::new();
+        let mut loaded_maps = HashSet::new();
+        let mut tailcall_tables = HashMap::new();
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
                 let map = program_blueprint
@@ -681,7 +684,7 @@ impl ProgramVersion<'_> {
                     .get_mut(name)
                     .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
 
-                if !loaded_maps.contains(&map.name.clone()) {
+                if !loaded_maps.contains(&map.name) {
                     let sized_attr = SizedBpfAttr {
                         bpf_attr: BpfAttr {
                             map_config: MapConfig::from(map.definition),
@@ -705,23 +708,23 @@ impl ProgramVersion<'_> {
                                 wakeup_union: PerfWakeup { wakeup_events: 1 },
                                 ..Default::default()
                             };
-                            let mut perfmap =
+                            let perfmap =
                                 PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
+
                             perfmap
                                 .iter()
-                                .map(|p: &PerfMap| -> Result<(), OxidebpfError> {
+                                .try_for_each(|p| -> Result<(), OxidebpfError> {
                                     self.fds.insert(p.ev_fd as RawFd);
                                     bpf_map_update_elem::<i32, i32>(fd, p.cpuid(), p.ev_fd as i32)
-                                })
-                                .collect::<Result<Vec<()>, OxidebpfError>>()?;
+                                })?;
 
-                            perfmaps.append(&mut perfmap);
+                            perfmaps.extend(perfmap);
                         }
                         bpf_map_type::BPF_MAP_TYPE_ARRAY => {
                             // Create the new array Map
                             unsafe {
                                 match ArrayMap::new(
-                                    &name.clone(),
+                                    name,
                                     map.definition.value_size as u32,
                                     map.definition.max_entries,
                                 ) {
@@ -730,7 +733,7 @@ impl ProgramVersion<'_> {
                                         self.fds.insert(*fd);
                                         map.set_loaded(*fd);
                                         program_object.fixup_map_relocation(*fd, map)?;
-                                        self.array_maps.insert(name.clone(), new_map);
+                                        self.array_maps.insert(name.to_string(), new_map);
                                     }
                                     Err(err) => return Err(err),
                                 };
@@ -738,7 +741,7 @@ impl ProgramVersion<'_> {
                         }
                         bpf_map_type::BPF_MAP_TYPE_HASH => unsafe {
                             match BpfHashMap::new(
-                                &name.clone(),
+                                name,
                                 map.definition.key_size as u32,
                                 map.definition.value_size as u32,
                                 map.definition.max_entries,
@@ -748,19 +751,19 @@ impl ProgramVersion<'_> {
                                     self.fds.insert(*fd);
                                     map.set_loaded(*fd);
                                     program_object.fixup_map_relocation(*fd, map)?;
-                                    self.hash_maps.insert(name.clone(), new_map);
+                                    self.hash_maps.insert(name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
                             };
                         },
                         bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY => {
-                            match ProgMap::new(&name.clone(), map.definition.max_entries) {
+                            match ProgMap::new(name, map.definition.max_entries) {
                                 Ok(new_map) => {
                                     let fd = new_map.get_fd();
                                     self.fds.insert(*fd);
                                     map.set_loaded(*fd);
                                     program_object.fixup_map_relocation(*fd, map)?;
-                                    tailcall_tables.insert(new_map.base.name.clone(), new_map);
+                                    tailcall_tables.insert(new_map.base.name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
                             };
@@ -773,7 +776,7 @@ impl ProgramVersion<'_> {
                             program_object.fixup_map_relocation(fd, map)?;
                         }
                     }
-                    loaded_maps.insert(map.name.clone());
+                    loaded_maps.insert(map.name.to_string());
                 } else {
                     program_object.fixup_map_relocation(map.get_fd()?, map)?;
                 }
@@ -781,44 +784,44 @@ impl ProgramVersion<'_> {
         }
 
         // load and attach programs
-        for blueprint in matching_blueprints.iter() {
+        for blueprint in matching_blueprints.into_iter() {
             let fd = syscall::bpf_prog_load(
                 u32::from(&blueprint.program_type),
                 &blueprint.code,
-                blueprint.license.clone(),
+                blueprint.license,
                 blueprint.kernel_version,
             );
             // Programs are kept separate from ProgramBlueprints to allow users to specify
             // different blueprints/files for the same set of programs, should they choose.
-            // This means we need to do ugly filters like this.
+            // This means we need to do ugly filters like this
+            let name = blueprint.name;
             let programs: Vec<&mut Program> = self
                 .programs
                 .iter_mut()
-                .filter(|p| p.name.eq(blueprint.name.as_str()))
+                .filter(|p| p.name == name)
                 .collect();
-            if let Err(e) = fd {
-                for program in programs.iter() {
-                    if !program.optional {
-                        // If any are not optional, fail out of the whole Version
-                        return Err(e);
+
+            let fd = match fd {
+                Ok(fd) => fd,
+                Err(e) => {
+                    // if they're all optional, go to the next blueprint object
+                    if programs.iter().all(|p| p.optional) {
+                        continue;
                     }
+
+                    // If any are not optional, fail out of the whole Version
+                    return Err(e);
                 }
-                // if they're all optional, go to the next blueprint object
-                continue;
-            }
-            let fd = fd?;
+            };
+
             for p in programs {
                 // fix up any tail call mapping that might exist
-                p.tail_call_mapping
-                    .as_ref()
-                    .map(|tcm| {
-                        let table = tailcall_tables.get(&tcm.map);
-                        table.map_or_else(
-                            || Err(OxidebpfError::MapNotFound(tcm.map.clone())),
-                            |map| bpf_map_update_elem(*map.get_fd(), tcm.index, fd),
-                        )
-                    })
-                    .map_or(Ok(()), |v| v)?;
+                if let Some(tcm) = &p.tail_call_mapping {
+                    match tailcall_tables.get(&tcm.map) {
+                        Some(map) => bpf_map_update_elem(*map.get_fd(), tcm.index, fd)?,
+                        None => return Err(OxidebpfError::MapNotFound(tcm.map.clone())),
+                    }
+                }
 
                 p.loaded_as(fd);
                 match p.attach() {
@@ -828,12 +831,8 @@ impl ProgramVersion<'_> {
                         }
                     }
                     Ok(s) => {
-                        for s in s.0.iter() {
-                            self.ev_names.insert(s.clone());
-                        }
-                        for fd in s.1.into_iter() {
-                            self.fds.insert(fd);
-                        }
+                        self.ev_names.extend(s.0);
+                        self.fds.extend(s.1);
                     }
                 }
             }
@@ -917,12 +916,8 @@ impl<'a> Drop for ProgramVersion<'a> {
 
 #[cfg(test)]
 mod program_tests {
+    use super::*;
     use std::path::PathBuf;
-
-    use crate::blueprint::ProgramBlueprint;
-    use crate::maps::RWMap;
-    use crate::ProgramType;
-    use crate::{Program, ProgramGroup, ProgramVersion};
 
     #[test]
     fn test_program_group() {
@@ -938,10 +933,10 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_map_update",
-                    vec!["do_mount"],
+                    &["do_mount"],
                 )
                 .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );
@@ -968,10 +963,10 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_map_update",
-                    vec!["sys_open", "sys_write"],
+                    &["sys_open", "sys_write"],
                 )
                 .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );
@@ -1029,15 +1024,11 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_tailcall",
-                    vec!["sys_open", "sys_write"],
+                    &["sys_open", "sys_write"],
                 )
                 .syscall(true),
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_tailcall_update_map",
-                    vec![],
-                )
-                .tail_call_map_index("__test_tailcall_map", 0),
+                Program::new(ProgramType::Kprobe, "test_program_tailcall_update_map", &[])
+                    .tail_call_map_index("__test_tailcall_map", 0),
             ])],
             None,
         );
@@ -1086,10 +1077,10 @@ mod program_tests {
                 Program::new(
                     ProgramType::Kprobe,
                     "test_program_map_update",
-                    vec!["sys_open", "sys_write"],
+                    &["sys_open", "sys_write"],
                 )
                 .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );

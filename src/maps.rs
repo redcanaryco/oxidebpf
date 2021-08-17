@@ -39,31 +39,29 @@ pub struct PerfEventSample {
 }
 
 pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
-    let mut cpus = Vec::<i32>::new();
-    let cpu_string = cpu_string.trim();
-    for sublist in cpu_string.split(',').into_iter() {
+    let mut cpus = vec![];
+
+    for sublist in cpu_string.trim().split(',') {
         if sublist.contains('-') {
             let pair: Vec<&str> = sublist.split('-').collect();
             if pair.len() != 2 {
                 return Err(OxidebpfError::CpuOnlineFormatError);
             }
-            let from = pair
-                .get(0)
-                .ok_or(OxidebpfError::CpuOnlineFormatError)?
-                .parse::<i32>()
+
+            // we checked the length above so indexing is OK
+            let from: i32 = pair[0]
+                .parse()
                 .map_err(|_| OxidebpfError::CpuOnlineFormatError)?;
-            let to = pair
-                .get(1)
-                .ok_or(OxidebpfError::CpuOnlineFormatError)?
-                .parse::<i32>()
+            let to: i32 = pair[1]
+                .parse()
                 .map_err(|_| OxidebpfError::CpuOnlineFormatError)?;
 
-            (from..=to).into_iter().for_each(|i| cpus.push(i))
+            cpus.extend(from..=to)
         } else {
             cpus.push(
                 sublist
                     .trim()
-                    .parse::<i32>()
+                    .parse()
                     .map_err(|_| OxidebpfError::NumberParserError)?,
             );
         }

@@ -175,10 +175,10 @@ pub(crate) unsafe fn bpf_map_create_with_config(
     map_config: MapConfig,
     size: usize,
 ) -> Result<RawFd, OxidebpfError> {
-    let bpf_attr = MaybeUninit::<BpfAttr>::zeroed();
-    let mut bpf_attr = bpf_attr.assume_init();
-    bpf_attr.map_config = map_config;
-    let bpf_attr = SizedBpfAttr { bpf_attr, size };
+    let bpf_attr = SizedBpfAttr {
+        bpf_attr: BpfAttr { map_config },
+        size,
+    };
     let fd = sys_bpf(BPF_MAP_CREATE, bpf_attr)?;
     Ok(fd as RawFd)
 }
