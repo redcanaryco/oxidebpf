@@ -78,7 +78,7 @@ impl ProgramBlueprint {
     ///
     /// ```
     /// use std::path::PathBuf;
-    /// use oxidebpf::ProgramBlueprint;                                                                                        
+    /// use oxidebpf::ProgramBlueprint;
     /// use std::fs;
     ///
     /// ProgramBlueprint::new(
@@ -245,7 +245,7 @@ impl ProgramObject {
             .syms
             .iter()
             .find(|sym| sym.st_shndx == sh_index)
-            .map(|sym| get_symbol_name(&elf, &sym).unwrap_or_default())
+            .and_then(|sym| get_symbol_name(elf, &sym))
             .unwrap_or_default();
 
         // For object naming, we prioritize the section name over the symbol name
@@ -253,7 +253,7 @@ impl ProgramObject {
             program_type: program_type.clone(),
             name: name.map(str::to_string).unwrap_or(symbol_name),
             code,
-            relocations: Reloc::get_map_relocations(sh_index, &elf)?,
+            relocations: Reloc::get_map_relocations(sh_index, elf)?,
             license: get_license(data, elf),
             kernel_version,
         })
@@ -328,7 +328,7 @@ impl Reloc {
             .iter()
             .filter_map(|r| {
                 elf.syms.get(r.r_sym).map(|sym| Reloc {
-                    symbol_name: get_symbol_name(&elf, &sym).unwrap_or_default(),
+                    symbol_name: get_symbol_name(elf, &sym).unwrap_or_default(),
                     insn_index: r.r_offset / std::mem::size_of::<BpfInsn>() as u64,
                     reloc_type: r.r_type,
                 })
@@ -371,7 +371,7 @@ impl MapObject {
         symbols.sort_by(|a, b| a.st_value.cmp(&b.st_value));
 
         for (index, sym) in symbols.iter().enumerate() {
-            let symbol_name = get_symbol_name(elf, &sym).unwrap_or_default();
+            let symbol_name = get_symbol_name(elf, sym).unwrap_or_default();
             // If a section name was provided (which does not include the "maps/" prefix)
             // then we use that. Otherwise we use the symbol name.
             let name = section_name
@@ -422,8 +422,8 @@ fn get_section_by_name<'a>(elf: &'a Elf, name: &str) -> Option<&'a SectionHeader
 fn get_license(data: &[u8], elf: &Elf) -> String {
     get_section_by_name(elf, "license")
         .and_then(|sh| get_section_data(data, sh))
-        .map(|section_data| CStr::from_bytes_with_nul(section_data))
-        .map(|s| s.unwrap_or_default().to_str().unwrap_or_default())
+        .and_then(|section_data| CStr::from_bytes_with_nul(section_data).ok())
+        .and_then(|s| s.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_default()
 }
