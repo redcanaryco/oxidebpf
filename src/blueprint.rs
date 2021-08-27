@@ -448,9 +448,7 @@ fn get_kernel_version(data: &[u8], elf: &Elf) -> Result<u32, OxidebpfError> {
 }
 
 fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {
-    elf.strtab
-        .get(sym.st_name)
-        .map(|r| r.map(str::to_owned).unwrap_or_default())
+    elf.strtab.get_at(sym.st_name).map(String::from)
 }
 
 fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
