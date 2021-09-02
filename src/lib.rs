@@ -573,27 +573,26 @@ impl ProgramVersion<'_> {
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
             .spawn(move || {
-                let mut poll = Poll::new()
-                    .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))
-                    .unwrap_or_else(|e| {
+                let mut poll = match Poll::new() {
+                    Ok(p) => p,
+                    Err(e) => {
                         crit!(LOGGER, "error creating poller: {:?}", e);
-                        panic!()
-                    });
-                let tokens: HashMap<Token, &PerfMap> = perfmaps
-                    .iter()
-                    .map(|p: &PerfMap| -> Result<(Token, &PerfMap), OxidebpfError> {
-                        let token = Token(p.ev_fd as usize);
-                        poll.registry()
-                            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
-                            .map_err(|e| OxidebpfError::EbpfPollerError(e.to_string()))?;
+                        return;
+                    }
+                };
 
-                        Ok((token, p))
-                    })
-                    .collect::<Result<HashMap<Token, &PerfMap>, OxidebpfError>>()
-                    .unwrap_or_else(|e| {
-                        crit!(LOGGER, "could not establish polling registry: {:?}", e);
-                        panic!()
-                    });
+                let mut tokens: HashMap<Token, &PerfMap> = HashMap::new();
+                for p in perfmaps {
+                    let token = Token(p.ev_fd as usize);
+
+                    if let Err(e) = poll.registry().register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE) {
+                        crit!(LOGGER, "error registering poller: {:?}", e);
+                        return;
+                    }
+                    
+                    tokens.insert(token, p);
+                }
+
                 let mut events = Events::with_capacity(1024);
                 'outer: loop {
                     match poll.poll(&mut events, Some(Duration::from_millis(100))) {
@@ -602,7 +601,7 @@ impl ProgramVersion<'_> {
                             Errno::EINTR => continue,
                             _ => {
                                 crit!(LOGGER, "unrecoverable polling error: {:?}", e);
-                                panic!()
+                                return;
                             }
                         },
                     }
@@ -625,8 +624,8 @@ impl ProgramVersion<'_> {
                                     return;
                                 }
                                 Err(e) => {
-                                    crit!(LOGGER, "unrecoverable perfmap read error: {:?}", e);
-                                    panic!()
+                                    crit!(LOGGER, "perfmap read error: {:?}", e);
+                                    return;
                                 }
                             }
                         });
