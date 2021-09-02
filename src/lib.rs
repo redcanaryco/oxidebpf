@@ -581,15 +581,18 @@ impl ProgramVersion<'_> {
                     }
                 };
 
-                let mut tokens: HashMap<Token, &PerfMap> = HashMap::new();
+                let mut tokens: HashMap<Token, PerfMap> = HashMap::new();
                 for p in perfmaps {
                     let token = Token(p.ev_fd as usize);
 
-                    if let Err(e) = poll.registry().register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE) {
+                    if let Err(e) =
+                        poll.registry()
+                            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
+                    {
                         crit!(LOGGER, "error registering poller: {:?}", e);
                         return;
                     }
-                    
+
                     tokens.insert(token, p);
                 }
 
