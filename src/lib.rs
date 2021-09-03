@@ -522,11 +522,40 @@ impl ProgramGroup<'_> {
 }
 
 fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
-    Ok(())
+    unsafe {
+        let rlim = libc::rlimit {
+            rlim_cur: limit as u64,
+            rlim_max: limit as u64,
+        };
+        let ret = libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim as *const _);
+
+        if ret < 0 {
+            Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
+                nix::errno::errno(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn get_memlock_limit() -> Result<usize, OxidebpfError> {
-    Ok(0)
+    // use getrlimit() syscall
+    unsafe {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+
+        let ret = libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim as *mut _);
+        if ret < 0 {
+            return Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
+                nix::errno::errno(),
+            )));
+        }
+
+        Ok(rlim.rlim_cur as usize)
+    }
 }
 
 impl ProgramVersion<'_> {
