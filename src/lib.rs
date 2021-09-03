@@ -127,6 +127,7 @@ pub struct ProgramVersion<'a> {
     array_maps: HashMap<String, ArrayMap>,
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
+    mem_limit: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -520,6 +521,14 @@ impl ProgramGroup<'_> {
     }
 }
 
+fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
+    Ok(())
+}
+
+fn get_memlock_limit() -> Result<usize, OxidebpfError> {
+    Ok(0)
+}
+
 impl ProgramVersion<'_> {
     /// Create a new `ProgramVersion` from a vector of [`Program`](struct@Program)s.
     ///
@@ -562,7 +571,13 @@ impl ProgramVersion<'_> {
             array_maps: HashMap::new(),
             hash_maps: HashMap::new(),
             has_perf_maps: false,
+            mem_limit: None,
         }
+    }
+
+    pub fn mem_limit(mut self, limit: usize) -> Self {
+        self.mem_limit = Some(limit);
+        self
     }
 
     fn event_poller(
@@ -679,6 +694,37 @@ impl ProgramVersion<'_> {
         // load maps and save fds and apply relocations
         let mut loaded_maps = HashSet::new();
         let mut tailcall_tables = HashMap::new();
+
+        match self.mem_limit {
+            // check if user set a memlock limit, if so apply it
+            Some(limit) => set_memlock_limit(limit)?,
+            // if not, move on...
+            None => {
+                // iterate over all the program objects and pull out the required maps
+                let mut sum = 0;
+                // look at the required maps and sum how much memory they'll need
+                for program_object in matching_blueprints.iter_mut() {
+                    for name in program_object.required_maps().iter() {
+                        let map = program_blueprint
+                            .maps
+                            .get_mut(name)
+                            .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
+                        sum += ((map.definition.key_size + map.definition.value_size)
+                            * map.definition.max_entries) as usize;
+                    }
+                }
+                // check memlock limit
+                let current_limit = get_memlock_limit()?;
+                // convert bytes to kilobytes
+                let sum = (sum + 1023) / 1024;
+                // if we're over the limit, raise the limit to what we calculated
+                if sum > current_limit {
+                    set_memlock_limit(sum)?;
+                }
+                // if we're under, do nothing
+            }
+        }
+
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
                 let map = program_blueprint
