@@ -128,6 +128,7 @@ pub struct ProgramVersion<'a> {
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
     mem_limit: Option<usize>,
+    original_limit: usize,
 }
 
 #[derive(Clone, Default)]
@@ -472,7 +473,10 @@ impl ProgramGroup<'_> {
                     self.loaded_version = Some(program_version);
                     break;
                 }
-                Err(e) => errors.push(e),
+                Err(e) => {
+                    errors.push(e);
+                    set_memlock_limit(program_version.original_limit)?;
+                }
             };
         }
 
@@ -601,6 +605,7 @@ impl ProgramVersion<'_> {
             hash_maps: HashMap::new(),
             has_perf_maps: false,
             mem_limit: None,
+            original_limit: get_memlock_limit().unwrap_or(libc::RLIM_INFINITY as usize),
         }
     }
 
@@ -1042,11 +1047,44 @@ mod program_tests {
             None,
         );
 
+        let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group.load().expect("Could not load programs");
 
         let current_limit = get_memlock_limit().expect("could not get current limit");
 
         assert_eq!(current_limit, 1234567);
+        assert_ne!(current_limit, original_limit);
+
+        set_memlock_limit(original_limit).expect("could not revert limit");
+    }
+
+    #[test]
+    fn test_memlock_limit_reverts() {
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![Program::new(
+                ProgramType::Kprobe,
+                "test_program_map_update",
+                &["__not_a_real_syscall_expect_failure"],
+            )
+            .syscall(true)])
+            .mem_limit(1234567)],
+            None,
+        );
+
+        program_group
+            .load()
+            .expect_err("program_group was able to load");
+
+        let current_limit = get_memlock_limit().expect("could not get current limit");
+
+        assert_ne!(current_limit, 1234567);
     }
 
     #[test]
