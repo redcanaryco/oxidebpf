@@ -1020,6 +1020,36 @@ mod program_tests {
     }
 
     #[test]
+    fn test_memlock_limit() {
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join(format!("test_program_{}", std::env::consts::ARCH));
+        let program_blueprint =
+            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
+                .expect("Could not open test object file");
+        let mut program_group = ProgramGroup::new(
+            program_blueprint,
+            vec![ProgramVersion::new(vec![
+                Program::new(
+                    ProgramType::Kprobe,
+                    "test_program_map_update",
+                    &["do_mount"],
+                )
+                .syscall(true),
+                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
+            ])
+            .mem_limit(1234567)],
+            None,
+        );
+
+        program_group.load().expect("Could not load programs");
+
+        let current_limit = get_memlock_limit().expect("could not get current limit");
+
+        assert_eq!(current_limit, 1234567);
+    }
+
+    #[test]
     fn test_program_group_array_maps() {
         // Build the path to the test bpf program
         let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
