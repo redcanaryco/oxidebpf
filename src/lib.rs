@@ -741,12 +741,10 @@ impl ProgramVersion<'_> {
                         sum += ((map.definition.key_size + map.definition.value_size)
                             * map.definition.max_entries) as usize;
                     }
+                    sum += program_object.code.0.len() * 8; // BPF insns are always 8 bytes
                 }
                 // check memlock limit
                 let current_limit = get_memlock_limit()?;
-                // convert bytes to kilobytes
-                let sum = (sum + 1023) / 1024;
-                // if we're over the limit, raise the limit to what we calculated
                 if sum > current_limit {
                     set_memlock_limit(sum)?;
                 }
