@@ -198,7 +198,7 @@ impl<'a> Program<'a> {
             optional: false,
             loaded: false,
             is_syscall: false,
-            fd: 0,
+            fd: -1,
             pid: None,
             tail_call_mapping: None,
         }
