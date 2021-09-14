@@ -275,10 +275,11 @@ impl<'a> Program<'a> {
                     }
                     Err(e) => {
                         match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
-                            Ok(path) => {
+                            Ok((path, fd)) => {
                                 // skip if we already failed
-                                if let Ok((paths, _)) = &mut result {
+                                if let Ok((paths, fds)) = &mut result {
                                     paths.push(path);
+                                    fds.push(fd);
                                 }
                             }
                             Err(s) => match &mut result {
@@ -322,10 +323,11 @@ impl<'a> Program<'a> {
                             cpu,
                             pid,
                         ) {
-                            Ok(path) => {
+                            Ok((path, fd)) => {
                                 // skip if we already failed
-                                if let Ok((paths, _)) = &mut result {
+                                if let Ok((paths, fds)) = &mut result {
                                     paths.push(path);
+                                    fds.push(fd);
                                 }
                             }
                             Err(s) => match &mut result {
@@ -925,6 +927,7 @@ impl ProgramVersion<'_> {
                     }
                 }
 
+                // SAFETY: Program object `p` takes the `fd` here, but does NOT manage its lifetime
                 p.loaded_as(fd);
                 match p.attach() {
                     Err(e) => {
@@ -934,6 +937,7 @@ impl ProgramVersion<'_> {
                     }
                     Ok(s) => {
                         self.ev_names.extend(s.0);
+                        // SAFETY: these fds that came from `p.attach()` are not managed by `p`
                         self.fds.extend(s.1);
                     }
                 }
@@ -953,6 +957,7 @@ impl ProgramVersion<'_> {
 impl<'a> Drop for ProgramVersion<'a> {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
+        // SAFETY: these fds must be wholly owned by `ProgramVersion`.
         for fd in self.fds.iter() {
             unsafe {
                 libc::close(*fd as c_int);
