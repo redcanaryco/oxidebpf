@@ -119,7 +119,7 @@ pub struct ProgramGroup<'a> {
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
@@ -129,6 +129,25 @@ pub struct ProgramVersion<'a> {
     has_perf_maps: bool,
     mem_limit: Option<usize>,
     original_limit: usize,
+}
+
+impl<'a> Clone for ProgramVersion<'a> {
+    fn clone(&self) -> Self {
+        Self {
+            programs: self.programs.clone(),
+            ev_names: self.ev_names.clone(),
+            array_maps: self.array_maps.clone(),
+            hash_maps: self.hash_maps.clone(),
+            has_perf_maps: self.has_perf_maps,
+            mem_limit: self.mem_limit,
+            original_limit: self.original_limit,
+            fds: self
+                .fds
+                .iter()
+                .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -264,7 +283,7 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend([e, s]),
+                                Err(errors) => errors.extend(vec![e, s]),
                             },
                         }
                     }
@@ -311,7 +330,7 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend([e, s]),
+                                Err(errors) => errors.extend(vec![e, s]),
                             },
                         }
                     }
@@ -794,7 +813,9 @@ impl ProgramVersion<'_> {
                             perfmap
                                 .iter()
                                 .try_for_each(|p| -> Result<(), OxidebpfError> {
-                                    self.fds.insert(p.ev_fd as RawFd);
+                                    self.fds.insert(unsafe {
+                                        libc::fcntl(p.ev_fd as RawFd, libc::F_DUPFD_CLOEXEC, 3)
+                                    });
                                     bpf_map_update_elem::<i32, i32>(fd, p.cpuid(), p.ev_fd as i32)
                                 })?;
 
@@ -809,10 +830,14 @@ impl ProgramVersion<'_> {
                                     map.definition.max_entries,
                                 ) {
                                     Ok(new_map) => {
-                                        let fd = new_map.get_fd();
-                                        self.fds.insert(*fd);
-                                        map.set_loaded(*fd);
-                                        program_object.fixup_map_relocation(*fd, map)?;
+                                        let fd = libc::fcntl(
+                                            *new_map.get_fd(),
+                                            libc::F_DUPFD_CLOEXEC,
+                                            3,
+                                        );
+                                        self.fds.insert(fd);
+                                        map.set_loaded(fd);
+                                        program_object.fixup_map_relocation(fd, map)?;
                                         self.array_maps.insert(name.to_string(), new_map);
                                     }
                                     Err(err) => return Err(err),
@@ -827,10 +852,11 @@ impl ProgramVersion<'_> {
                                 map.definition.max_entries,
                             ) {
                                 Ok(new_map) => {
-                                    let fd = new_map.get_fd();
-                                    self.fds.insert(*fd);
-                                    map.set_loaded(*fd);
-                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    let fd =
+                                        libc::fcntl(*new_map.get_fd(), libc::F_DUPFD_CLOEXEC, 3);
+                                    self.fds.insert(fd);
+                                    map.set_loaded(fd);
+                                    program_object.fixup_map_relocation(fd, map)?;
                                     self.hash_maps.insert(name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
@@ -839,10 +865,12 @@ impl ProgramVersion<'_> {
                         bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY => {
                             match ProgMap::new(name, map.definition.max_entries) {
                                 Ok(new_map) => {
-                                    let fd = new_map.get_fd();
-                                    self.fds.insert(*fd);
-                                    map.set_loaded(*fd);
-                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    let fd = unsafe {
+                                        libc::fcntl(*new_map.get_fd(), libc::F_DUPFD_CLOEXEC, 3)
+                                    };
+                                    self.fds.insert(fd);
+                                    map.set_loaded(fd);
+                                    program_object.fixup_map_relocation(fd, map)?;
                                     tailcall_tables.insert(new_map.base.name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
