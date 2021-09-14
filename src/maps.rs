@@ -189,7 +189,7 @@ impl Clone for Map {
         Self {
             name: self.name.clone(),
             fd: unsafe { libc::fcntl(self.fd, libc::F_DUPFD_CLOEXEC, 3) },
-            map_config: self.map_config.clone(),
+            map_config: self.map_config,
             map_config_size: self.map_config_size,
             loaded: self.loaded,
         }

@@ -529,18 +529,12 @@ impl ProgramGroup<'_> {
 
     /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
     pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
-        match &self.loaded_version {
-            Some(ver) => Some(&ver.array_maps),
-            None => None,
-        }
+        self.loaded_version.as_ref().map(|ver| &ver.array_maps)
     }
 
     /// Get a reference to the hash maps in the ['Program'](struct@ProgramGroup)s.
     pub fn get_hash_maps(&self) -> Option<&HashMap<String, BpfHashMap>> {
-        match &self.loaded_version {
-            Some(ver) => Some(&ver.hash_maps),
-            None => None,
-        }
+        self.loaded_version.as_ref().map(|ver| &ver.hash_maps)
     }
 }
 
