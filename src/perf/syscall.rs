@@ -68,6 +68,8 @@ fn enter_pid_mnt_ns(pid: pid_t, my_mount: RawFd) -> Result<usize, OxidebpfError>
     setns(new_mnt.into_raw_fd(), CLONE_NEWNS)
 }
 
+// SAFETY: original fd is held in the perf_event_open_debugfs function
+// and is not passed or duplicated.
 fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
     setns(original_mnt_ns_fd, CLONE_NEWNS)?;
     unsafe {
@@ -158,7 +160,7 @@ pub(crate) fn perf_event_open(
     attr: &PerfEventAttr,
     pid: pid_t,
     cpu: i32,
-    group_fd: RawFd,
+    group_fd: RawFd, // SAFETY: this is only ever called with `group_id = -1`
     flags: c_ulong,
 ) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
@@ -212,7 +214,7 @@ fn perf_attach_tracepoint_with_debugfs(
     prog_fd: RawFd,
     event_path: String,
     cpu: i32,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let p_type = std::fs::read_to_string((*PMU_TTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
         .trim()
@@ -240,7 +242,7 @@ fn perf_attach_tracepoint_with_debugfs(
 
     let pfd = perf_event_open(&perf_event_attr, -1, cpu, -1, PERF_FLAG_FD_CLOEXEC)?;
     perf_attach_tracepoint(prog_fd, pfd)?;
-    Ok(event_path)
+    Ok((event_path, pfd))
 }
 
 fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, OxidebpfError> {
@@ -248,6 +250,8 @@ fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, Oxidebp
     perf_event_ioc_enable(perf_fd)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 fn perf_event_with_attach_point(
     attach_point: &str,
     return_bit: u64,
@@ -279,6 +283,8 @@ fn perf_event_with_attach_point(
     )
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_uprobe_debugfs(
     fd: RawFd,
     attach_point: &str,
@@ -286,7 +292,7 @@ pub(crate) fn attach_uprobe_debugfs(
     offset: Option<u64>,
     cpu: i32,
     pid: pid_t,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let event_path = perf_event_open_debugfs(
         pid,
         if is_return {
@@ -300,6 +306,8 @@ pub(crate) fn attach_uprobe_debugfs(
     perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_uprobe(
     fd: RawFd,
     attach_point: &str,
@@ -340,16 +348,19 @@ pub(crate) fn attach_uprobe(
         cpu,
         Some(pid),
     )?;
-    perf_attach_tracepoint(fd, pfd)
+    perf_attach_tracepoint(fd, pfd)?;
+    Ok(pfd)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_kprobe_debugfs(
     fd: RawFd,
     attach_point: &str,
     is_return: bool,
     offset: Option<u64>,
     cpu: i32,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let event_path = perf_event_open_debugfs(
         -1,
         if is_return {
@@ -377,6 +388,8 @@ pub(crate) fn attach_kprobe_debugfs(
     }
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_kprobe(
     fd: RawFd,
     attach_point: &str,
@@ -416,7 +429,8 @@ pub(crate) fn attach_kprobe(
         cpu,
         None,
     )?;
-    perf_attach_tracepoint(fd, pfd)
+    perf_attach_tracepoint(fd, pfd)?;
+    Ok(pfd)
 }
 
 /// Calls the `setns` syscall on the given `fd` with the given `nstype`.
@@ -516,7 +530,7 @@ mod tests {
                         perf_event_open_debugfs(-1, ProgramType::Kprobe, 0, "do_mount").unwrap();
                     // perf_event_ioc_set_bpf is called in here already
                     let s = perf_attach_tracepoint_with_debugfs(prog_fd, event_path, 0).unwrap();
-                    Ok((Some(s), None))
+                    Ok((Some(s.0), None))
                 }
             };
         match fd_or_name {

@@ -119,7 +119,7 @@ pub struct ProgramGroup<'a> {
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct ProgramVersion<'a> {
     programs: Vec<Program<'a>>,
     fds: HashSet<RawFd>,
@@ -129,6 +129,25 @@ pub struct ProgramVersion<'a> {
     has_perf_maps: bool,
     mem_limit: Option<usize>,
     original_limit: usize,
+}
+
+impl<'a> Clone for ProgramVersion<'a> {
+    fn clone(&self) -> Self {
+        Self {
+            programs: self.programs.clone(),
+            ev_names: self.ev_names.clone(),
+            array_maps: self.array_maps.clone(),
+            hash_maps: self.hash_maps.clone(),
+            has_perf_maps: self.has_perf_maps,
+            mem_limit: self.mem_limit,
+            original_limit: self.original_limit,
+            fds: self
+                .fds
+                .iter()
+                .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -179,7 +198,7 @@ impl<'a> Program<'a> {
             optional: false,
             loaded: false,
             is_syscall: false,
-            fd: 0,
+            fd: -1,
             pid: None,
             tail_call_mapping: None,
         }
@@ -256,15 +275,16 @@ impl<'a> Program<'a> {
                     }
                     Err(e) => {
                         match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
-                            Ok(path) => {
+                            Ok((path, fd)) => {
                                 // skip if we already failed
-                                if let Ok((paths, _)) = &mut result {
+                                if let Ok((paths, fds)) = &mut result {
                                     paths.push(path);
+                                    fds.push(fd);
                                 }
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend([e, s]),
+                                Err(errors) => errors.extend(vec![e, s]),
                             },
                         }
                     }
@@ -303,15 +323,16 @@ impl<'a> Program<'a> {
                             cpu,
                             pid,
                         ) {
-                            Ok(path) => {
+                            Ok((path, fd)) => {
                                 // skip if we already failed
-                                if let Ok((paths, _)) = &mut result {
+                                if let Ok((paths, fds)) = &mut result {
                                     paths.push(path);
+                                    fds.push(fd);
                                 }
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend([e, s]),
+                                Err(errors) => errors.extend(vec![e, s]),
                             },
                         }
                     }
@@ -510,18 +531,12 @@ impl ProgramGroup<'_> {
 
     /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
     pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
-        match &self.loaded_version {
-            Some(ver) => Some(&ver.array_maps),
-            None => None,
-        }
+        self.loaded_version.as_ref().map(|ver| &ver.array_maps)
     }
 
     /// Get a reference to the hash maps in the ['Program'](struct@ProgramGroup)s.
     pub fn get_hash_maps(&self) -> Option<&HashMap<String, BpfHashMap>> {
-        match &self.loaded_version {
-            Some(ver) => Some(&ver.hash_maps),
-            None => None,
-        }
+        self.loaded_version.as_ref().map(|ver| &ver.hash_maps)
     }
 }
 
@@ -794,7 +809,9 @@ impl ProgramVersion<'_> {
                             perfmap
                                 .iter()
                                 .try_for_each(|p| -> Result<(), OxidebpfError> {
-                                    self.fds.insert(p.ev_fd as RawFd);
+                                    self.fds.insert(unsafe {
+                                        libc::fcntl(p.ev_fd as RawFd, libc::F_DUPFD_CLOEXEC, 3)
+                                    });
                                     bpf_map_update_elem::<i32, i32>(fd, p.cpuid(), p.ev_fd as i32)
                                 })?;
 
@@ -809,10 +826,14 @@ impl ProgramVersion<'_> {
                                     map.definition.max_entries,
                                 ) {
                                     Ok(new_map) => {
-                                        let fd = new_map.get_fd();
-                                        self.fds.insert(*fd);
-                                        map.set_loaded(*fd);
-                                        program_object.fixup_map_relocation(*fd, map)?;
+                                        let fd = libc::fcntl(
+                                            *new_map.get_fd(),
+                                            libc::F_DUPFD_CLOEXEC,
+                                            3,
+                                        );
+                                        self.fds.insert(fd);
+                                        map.set_loaded(fd);
+                                        program_object.fixup_map_relocation(fd, map)?;
                                         self.array_maps.insert(name.to_string(), new_map);
                                     }
                                     Err(err) => return Err(err),
@@ -827,10 +848,11 @@ impl ProgramVersion<'_> {
                                 map.definition.max_entries,
                             ) {
                                 Ok(new_map) => {
-                                    let fd = new_map.get_fd();
-                                    self.fds.insert(*fd);
-                                    map.set_loaded(*fd);
-                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    let fd =
+                                        libc::fcntl(*new_map.get_fd(), libc::F_DUPFD_CLOEXEC, 3);
+                                    self.fds.insert(fd);
+                                    map.set_loaded(fd);
+                                    program_object.fixup_map_relocation(fd, map)?;
                                     self.hash_maps.insert(name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
@@ -839,10 +861,12 @@ impl ProgramVersion<'_> {
                         bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY => {
                             match ProgMap::new(name, map.definition.max_entries) {
                                 Ok(new_map) => {
-                                    let fd = new_map.get_fd();
-                                    self.fds.insert(*fd);
-                                    map.set_loaded(*fd);
-                                    program_object.fixup_map_relocation(*fd, map)?;
+                                    let fd = unsafe {
+                                        libc::fcntl(*new_map.get_fd(), libc::F_DUPFD_CLOEXEC, 3)
+                                    };
+                                    self.fds.insert(fd);
+                                    map.set_loaded(fd);
+                                    program_object.fixup_map_relocation(fd, map)?;
                                     tailcall_tables.insert(new_map.base.name.to_string(), new_map);
                                 }
                                 Err(err) => return Err(err),
@@ -903,6 +927,7 @@ impl ProgramVersion<'_> {
                     }
                 }
 
+                // SAFETY: Program object `p` takes the `fd` here, but does NOT manage its lifetime
                 p.loaded_as(fd);
                 match p.attach() {
                     Err(e) => {
@@ -912,6 +937,7 @@ impl ProgramVersion<'_> {
                     }
                     Ok(s) => {
                         self.ev_names.extend(s.0);
+                        // SAFETY: these fds that came from `p.attach()` are not managed by `p`
                         self.fds.extend(s.1);
                     }
                 }
@@ -931,6 +957,7 @@ impl ProgramVersion<'_> {
 impl<'a> Drop for ProgramVersion<'a> {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
+        // SAFETY: these fds must be wholly owned by `ProgramVersion`.
         for fd in self.fds.iter() {
             unsafe {
                 libc::close(*fd as c_int);

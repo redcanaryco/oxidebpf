@@ -14,7 +14,7 @@ edition = "2018"
 
 [dependencies]
 libc = "0.2.97"
-goblin = "0.4.1"
+goblin = "0.4.2"
 nix = "0.21.0"
 itertools = "0.10.1"
 crossbeam-channel = "0.5.1"

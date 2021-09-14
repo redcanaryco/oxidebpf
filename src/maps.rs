@@ -175,13 +175,33 @@ pub struct BpfHashMap {
     pub base: Map,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Map {
     pub name: String,       // The name of the map
     fd: RawFd,              // The file descriptor that represents the map
     map_config: MapConfig,  // The first struct in the bpf_attr union
     map_config_size: usize, // The size of the map_config field in bytes
     loaded: bool,           // Whether or not the map has been loaded
+}
+
+impl Clone for Map {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            fd: unsafe { libc::fcntl(self.fd, libc::F_DUPFD_CLOEXEC, 3) },
+            map_config: self.map_config,
+            map_config_size: self.map_config_size,
+            loaded: self.loaded,
+        }
+    }
+}
+
+impl Drop for Map {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
 }
 
 /// This trait specifies a map that can be read from or written to (e.g., array types).
@@ -717,9 +737,6 @@ impl Drop for PerfMap {
 impl Drop for ArrayMap {
     fn drop(&mut self) {
         self.base.loaded = false;
-        unsafe {
-            libc::close(self.base.fd);
-        }
     }
 }
 
