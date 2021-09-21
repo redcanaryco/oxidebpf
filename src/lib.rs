@@ -661,6 +661,11 @@ impl ProgramVersion<'_> {
                 }
 
                 let mut events = Events::with_capacity(1024);
+
+                // for tracking dropped event statistics inside the loop
+                let mut dropped = 0;
+                let mut processed = 0;
+
                 'outer: loop {
                     match poll.poll(&mut events, Some(Duration::from_millis(100))) {
                         Ok(_) => {}
@@ -699,7 +704,17 @@ impl ProgramVersion<'_> {
                     for event in perf_events.into_iter() {
                         let message = match event.2 {
                             None => continue,
-                            Some(PerfEvent::Lost(_)) => continue, // TODO: count losses
+                            Some(PerfEvent::Lost(_)) => {
+                                dropped += 1;
+                                if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
+                                    let d = dropped;
+                                    dropped = 0;
+                                    processed = 0;
+                                    PerfChannelMessage("DROPPED".to_owned(), d, vec![])
+                                } else {
+                                    continue;
+                                }
+                            }
                             Some(PerfEvent::Sample(e)) => {
                                 PerfChannelMessage(event.0, event.1, e.data)
                             }
@@ -708,6 +723,8 @@ impl ProgramVersion<'_> {
                             Ok(_) => {}
                             Err(_) => break 'outer,
                         };
+
+                        processed += 1;
                     }
                 }
             });
