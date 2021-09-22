@@ -70,12 +70,11 @@ let mut program_group = ProgramGroup::new(
     program_blueprint,
     vec![ProgramVersion::new(vec![
         Program::new(
-            ProgramType::Kprobe,
             "test_program_map_update",
             vec!["do_mount"],
         )
         .syscall(true),
-        Program::new(ProgramType::Kprobe, "test_program", vec!["do_mount"]).syscall(true),
+        Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
     None,
 );
