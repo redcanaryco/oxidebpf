@@ -161,7 +161,7 @@ struct TailCallMapping {
 /// [`ProgramBlueprint`](struct@ProgramBlueprint).
 #[derive(Clone, Default)]
 pub struct Program<'a> {
-    kind: ProgramType,
+    kind: Option<ProgramType>,
     name: &'a str,
     attach_points: Vec<String>,
     optional: bool,
@@ -179,20 +179,28 @@ impl<'a> Program<'a> {
     /// blueprint's object file (see ['ProgramBlueprint'](struct@ProgramBlueprint))
     /// and a vector of attachment points.
     ///
+    /// # Note
+    ///
+    /// If your blueprint contains duplicate names or if you provide multiple `Program`s
+    /// with the same specified blueprint program, the loader will attempt to pairwise
+    /// load all combinations. For example, if you have two programs `kprobe/program` and
+    /// `kretprobe/program` and give the `ProgramVersion` two `Program` objects, both with
+    /// program `program`, then the loader will attempt to load and attach each probe twice.
+    /// To avoid this, give the programs in your ELF binary unique names.
+    ///
     /// # Example
     ///
     /// ```
     /// use oxidebpf::{Program, ProgramType};
     ///
     /// Program::new(
-    ///     ProgramType::Kprobe,
     ///     "sys_ptrace_write",
     ///     &["do_mount"],
     /// ).optional(false).syscall(true);
     /// ```
-    pub fn new(kind: ProgramType, name: &'a str, attach_points: &[&str]) -> Program<'a> {
+    pub fn new(name: &'a str, attach_points: &[&str]) -> Program<'a> {
         Self {
-            kind,
+            kind: None,
             name,
             attach_points: attach_points.iter().map(|ap| ap.to_string()).collect(),
             optional: false,
@@ -246,10 +254,10 @@ impl<'a> Program<'a> {
     /// exist at index 5, you should call this function with 5 as the argument.
     ///
     /// ```no_run
-    /// use oxidebpf::{Program, ProgramType};
+    /// use oxidebpf::Program;
     ///
     /// let program = Program::new(
-    ///     ProgramType::Kprobe, "my_program", &["do_mount"]
+    ///     "my_program", &["do_mount"]
     /// ).tail_call_map_index("my_map", 5);
     /// ```
     pub fn tail_call_map_index(mut self, map_name: &str, tail_call_index: u32) -> Self {
@@ -260,8 +268,33 @@ impl<'a> Program<'a> {
         self
     }
 
+    /// Optionally specify what type of program this is.
+    ///
+    /// If the type specified matches what is read from the ELF file, this has no effect. If
+    /// the type specified is a different, but compatible, type (e.g., kprobe and kretprobe)
+    /// then the type will be "switched" and the program will be loaded as the specified type.
+    /// If the types are incompatible (e.g., kprobe vs uprobe), an attempt will be made to load
+    /// the program as directed, but you will likely receive an error on loading or attaching.
+    ///
+    /// # Example
+    ///
+    /// This will tell the loader to attempt to load this program as a kretprobe, despite whatever
+    /// it exists as in the ELF file.
+    ///
+    /// ```no_run
+    /// use oxidebpf::{Program, ProgramType};
+    ///
+    /// let program = Program::new(
+    ///    "my_program", &["do_mount"]
+    /// ).program_type(ProgramType::Kretprobe);
+    /// ```
+    pub fn program_type(mut self, kind: ProgramType) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
     fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
-        let is_return = self.kind == ProgramType::Kretprobe;
+        let is_return = self.kind == Some(ProgramType::Kretprobe);
 
         self.attach_points
             .iter()
@@ -296,7 +329,7 @@ impl<'a> Program<'a> {
     }
 
     fn attach_uprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
-        let is_return = self.kind == ProgramType::Uretprobe;
+        let is_return = self.kind == Some(ProgramType::Uretprobe);
         let pid = self.pid.unwrap_or(-1);
 
         maps::get_cpus()?
@@ -366,8 +399,8 @@ impl<'a> Program<'a> {
         }
 
         match self.kind {
-            ProgramType::Kprobe | ProgramType::Kretprobe => self.attach_kprobe(),
-            ProgramType::Uprobe | ProgramType::Uretprobe => self.attach_uprobe(),
+            Some(ProgramType::Kprobe | ProgramType::Kretprobe) => self.attach_kprobe(),
+            Some(ProgramType::Uprobe | ProgramType::Uretprobe) => self.attach_uprobe(),
             _ => Err(OxidebpfError::UnsupportedProgramType),
         }
     }
@@ -416,7 +449,6 @@ impl ProgramGroup<'_> {
     /// ProgramGroup::new(
     ///     program_blueprint,
     ///     vec![ProgramVersion::new(vec![Program::new(
-    ///         ProgramType::Kprobe,
     ///         "test_program",
     ///         &["do_mount"],
     ///     ).syscall(true)])],
@@ -470,7 +502,6 @@ impl ProgramGroup<'_> {
     /// let mut program_group = ProgramGroup::new(
     ///     program_blueprint,
     ///     vec![ProgramVersion::new(vec![Program::new(
-    ///         ProgramType::Kprobe,
     ///         "test_program",
     ///         &["do_mount"],
     ///     ).syscall(true)])],
@@ -598,12 +629,10 @@ impl ProgramVersion<'_> {
     ///
     /// let program_vec = vec![
     ///     Program::new(
-    ///         ProgramType::Kprobe,
     ///         "sys_ptrace_write",
     ///         &["sys_ptrace"],
     ///     ).syscall(true),
     ///     Program::new(
-    ///         ProgramType::Kprobe,
     ///         "sys_process_vm_writev",
     ///         &["sys_process_vm_writev"],
     ///     ).syscall(true)
@@ -906,12 +935,6 @@ impl ProgramVersion<'_> {
 
         // load and attach programs
         for blueprint in matching_blueprints.into_iter() {
-            let fd = syscall::bpf_prog_load(
-                u32::from(&blueprint.program_type),
-                &blueprint.code,
-                blueprint.license,
-                blueprint.kernel_version,
-            );
             // Programs are kept separate from ProgramBlueprints to allow users to specify
             // different blueprints/files for the same set of programs, should they choose.
             // This means we need to do ugly filters like this
@@ -922,20 +945,33 @@ impl ProgramVersion<'_> {
                 .filter(|p| p.name == name)
                 .collect();
 
-            let fd = match fd {
-                Ok(fd) => fd,
-                Err(e) => {
-                    // if they're all optional, go to the next blueprint object
-                    if programs.iter().all(|p| p.optional) {
-                        continue;
-                    }
-
-                    // If any are not optional, fail out of the whole Version
-                    return Err(e);
-                }
-            };
-
             for p in programs {
+                // check if the user specified a kind, otherwise set it based on the blueprint
+                let program_type = match &p.kind {
+                    Some(k) => k,
+                    None => {
+                        p.kind = Some(blueprint.program_type.clone());
+                        &blueprint.program_type
+                    }
+                };
+                let fd = match syscall::bpf_prog_load(
+                    u32::from(program_type),
+                    &blueprint.code,
+                    blueprint.license.clone(),
+                    blueprint.kernel_version,
+                ) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        // if this program is optional, go to the next one
+                        if p.optional {
+                            continue;
+                        }
+
+                        // If it's not optional, fail out of the whole Version
+                        return Err(e);
+                    }
+                };
+
                 // fix up any tail call mapping that might exist
                 if let Some(tcm) = &p.tail_call_mapping {
                     match tailcall_tables.get(&tcm.map) {
@@ -958,8 +994,8 @@ impl ProgramVersion<'_> {
                         self.fds.extend(s.1);
                     }
                 }
+                self.fds.insert(fd);
             }
-            self.fds.insert(fd);
         }
 
         // start event poller and pass back channel, if one exists
@@ -1054,13 +1090,8 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_map_update",
-                    &["do_mount"],
-                )
-                .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
+                Program::new("test_program_map_update", &["do_mount"]).syscall(true),
+                Program::new("test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );
@@ -1079,13 +1110,8 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_map_update",
-                    &["do_mount"],
-                )
-                .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
+                Program::new("test_program_map_update", &["do_mount"]).syscall(true),
+                Program::new("test_program", &["do_mount"]).syscall(true),
             ])
             .mem_limit(1234567)],
             None,
@@ -1113,7 +1139,6 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![Program::new(
-                ProgramType::Kprobe,
                 "test_program_map_update",
                 &["__not_a_real_syscall_expect_failure"],
             )
@@ -1147,13 +1172,8 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_map_update",
-                    &["sys_open", "sys_write"],
-                )
-                .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
+                Program::new("test_program_map_update", &["sys_open", "sys_write"]).syscall(true),
+                Program::new("test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );
@@ -1208,13 +1228,8 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_tailcall",
-                    &["sys_open", "sys_write"],
-                )
-                .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program_tailcall_update_map", &[])
+                Program::new("test_program_tailcall", &["sys_open", "sys_write"]).syscall(true),
+                Program::new("test_program_tailcall_update_map", &[])
                     .tail_call_map_index("__test_tailcall_map", 0),
             ])],
             None,
@@ -1261,13 +1276,8 @@ mod program_tests {
         let mut program_group = ProgramGroup::new(
             program_blueprint,
             vec![ProgramVersion::new(vec![
-                Program::new(
-                    ProgramType::Kprobe,
-                    "test_program_map_update",
-                    &["sys_open", "sys_write"],
-                )
-                .syscall(true),
-                Program::new(ProgramType::Kprobe, "test_program", &["do_mount"]).syscall(true),
+                Program::new("test_program_map_update", &["sys_open", "sys_write"]).syscall(true),
+                Program::new("test_program", &["do_mount"]).syscall(true),
             ])],
             None,
         );
