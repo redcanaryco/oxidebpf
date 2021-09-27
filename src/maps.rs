@@ -359,11 +359,10 @@ impl PerfMap {
 
             match (*event).type_ {
                 perf_event_type::PERF_RECORD_SAMPLE => {
-                    let header_bytes: Vec<u8> = buf
-                        .drain(..std::mem::size_of::<PerfEventHeader>())
-                        .collect();
-                    let len: Vec<u8> = buf.drain(..std::mem::size_of::<u32>()).collect();
-                    let data: Vec<u8> = buf.drain(..).collect();
+                    let (header_bytes, data) = buf
+                        .as_slice()
+                        .split_at(std::mem::size_of::<PerfEventHeader>());
+                    let (len, data) = data.split_at(std::mem::size_of::<u32>());
                     let (_, header, _) = header_bytes.align_to::<PerfEventHeader>();
                     let (_, size, _) = len.align_to::<u32>();
                     if header.len() != 1 {
@@ -374,7 +373,11 @@ impl PerfMap {
                     }
                     let header = *header.get(0).ok_or(OxidebpfError::BadPerfSample)?;
                     let size = *size.get(0).ok_or(OxidebpfError::BadPerfSample)?;
-                    let sample = Box::new(PerfEventSample { header, size, data });
+                    let sample = Box::new(PerfEventSample {
+                        header,
+                        size,
+                        data: data.to_vec(), // TODO: send data as a slice
+                    });
                     Ok(Some(PerfEvent::<'a>::Sample(sample)))
                 }
                 perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(
