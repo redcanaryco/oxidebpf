@@ -79,7 +79,7 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
 }
 
 pub(crate) enum PerfEvent<'a> {
-    Sample(Box<PerfEventSample>),
+    Sample(PerfEventSample),
     Lost(&'a PerfEventLostSamples),
 }
 
@@ -373,11 +373,13 @@ impl PerfMap {
                     }
                     let header = *header.get(0).ok_or(OxidebpfError::BadPerfSample)?;
                     let size = *size.get(0).ok_or(OxidebpfError::BadPerfSample)?;
-                    let sample = Box::new(PerfEventSample {
+                    let sample = PerfEventSample {
                         header,
                         size,
-                        data: data.to_vec(), // TODO: send data as a slice
-                    });
+                        // the alternative to this `to_vec()` is to `Box` the whole sample, which
+                        // is slower
+                        data: data.to_vec(),
+                    };
                     Ok(Some(PerfEvent::<'a>::Sample(sample)))
                 }
                 perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(

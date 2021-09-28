@@ -42,6 +42,7 @@ use std::{
     format,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
+    thread,
     time::Duration,
 };
 
@@ -129,6 +130,7 @@ pub struct ProgramVersion<'a> {
     has_perf_maps: bool,
     mem_limit: Option<usize>,
     original_limit: usize,
+    polling_delay: u64,
 }
 
 impl<'a> Clone for ProgramVersion<'a> {
@@ -146,6 +148,7 @@ impl<'a> Clone for ProgramVersion<'a> {
                 .iter()
                 .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
                 .collect(),
+            polling_delay: self.polling_delay,
         }
     }
 }
@@ -650,11 +653,19 @@ impl ProgramVersion<'_> {
             has_perf_maps: false,
             mem_limit: None,
             original_limit: get_memlock_limit().unwrap_or(libc::RLIM_INFINITY as usize),
+            polling_delay: 100,
         }
     }
 
+    /// Manually set the memlock ulimit for this `ProgramVersion`.
     pub fn mem_limit(mut self, limit: usize) -> Self {
         self.mem_limit = Some(limit);
+        self
+    }
+
+    /// Manually specify the perfmap polling interval for this `ProgramVersion`.
+    pub fn polling_delay(mut self, delay: u64) -> Self {
+        self.polling_delay = delay;
         self
     }
 
@@ -662,6 +673,7 @@ impl ProgramVersion<'_> {
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
+        polling_delay: u64,
     ) -> Result<(), OxidebpfError> {
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
@@ -745,7 +757,7 @@ impl ProgramVersion<'_> {
                                 }
                             }
                             Some(PerfEvent::Sample(e)) => {
-                                PerfChannelMessage(event.0, event.1, e.data)
+                                PerfChannelMessage(event.0, event.1, e.data.to_vec())
                             }
                         };
                         match tx.send(message) {
@@ -755,6 +767,7 @@ impl ProgramVersion<'_> {
 
                         processed += 1;
                     }
+                    thread::sleep(Duration::from_millis(polling_delay));
                 }
             });
 
@@ -1001,7 +1014,7 @@ impl ProgramVersion<'_> {
         // start event poller and pass back channel, if one exists
         if !perfmaps.is_empty() {
             self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx)?;
+            self.event_poller(perfmaps, channel.tx, self.polling_delay)?;
         }
         Ok(())
     }
