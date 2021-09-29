@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
@@ -341,7 +342,7 @@ impl PerfMap {
 
         unsafe {
             if end < start {
-                let len = (raw_size as usize - start) as usize;
+                let len = raw_size as usize - start;
                 let ptr = base.add(start);
                 buf.extend_from_slice(slice::from_raw_parts(ptr, len));
 
@@ -359,28 +360,37 @@ impl PerfMap {
 
             match (*event).type_ {
                 perf_event_type::PERF_RECORD_SAMPLE => {
-                    let (header_bytes, data) = buf
-                        .as_slice()
-                        .split_at(std::mem::size_of::<PerfEventHeader>());
-                    let (len, data) = data.split_at(std::mem::size_of::<u32>());
-                    let (_, header, _) = header_bytes.align_to::<PerfEventHeader>();
-                    let (_, size, _) = len.align_to::<u32>();
-                    if header.len() != 1 {
-                        return Err(OxidebpfError::BadPerfSample);
-                    }
-                    if size.len() != 1 {
-                        return Err(OxidebpfError::BadPerfSample);
-                    }
-                    let header = *header.get(0).ok_or(OxidebpfError::BadPerfSample)?;
-                    let size = *size.get(0).ok_or(OxidebpfError::BadPerfSample)?;
-                    let sample = PerfEventSample {
-                        header,
-                        size,
-                        // the alternative to this `to_vec()` is to `Box` the whole sample, which
-                        // is slower
-                        data: data.to_vec(),
+                    use std::mem::size_of;
+
+                    let header = {
+                        let header_bytes: [u8; size_of::<PerfEventHeader>()] = buf
+                            [..size_of::<PerfEventHeader>()]
+                            .try_into()
+                            .map_err(|_| OxidebpfError::BadPerfSample)?;
+                        std::ptr::read(header_bytes.as_ptr() as *const _)
                     };
-                    Ok(Some(PerfEvent::<'a>::Sample(sample)))
+
+                    let size = {
+                        let size_bytes: [u8; size_of::<u32>()] = buf[size_of::<PerfEventHeader>()
+                            ..(size_of::<u32>() + size_of::<PerfEventHeader>())]
+                            .try_into()
+                            .map_err(|_| OxidebpfError::BadPerfSample)?;
+                        u32::from_ne_bytes(size_bytes)
+                    };
+
+                    let data = {
+                        // drain the header + len fields; the rest is the data
+                        buf.drain(
+                            ..(std::mem::size_of::<PerfEventHeader>() + std::mem::size_of::<u32>()),
+                        )
+                        // might be unnecesary but I like this being explicit
+                        .for_each(|_| {});
+
+                        buf
+                    };
+
+                    let sample = PerfEventSample { header, size, data };
+                    Ok(Some(PerfEvent::Sample(sample)))
                 }
                 perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(
                     &*(buf.as_ptr() as *const PerfEventLostSamples),
