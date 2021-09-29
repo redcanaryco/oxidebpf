@@ -42,6 +42,7 @@ use std::{
     format,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
+    thread,
     time::Duration,
 };
 
@@ -110,8 +111,6 @@ struct Channel {
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
 pub struct ProgramGroup<'a> {
-    program_blueprint: ProgramBlueprint,
-    program_versions: Vec<ProgramVersion<'a>>,
     event_buffer_size: usize,
     channel: Channel,
     loaded_version: Option<ProgramVersion<'a>>,
@@ -129,6 +128,7 @@ pub struct ProgramVersion<'a> {
     has_perf_maps: bool,
     mem_limit: Option<usize>,
     original_limit: usize,
+    polling_delay: u64,
 }
 
 impl<'a> Clone for ProgramVersion<'a> {
@@ -146,6 +146,7 @@ impl<'a> Clone for ProgramVersion<'a> {
                 .iter()
                 .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
                 .collect(),
+            polling_delay: self.polling_delay,
         }
     }
 }
@@ -423,9 +424,11 @@ impl<'a> Program<'a> {
     }
 }
 
-impl ProgramGroup<'_> {
-    /// Create a program group out of multiple [`ProgramVersion`](struct@ProgramVersion)s.
+impl<'a> ProgramGroup<'a> {
+    /// Create a program group that will manage multiple [`ProgramVersion`](struct@ProgramVersion)s.
     ///
+    /// This creates a bounded channel of the given (optional) size for receiving messages
+    /// from any perfmaps that may be loaded by `Program`s in given `ProgramVersion`.
     /// Together with [`load()`](fn.load.html), this is the primary public interface of the
     /// oxidebpf library. You feed your `ProgramGroup` a collection of `ProgramVersion`s,
     /// each with their own set of `Program`s. Note that you must provide your `ProgramGroup`
@@ -446,27 +449,14 @@ impl ProgramGroup<'_> {
     ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
     ///         .expect("Could not open test object file");
     ///
-    /// ProgramGroup::new(
-    ///     program_blueprint,
-    ///     vec![ProgramVersion::new(vec![Program::new(
-    ///         "test_program",
-    ///         &["do_mount"],
-    ///     ).syscall(true)])],
-    ///     None,
-    /// );
+    /// ProgramGroup::new(None);
     /// ```
-    pub fn new(
-        program_blueprint: ProgramBlueprint,
-        program_versions: Vec<ProgramVersion>,
-        event_buffer_size: Option<usize>,
-    ) -> ProgramGroup {
+    pub fn new(event_buffer_size: Option<usize>) -> ProgramGroup<'a> {
         let event_buffer_size = event_buffer_size.unwrap_or(1024);
         let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
             bounded(event_buffer_size);
         let channel = Channel { tx, rx };
         ProgramGroup {
-            program_blueprint,
-            program_versions,
             event_buffer_size,
             channel,
             loaded_version: None,
@@ -474,17 +464,18 @@ impl ProgramGroup<'_> {
         }
     }
 
-    /// Attempt to load contained [`ProgramVersion`](struct@ProgramVersion)s until one
+    /// Attempt to load [`ProgramVersion`](struct@ProgramVersion)s until one
     /// successfully loads.
     ///
     /// This function attempts to load each `ProgramVersion` in the order given until
     /// one successfully loads. When one loads, if that version had a perfmap channel,
     /// a [`PerfChannelMessage`](struct@PerfChannelMessage) receiver crossbeam channel
-    /// is returned. If none load, a `NoProgramVersionLoaded` error is returned, along
-    /// with all the internal errors generated during attempted loading.
+    /// is available after loading by calling `get_receiver()` on the `ProgramGroup`.
+    /// If none load, a `NoProgramVersionLoaded` error is returned, along with all the
+    /// internal errors generated during attempted loading.
     ///
-    /// NOTE: Loading the `ProgramGroup` consumes the internal vector of `ProgramVersion`s.
-    /// Once you call `load()`, it cannot be called again without re-creating the `ProgramGroup`.
+    /// NOTE: Once you call `load()`, it cannot be called again without re-creating
+    /// the `ProgramGroup`.
     ///
     /// # Example
     ///
@@ -500,24 +491,29 @@ impl ProgramGroup<'_> {
     ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
     ///         .expect("Could not open test object file");
     /// let mut program_group = ProgramGroup::new(
+    ///     None,
+    /// );
+    ///
+    /// program_group.load(
     ///     program_blueprint,
     ///     vec![ProgramVersion::new(vec![Program::new(
     ///         "test_program",
     ///         &["do_mount"],
     ///     ).syscall(true)])],
-    ///     None,
-    /// );
-    ///
-    /// program_group.load().expect("Could not load programs");
+    /// ).expect("Could not load programs");
     /// ```
-    pub fn load(&mut self) -> Result<(), OxidebpfError> {
+    pub fn load(
+        &mut self,
+        program_blueprint: ProgramBlueprint,
+        program_versions: Vec<ProgramVersion<'a>>,
+    ) -> Result<(), OxidebpfError> {
         if self.loaded {
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
         let mut errors = vec![];
-        for mut program_version in self.program_versions.drain(..) {
+        for mut program_version in program_versions {
             match program_version.load_program_version(
-                self.program_blueprint.clone(),
+                program_blueprint.clone(),
                 self.channel.clone(),
                 self.event_buffer_size,
             ) {
@@ -531,8 +527,6 @@ impl ProgramGroup<'_> {
                 }
             };
         }
-
-        self.program_versions.shrink_to_fit();
 
         match &self.loaded_version {
             None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
@@ -650,11 +644,19 @@ impl ProgramVersion<'_> {
             has_perf_maps: false,
             mem_limit: None,
             original_limit: get_memlock_limit().unwrap_or(libc::RLIM_INFINITY as usize),
+            polling_delay: 100,
         }
     }
 
+    /// Manually set the memlock ulimit for this `ProgramVersion`.
     pub fn mem_limit(mut self, limit: usize) -> Self {
         self.mem_limit = Some(limit);
+        self
+    }
+
+    /// Manually specify the perfmap polling interval for this `ProgramVersion`.
+    pub fn polling_delay(mut self, delay: u64) -> Self {
+        self.polling_delay = delay;
         self
     }
 
@@ -662,6 +664,7 @@ impl ProgramVersion<'_> {
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
+        polling_delay: u64,
     ) -> Result<(), OxidebpfError> {
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
@@ -755,6 +758,7 @@ impl ProgramVersion<'_> {
 
                         processed += 1;
                     }
+                    thread::sleep(Duration::from_millis(polling_delay));
                 }
             });
 
@@ -1001,7 +1005,7 @@ impl ProgramVersion<'_> {
         // start event poller and pass back channel, if one exists
         if !perfmaps.is_empty() {
             self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx)?;
+            self.event_poller(perfmaps, channel.tx, self.polling_delay)?;
         }
         Ok(())
     }
@@ -1087,16 +1091,17 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![
-                Program::new("test_program_map_update", &["do_mount"]).syscall(true),
-                Program::new("test_program", &["do_mount"]).syscall(true),
-            ])],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
-        program_group.load().expect("Could not load programs");
+        program_group
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![
+                    Program::new("test_program_map_update", &["do_mount"]).syscall(true),
+                    Program::new("test_program", &["do_mount"]).syscall(true),
+                ])],
+            )
+            .expect("Could not load programs");
     }
 
     #[test]
@@ -1107,18 +1112,19 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![
-                Program::new("test_program_map_update", &["do_mount"]).syscall(true),
-                Program::new("test_program", &["do_mount"]).syscall(true),
-            ])
-            .mem_limit(1234567)],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
-        program_group.load().expect("Could not load programs");
+        program_group
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![
+                    Program::new("test_program_map_update", &["do_mount"]).syscall(true),
+                    Program::new("test_program", &["do_mount"]).syscall(true),
+                ])
+                .mem_limit(1234567)],
+            )
+            .expect("Could not load programs");
 
         let current_limit = get_memlock_limit().expect("could not get current limit");
 
@@ -1136,19 +1142,18 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![Program::new(
-                "test_program_map_update",
-                &["__not_a_real_syscall_expect_failure"],
-            )
-            .syscall(true)])
-            .mem_limit(1234567)],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
         program_group
-            .load()
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![Program::new(
+                    "test_program_map_update",
+                    &["__not_a_real_syscall_expect_failure"],
+                )
+                .syscall(true)])
+                .mem_limit(1234567)],
+            )
             .expect_err("program_group was able to load");
 
         let current_limit = get_memlock_limit().expect("could not get current limit");
@@ -1169,17 +1174,19 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![
-                Program::new("test_program_map_update", &["sys_open", "sys_write"]).syscall(true),
-                Program::new("test_program", &["do_mount"]).syscall(true),
-            ])],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
         // Load the bpf program
-        program_group.load().expect("Could not load programs");
+        program_group
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![
+                    Program::new("test_program_map_update", &["sys_open", "sys_write"])
+                        .syscall(true),
+                    Program::new("test_program", &["do_mount"]).syscall(true),
+                ])],
+            )
+            .expect("Could not load programs");
         let rx = program_group.get_receiver();
         assert!(rx.is_none());
 
@@ -1225,18 +1232,19 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![
-                Program::new("test_program_tailcall", &["sys_open", "sys_write"]).syscall(true),
-                Program::new("test_program_tailcall_update_map", &[])
-                    .tail_call_map_index("__test_tailcall_map", 0),
-            ])],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
         // Load the bpf program
-        program_group.load().expect("Could not load programs");
+        program_group
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![
+                    Program::new("test_program_tailcall", &["sys_open", "sys_write"]).syscall(true),
+                    Program::new("test_program_tailcall_update_map", &[])
+                        .tail_call_map_index("__test_tailcall_map", 0),
+                ])],
+            )
+            .expect("Could not load programs");
 
         // Get a particular array map and try and read a value from it
         match program_group.get_array_maps() {
@@ -1273,17 +1281,19 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(
-            program_blueprint,
-            vec![ProgramVersion::new(vec![
-                Program::new("test_program_map_update", &["sys_open", "sys_write"]).syscall(true),
-                Program::new("test_program", &["do_mount"]).syscall(true),
-            ])],
-            None,
-        );
+        let mut program_group = ProgramGroup::new(None);
 
         // Load the bpf program
-        program_group.load().expect("Could not load programs");
+        program_group
+            .load(
+                program_blueprint,
+                vec![ProgramVersion::new(vec![
+                    Program::new("test_program_map_update", &["sys_open", "sys_write"])
+                        .syscall(true),
+                    Program::new("test_program", &["do_mount"]).syscall(true),
+                ])],
+            )
+            .expect("Could not load programs");
         let rx = program_group.get_receiver();
         assert!(rx.is_none());
 
