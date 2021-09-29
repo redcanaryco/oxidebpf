@@ -757,7 +757,7 @@ impl ProgramVersion<'_> {
                                 }
                             }
                             Some(PerfEvent::Sample(e)) => {
-                                PerfChannelMessage(event.0, event.1, e.data.to_vec())
+                                PerfChannelMessage(event.0, event.1, e.data)
                             }
                         };
                         match tx.send(message) {
