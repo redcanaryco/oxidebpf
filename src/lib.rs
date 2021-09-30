@@ -664,103 +664,12 @@ impl ProgramVersion<'_> {
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
-        polling_delay: u64,
     ) -> Result<(), OxidebpfError> {
+        let polling_delay = Duration::from_millis(self.polling_delay);
+
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
-            .spawn(move || {
-                let mut poll = match Poll::new() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        crit!(LOGGER, "error creating poller: {:?}", e);
-                        return;
-                    }
-                };
-
-                let mut tokens: HashMap<Token, PerfMap> = HashMap::new();
-                for p in perfmaps {
-                    let token = Token(p.ev_fd as usize);
-
-                    if let Err(e) =
-                        poll.registry()
-                            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
-                    {
-                        crit!(LOGGER, "error registering poller: {:?}", e);
-                        return;
-                    }
-
-                    tokens.insert(token, p);
-                }
-
-                let mut events = Events::with_capacity(1024);
-
-                // for tracking dropped event statistics inside the loop
-                let mut dropped = 0;
-                let mut processed = 0;
-
-                'outer: loop {
-                    match poll.poll(&mut events, Some(Duration::from_millis(100))) {
-                        Ok(_) => {}
-                        Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
-                            Errno::EINTR => continue,
-                            _ => {
-                                crit!(LOGGER, "unrecoverable polling error: {:?}", e);
-                                return;
-                            }
-                        },
-                    }
-                    let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
-                    events
-                        .iter()
-                        .filter(|event| event.is_readable())
-                        .filter_map(|e| tokens.get(&e.token()))
-                        .for_each(|perfmap| loop {
-                            match perfmap.read() {
-                                Ok(perf_event) => {
-                                    perf_events.push((
-                                        perfmap.name.to_string(),
-                                        perfmap.cpuid() as i32,
-                                        perf_event,
-                                    ));
-                                }
-                                Err(OxidebpfError::NoPerfData) => {
-                                    // we're done reading
-                                    return;
-                                }
-                                Err(e) => {
-                                    crit!(LOGGER, "perfmap read error: {:?}", e);
-                                    return;
-                                }
-                            }
-                        });
-                    for event in perf_events.into_iter() {
-                        let message = match event.2 {
-                            None => continue,
-                            Some(PerfEvent::Lost(_)) => {
-                                dropped += 1;
-                                if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
-                                    let d = dropped;
-                                    dropped = 0;
-                                    processed = 0;
-                                    PerfChannelMessage("DROPPED".to_owned(), d, vec![])
-                                } else {
-                                    continue;
-                                }
-                            }
-                            Some(PerfEvent::Sample(e)) => {
-                                PerfChannelMessage(event.0, event.1, e.data)
-                            }
-                        };
-                        match tx.send(message) {
-                            Ok(_) => {}
-                            Err(_) => break 'outer,
-                        };
-
-                        processed += 1;
-                    }
-                    thread::sleep(Duration::from_millis(polling_delay));
-                }
-            });
+            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay));
 
         match result {
             Ok(_) => Ok(()),
@@ -1005,7 +914,7 @@ impl ProgramVersion<'_> {
         // start event poller and pass back channel, if one exists
         if !perfmaps.is_empty() {
             self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx, self.polling_delay)?;
+            self.event_poller(perfmaps, channel.tx)?;
         }
         Ok(())
     }
@@ -1075,6 +984,102 @@ impl<'a> Drop for ProgramVersion<'a> {
                 }
             }
         }
+    }
+}
+
+fn perf_map_poller(
+    perfmaps: Vec<PerfMap>,
+    tx: Sender<PerfChannelMessage>,
+    polling_delay: Duration,
+) {
+    let mut poll = match Poll::new() {
+        Ok(p) => p,
+        Err(e) => {
+            crit!(LOGGER, "error creating poller: {:?}", e);
+            return;
+        }
+    };
+
+    let mut tokens: HashMap<Token, PerfMap> = HashMap::new();
+    for p in perfmaps {
+        let token = Token(p.ev_fd as usize);
+
+        if let Err(e) = poll
+            .registry()
+            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
+        {
+            crit!(LOGGER, "error registering poller: {:?}", e);
+            return;
+        }
+
+        tokens.insert(token, p);
+    }
+
+    let mut events = Events::with_capacity(1024);
+
+    // for tracking dropped event statistics inside the loop
+    let mut dropped = 0;
+    let mut processed = 0;
+
+    'outer: loop {
+        match poll.poll(&mut events, Some(Duration::from_millis(100))) {
+            Ok(_) => {}
+            Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
+                Errno::EINTR => continue,
+                _ => {
+                    crit!(LOGGER, "unrecoverable polling error: {:?}", e);
+                    return;
+                }
+            },
+        }
+        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
+        events
+            .iter()
+            .filter(|event| event.is_readable())
+            .filter_map(|e| tokens.get(&e.token()))
+            .for_each(|perfmap| loop {
+                match perfmap.read() {
+                    Ok(perf_event) => {
+                        perf_events.push((
+                            perfmap.name.to_string(),
+                            perfmap.cpuid() as i32,
+                            perf_event,
+                        ));
+                    }
+                    Err(OxidebpfError::NoPerfData) => {
+                        // we're done reading
+                        return;
+                    }
+                    Err(e) => {
+                        crit!(LOGGER, "perfmap read error: {:?}", e);
+                        return;
+                    }
+                }
+            });
+        for event in perf_events.into_iter() {
+            let message = match event.2 {
+                None => continue,
+                Some(PerfEvent::Lost(_)) => {
+                    dropped += 1;
+                    if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
+                        let d = dropped;
+                        dropped = 0;
+                        processed = 0;
+                        PerfChannelMessage("DROPPED".to_owned(), d, vec![])
+                    } else {
+                        continue;
+                    }
+                }
+                Some(PerfEvent::Sample(e)) => PerfChannelMessage(event.0, event.1, e.data),
+            };
+            match tx.send(message) {
+                Ok(_) => {}
+                Err(_) => break 'outer,
+            };
+
+            processed += 1;
+        }
+        thread::sleep(polling_delay);
     }
 }
 
