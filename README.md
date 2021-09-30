@@ -53,11 +53,12 @@ maps and programs.
 4.  Create a `ProgramVersion` with your programs. You may create
 multiple `ProgramVersion`s, representing different sets of
 programs. For example, programs intended to run on different kernel versions.
-5.  Create a `ProgramGroup` with your `ProgramVersion`s.
-6.  Tell the `ProgramGroup` to start loading. It will attempt each `ProgramVersion`
-in order until one successfully loads on the current kernel. If it cannot load
-any program version, it will return an error composed of the underlying errors
-for each `ProgramVersion`.
+5.  Create a `ProgramGroup` with a channel capacity (or `None`).
+6.  Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and 
+tell it to start loading. It will attempt each `ProgramVersion` in order until 
+one successfully loads on the current kernel. If it cannot load any program
+version, it will return an error composed of the underlying errors for each 
+`ProgramVersion`.
 
 ```rust
 let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -66,7 +67,9 @@ let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 let program_blueprint =
     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
         .expect("Could not open test object file");
-let mut program_group = ProgramGroup::new(
+let mut program_group = ProgramGroup::new(None);
+
+program_group.load(
     program_blueprint,
     vec![ProgramVersion::new(vec![
         Program::new(
@@ -76,10 +79,7 @@ let mut program_group = ProgramGroup::new(
         .syscall(true),
         Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
-    None,
-);
-
-program_group.load().expect("Could not load programs");
+).expect("Could not load programs");
 
 ```
 
