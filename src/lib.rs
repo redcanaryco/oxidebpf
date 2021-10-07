@@ -62,40 +62,26 @@ pub struct Oxidebpf {
 impl Oxidebpf {
     /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
     /// everything goes to the terminal.
-    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) {
-        unsafe {
-            if let None = LIB {
-                LIB = Some(Oxidebpf {
-                    logger: logger.into().unwrap_or_else(|| {
-                        slog::Logger::root(
-                            slog_async::Async::new(
-                                slog_term::FullFormat::new(TermDecorator::new().build())
-                                    .build()
-                                    .fuse(),
-                            )
+    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
+        Oxidebpf {
+            logger: logger.into().unwrap_or_else(|| {
+                slog::Logger::root(
+                    slog_async::Async::new(
+                        slog_term::FullFormat::new(TermDecorator::new().build())
                             .build()
                             .fuse(),
-                            o!(),
-                        )
-                    }),
-                });
-            }
+                    )
+                    .build()
+                    .fuse(),
+                    o!(),
+                )
+            }),
         }
     }
 }
 
-static mut LIB: Option<Oxidebpf> = None;
-
 lazy_static! {
-    pub(crate) static ref LOGGER: &'static Logger = {
-        Oxidebpf::init(None);
-        unsafe {
-            match &LIB {
-                None => &slog::Logger::root(slog::Discard, o!()),
-                Some(lib) => &lib.logger,
-            }
-        }
-    };
+    pub(crate) static ref LOGGER: Logger = Oxidebpf::init(None).logger;
 }
 
 #[cfg(target_arch = "aarch64")]
