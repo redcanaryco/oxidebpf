@@ -465,7 +465,9 @@ pub(crate) union BpfAttr {
 
 impl Debug for BpfAttr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BpfAttr")
+        let size = std::mem::size_of::<BpfAttr>();
+        let raw_union = unsafe { std::slice::from_raw_parts(self as *const _ as *const u8, size) };
+        write!(f, "BpfAttr: {:?}", raw_union)
     }
 }
 
