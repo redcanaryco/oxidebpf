@@ -478,7 +478,7 @@ impl TryFrom<&[u8]> for BpfCode {
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
-            return Err(OxidebpfError::InvalidProgramObject);
+            return Err(OxidebpfError::InvalidProgramLength);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
         for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
@@ -503,7 +503,7 @@ impl TryFrom<&[u8]> for BpfInsn {
     type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(OxidebpfError::InvalidProgramObject);
+            return Err(OxidebpfError::InvalidInstructionLength);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }
