@@ -322,7 +322,7 @@ impl Reloc {
             .iter()
             .find(|(index, _relocs)| *index == reloc_index.unwrap())
             .map(|(_index, relocs)| relocs)
-            .ok_or(OxidebpfError::InvalidProgramObject)?;
+            .ok_or(OxidebpfError::MissingRelocationSection(index))?;
 
         Ok(reloc_section
             .iter()
@@ -494,7 +494,7 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
         }
     }
 
-    Err(OxidebpfError::InvalidProgramObject)
+    Err(OxidebpfError::KernelVersionNotFound)
 }
 
 #[cfg(test)]
