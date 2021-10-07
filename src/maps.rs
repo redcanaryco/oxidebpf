@@ -267,7 +267,10 @@ impl PerfMap {
             size if size < 0 => {
                 let e = errno();
                 info!(LOGGER.0, "perfmap error, size < 0: {}; errno: {}", size, e);
-                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
+                return Err(OxidebpfError::LinuxError(
+                    "perf map get PAGE_SIZE".to_string(),
+                    nix::errno::from_i32(e),
+                ));
             }
             size if size == 0 => {
                 info!(LOGGER.0, "perfmap error, bad page size (size == 0)");
@@ -311,8 +314,14 @@ impl PerfMap {
                             e
                         );
                         return Err(OxidebpfError::MultipleErrors(vec![
-                            OxidebpfError::LinuxError(mmap_errno),
-                            OxidebpfError::LinuxError(nix::errno::from_i32(e)),
+                            OxidebpfError::LinuxError(
+                                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
+                                mmap_errno,
+                            ),
+                            OxidebpfError::LinuxError(
+                                format!("perf_map cleanup => close({})", fd),
+                                nix::errno::from_i32(e),
+                            ),
                         ]));
                     }
                 };
@@ -320,7 +329,10 @@ impl PerfMap {
                     LOGGER.0,
                     "mmap failed while creating perfmap: {:?}", mmap_errno
                 );
-                return Err(OxidebpfError::LinuxError(mmap_errno));
+                return Err(OxidebpfError::LinuxError(
+                    format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
+                    mmap_errno,
+                ));
             }
             perf_event_ioc_enable(fd)?;
             loaded_perfmaps.push(PerfMap {
@@ -871,10 +883,15 @@ mod map_tests {
             unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
         let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(100) };
-        assert_eq!(
-            should_fail.err().unwrap(),
-            OxidebpfError::LinuxError(Errno::ENOENT)
-        );
+        assert!(should_fail.is_err());
+        match should_fail {
+            Err(OxidebpfError::LinuxError(_, errno)) => {
+                assert_eq!(errno, Errno::ENOENT)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     // Test writing outside the size of the array
@@ -901,7 +918,14 @@ mod map_tests {
 
         // Should return E2BIG
         let should_fail = unsafe { map.write(100, 12345u64).err().unwrap() };
-        assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::E2BIG));
+        match should_fail {
+            OxidebpfError::LinuxError(_, errno) => {
+                assert_eq!(errno, Errno::E2BIG)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     // Test storing a more complex structure
@@ -992,10 +1016,15 @@ mod map_tests {
         };
         let _ = unsafe { map.write(1234, 1234) };
         let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(4321) };
-        assert_eq!(
-            should_fail.err().unwrap(),
-            OxidebpfError::LinuxError(Errno::ENOENT)
-        );
+        assert!(should_fail.is_err());
+        match should_fail {
+            Err(OxidebpfError::LinuxError(_, errno)) => {
+                assert_eq!(errno, Errno::ENOENT)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     #[test]

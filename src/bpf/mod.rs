@@ -1,3 +1,4 @@
+use slog::info;
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fmt::{Debug, Formatter};
@@ -6,6 +7,7 @@ use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 use crate::bpf::constant::{bpf_prog_type, BPF_OBJ_NAME_LEN};
 use crate::error::OxidebpfError;
 use crate::ProgramType;
+use crate::LOGGER;
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
@@ -430,7 +432,7 @@ struct BpfProgBindMap {
 
 /// Holds a BpfAttr union where only the specified `size`, in bytes, is to be used for
 /// underlying bpf syscalls.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SizedBpfAttr {
     pub(crate) bpf_attr: BpfAttr,
     /// The amount of used bytes of the given [`BpfAttr`]. See [`sys_bpf`](Fn@sys_bpf) for

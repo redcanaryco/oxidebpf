@@ -53,7 +53,10 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
             LOGGER.0,
             "error calling SYS_bpf; cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
         );
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
+        return Err(OxidebpfError::LinuxError(
+            format!("bpf({}, 0x{:x}, {})", cmd, ptr as u64, size),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as usize)
 }
@@ -95,7 +98,7 @@ pub(crate) fn bpf_prog_load(
         size: 48, // 48 = minimum for 4.4
     };
     unsafe {
-        match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
+        match sys_bpf(BPF_PROG_LOAD, bpf_attr.clone()) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
                 info!(

@@ -20,7 +20,7 @@ pub enum OxidebpfError {
     KernelVersionNotFound,
     MissingRelocationSection(u32),
     InvalidMapObject,
-    LinuxError(Errno),
+    LinuxError(String, Errno),
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),

@@ -83,7 +83,10 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
                 original_mnt_ns_fd,
                 e
             );
-            Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)))
+            Err(OxidebpfError::LinuxError(
+                format!("restore mount namspace => close({})", original_mnt_ns_fd),
+                nix::errno::from_i32(e),
+            ))
         } else {
             Ok(())
         }
@@ -211,7 +214,13 @@ pub(crate) fn perf_event_open(
             LOGGER.0,
             "error in perf_event_open while calling SYS_perf_event_open; errno: {}", e
         );
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
+        return Err(OxidebpfError::LinuxError(
+            format!(
+                "perf_event_open(0x{:x}, {}, {}, {}, {})",
+                ptr as u64, pid, cpu, group_fd, flags
+            ),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as RawFd)
 }
@@ -491,7 +500,10 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
             nstype,
             e
         );
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
+        return Err(OxidebpfError::LinuxError(
+            format!("setns({}, {})", fd, nstype),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as usize)
 }

@@ -398,7 +398,7 @@ impl<'a> Program<'a> {
             return Err(OxidebpfError::ProgramNotLoaded);
         }
 
-        match self.kind {
+        match &self.kind {
             Some(ProgramType::Kprobe | ProgramType::Kretprobe) => self.attach_kprobe(),
             Some(ProgramType::Uprobe | ProgramType::Uretprobe) => self.attach_uprobe(),
             t => {
@@ -584,9 +584,10 @@ fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
                 "unable to set memlock limit, errno: {}",
                 nix::errno::errno()
             );
-            Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
-                nix::errno::errno(),
-            )))
+            Err(OxidebpfError::LinuxError(
+                "set_memlock_limit".to_string(),
+                nix::errno::Errno::from_i32(nix::errno::errno()),
+            ))
         } else {
             Ok(())
         }
@@ -608,9 +609,10 @@ fn get_memlock_limit() -> Result<usize, OxidebpfError> {
                 "could not get memlock limit, errno: {}",
                 nix::errno::errno()
             );
-            return Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
-                nix::errno::errno(),
-            )));
+            return Err(OxidebpfError::LinuxError(
+                "get_memlock_limit".to_string(),
+                nix::errno::Errno::from_i32(nix::errno::errno()),
+            ));
         }
 
         Ok(rlim.rlim_cur as usize)
