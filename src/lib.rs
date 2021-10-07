@@ -401,10 +401,17 @@ impl<'a> Program<'a> {
         match &self.kind {
             Some(ProgramType::Kprobe | ProgramType::Kretprobe) => self.attach_kprobe(),
             Some(ProgramType::Uprobe | ProgramType::Uretprobe) => self.attach_uprobe(),
-            t => {
+            Some(t) => {
                 info!(
                     LOGGER.0,
                     "attempting to load unsupported program type {:?}", t
+                );
+                Err(OxidebpfError::UnsupportedProgramType)
+            }
+            _ => {
+                info!(
+                    LOGGER.0,
+                    "attempting to load unsupported program type: unknown"
                 );
                 Err(OxidebpfError::UnsupportedProgramType)
             }
@@ -513,6 +520,10 @@ impl<'a> ProgramGroup<'a> {
         program_versions: Vec<ProgramVersion<'a>>,
     ) -> Result<(), OxidebpfError> {
         if self.loaded {
+            info!(
+                LOGGER.0,
+                "error: attempting to load a program group that was already loaded"
+            );
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
         let mut errors = vec![];
@@ -534,7 +545,18 @@ impl<'a> ProgramGroup<'a> {
         }
 
         match &self.loaded_version {
-            None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
+            None => {
+                info!(
+                    LOGGER.0,
+                    "error: no program version was able to load for {:?}, errors: {:?}",
+                    match std::env::current_exe() {
+                        Ok(p) => p,
+                        Err(_) => std::path::PathBuf::from("unknown"),
+                    },
+                    errors
+                );
+                Err(OxidebpfError::NoProgramVersionLoaded(errors))
+            }
             Some(_) => {
                 self.loaded = true;
                 Ok(())
@@ -730,10 +752,14 @@ impl ProgramVersion<'_> {
                 // look at the required maps and sum how much memory they'll need
                 for program_object in matching_blueprints.iter_mut() {
                     for name in program_object.required_maps().iter() {
-                        let map = program_blueprint
-                            .maps
-                            .get_mut(name)
-                            .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
+                        let map = program_blueprint.maps.get_mut(name).ok_or_else(|| {
+                            info!(
+                                LOGGER.0,
+                                "map not found while calculating mem limit: {}",
+                                name.to_string()
+                            );
+                            OxidebpfError::MapNotFound(name.to_string())
+                        })?;
                         sum += ((map.definition.key_size + map.definition.value_size)
                             * map.definition.max_entries) as usize;
                     }
@@ -753,7 +779,10 @@ impl ProgramVersion<'_> {
                 let map = program_blueprint
                     .maps
                     .get_mut(name)
-                    .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
+                    .ok_or_else(|| {
+                        info!(LOGGER.0, "map not found while iterating through required maps, map name: {}; program name: {}", name, program_object.name);
+                        OxidebpfError::MapNotFound(name.to_string())
+                    })?;
 
                 if !loaded_maps.contains(&map.name) {
                     let sized_attr = SizedBpfAttr {
@@ -880,7 +909,7 @@ impl ProgramVersion<'_> {
                 let program_type = match &p.kind {
                     Some(k) => k,
                     None => {
-                        p.kind = Some(blueprint.program_type.clone());
+                        p.kind = Some(blueprint.program_type);
                         &blueprint.program_type
                     }
                 };
@@ -898,6 +927,7 @@ impl ProgramVersion<'_> {
                         }
 
                         // If it's not optional, fail out of the whole Version
+                        info!(LOGGER.0, "failed out of version with error {:?}", e);
                         return Err(e);
                     }
                 };
@@ -906,7 +936,14 @@ impl ProgramVersion<'_> {
                 if let Some(tcm) = &p.tail_call_mapping {
                     match tailcall_tables.get(&tcm.map) {
                         Some(map) => bpf_map_update_elem(*map.get_fd(), tcm.index, fd)?,
-                        None => return Err(OxidebpfError::MapNotFound(tcm.map.clone())),
+                        None => {
+                            info!(
+                                LOGGER.0,
+                                "tail call mapping not found, could not update: {:?}",
+                                tcm.map.clone()
+                            );
+                            return Err(OxidebpfError::MapNotFound(tcm.map.clone()));
+                        }
                     }
                 }
 
@@ -915,6 +952,10 @@ impl ProgramVersion<'_> {
                 match p.attach() {
                     Err(e) => {
                         if !p.optional {
+                            info!(
+                                LOGGER.0,
+                                "failed mandatory program load: {}; error: {:?}", p.name, e
+                            );
                             return Err(e);
                         }
                     }
@@ -1355,7 +1396,7 @@ mod program_tests {
 }
 
 /// An enum of the different BPF program types.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ProgramType {
     /// Unspecified program type.
     Unspec,

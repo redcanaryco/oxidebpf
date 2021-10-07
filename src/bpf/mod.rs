@@ -432,7 +432,7 @@ struct BpfProgBindMap {
 
 /// Holds a BpfAttr union where only the specified `size`, in bytes, is to be used for
 /// underlying bpf syscalls.
-#[derive(Clone, Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct SizedBpfAttr {
     pub(crate) bpf_attr: BpfAttr,
     /// The amount of used bytes of the given [`BpfAttr`]. See [`sys_bpf`](Fn@sys_bpf) for

@@ -3,6 +3,9 @@ use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 
+use crate::LOGGER;
+use slog::info;
+
 use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
 use itertools::Itertools;
 
@@ -238,7 +241,19 @@ impl ProgramObject {
         sh: &'a SectionHeader,
         kernel_version: u32,
     ) -> Result<Self, OxidebpfError> {
-        let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
+        let section_data = get_section_data(data, sh).ok_or_else(|| {
+            info!(
+                LOGGER.0, "invalid ELF; program_type: {:?}; name: {:?}; data: {:?}; elf: {:?}, sh_index: {:?}; sh: {:?}, kernel_version: {}",
+                program_type,
+                name,
+                data,
+                elf,
+                sh_index,
+                sh,
+                kernel_version
+            );
+            OxidebpfError::InvalidElf
+        })?;
         let code = BpfCode::try_from(section_data)?;
 
         let symbol_name = elf
@@ -250,7 +265,7 @@ impl ProgramObject {
 
         // For object naming, we prioritize the section name over the symbol name
         Ok(Self {
-            program_type: program_type.clone(),
+            program_type: *program_type,
             name: name.map(str::to_string).unwrap_or(symbol_name),
             code,
             relocations: Reloc::get_map_relocations(sh_index, elf)?,
@@ -453,7 +468,13 @@ fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {
 }
 
 fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
-    let elf = Elf::parse(data).map_err(|_e| OxidebpfError::InvalidElf)?;
+    let elf = Elf::parse(data).map_err(|e| {
+        info!(
+            LOGGER.0,
+            "parse_and_verify_elf, invalid elf; data: {:?}; error: {:?}", data, e
+        );
+        OxidebpfError::InvalidElf
+    })?;
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
