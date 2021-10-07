@@ -101,7 +101,13 @@ pub(crate) fn perf_event_open_debugfs(
         ProgramType::Kretprobe => "kprobe",
         ProgramType::Uprobe => "uprobe",
         ProgramType::Uretprobe => "uprobe",
-        _ => return Err(OxidebpfError::UnsupportedEventType),
+        t => {
+            info!(
+                LOGGER.0,
+                "perf_event_open_debugfs (prefix), unsupported event type: {:?}", t
+            );
+            return Err(OxidebpfError::UnsupportedEventType);
+        }
     };
 
     let event_path = format!("/sys/kernel/debug/tracing/{}_events", prefix);
@@ -143,7 +149,13 @@ pub(crate) fn perf_event_open_debugfs(
                 event_alias, func_name_or_path, offset
             )
         }
-        _ => return Err(OxidebpfError::UnsupportedEventType),
+        t => {
+            info!(
+                LOGGER.0,
+                "perf_event_open_debugfs (name), unsupported event type: {:?}", t
+            );
+            return Err(OxidebpfError::UnsupportedEventType);
+        }
     };
 
     event_file
@@ -154,6 +166,10 @@ pub(crate) fn perf_event_open_debugfs(
         ProgramType::Uprobe | ProgramType::Uretprobe => {
             if my_fd < 0 {
                 // This should be impossible to reach
+                info!(
+                    LOGGER.0,
+                    "perf_event_open_debugfs, bad fd, should never happen; fd: {}", my_fd
+                );
                 return Err(OxidebpfError::UncaughtMountNsError);
             }
             restore_mnt_ns(my_fd)?;
@@ -174,6 +190,7 @@ pub(crate) fn perf_event_open(
 ) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     if !((*PERF_PATH).as_path().exists()) {
+        info!(LOGGER.0, "perf_event_open, PERF_PATH does not exist");
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
     let ptr: *const PerfEventAttr = attr;
@@ -344,6 +361,7 @@ pub(crate) fn attach_uprobe(
             return_bit |= 1 << bit;
         }
     } else {
+        info!(LOGGER.0, "attach_uprobe, bad config");
         return Err(OxidebpfError::FileIOError);
     }
 
@@ -394,6 +412,7 @@ pub(crate) fn attach_kprobe_debugfs(
                 let new_path = event_path.replace("kretprobe", "kprobe");
                 perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
             } else {
+                info!(LOGGER.0, "perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry");
                 Err(OxidebpfError::FileIOError)
             }
         }
@@ -425,6 +444,7 @@ pub(crate) fn attach_kprobe(
             return_bit |= 1 << bit;
         }
     } else {
+        info!(LOGGER.0, "attach_kprobe, bad config");
         return Err(OxidebpfError::FileIOError);
     }
 

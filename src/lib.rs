@@ -300,7 +300,13 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend(vec![e, s]),
+                                Err(errors) => {
+                                    info!(
+                                        LOGGER.0,
+                                        "multiple kprobe load errors: {:?}; {:?}", e, s
+                                    );
+                                    errors.extend(vec![e, s])
+                                }
                             },
                         }
                     }
@@ -348,7 +354,13 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend(vec![e, s]),
+                                Err(errors) => {
+                                    info!(
+                                        LOGGER.0,
+                                        "multiple uprobe load errors: {:?}; {:?}", e, s
+                                    );
+                                    errors.extend(vec![e, s])
+                                }
                             },
                         }
                     }
@@ -370,6 +382,7 @@ impl<'a> Program<'a> {
 
                     self.attach_probes()
                 } else {
+                    info!(LOGGER.0, "attach error: {:?}", e);
                     Err(e)
                 }
             }
@@ -378,13 +391,23 @@ impl<'a> Program<'a> {
 
     fn attach_probes(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         if !self.loaded {
+            info!(
+                LOGGER.0,
+                "attempting to attach probes while program not loaded"
+            );
             return Err(OxidebpfError::ProgramNotLoaded);
         }
 
         match self.kind {
             Some(ProgramType::Kprobe | ProgramType::Kretprobe) => self.attach_kprobe(),
             Some(ProgramType::Uprobe | ProgramType::Uretprobe) => self.attach_uprobe(),
-            _ => Err(OxidebpfError::UnsupportedProgramType),
+            t => {
+                info!(
+                    LOGGER.0,
+                    "attempting to load unsupported program type {:?}", t
+                );
+                Err(OxidebpfError::UnsupportedProgramType)
+            }
         }
     }
 

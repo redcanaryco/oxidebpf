@@ -111,6 +111,7 @@ impl TryFrom<&[u8]> for MapDefinition {
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         // at the very least, we need the first 4 entries.
         if raw.len() < std::mem::size_of::<c_uint>() * 4 {
+            info!(LOGGER.0, "Invalid map object, raw.len(): {}", raw.len());
             return Err(OxidebpfError::InvalidMapObject);
         }
         let mut data = vec![0; std::mem::size_of::<MapDefinition>()];
@@ -480,6 +481,7 @@ impl TryFrom<&[u8]> for BpfCode {
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
+            info!(LOGGER.0, "Invalid program length, raw.len(): {}", raw.len());
             return Err(OxidebpfError::InvalidProgramLength);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
@@ -505,6 +507,11 @@ impl TryFrom<&[u8]> for BpfInsn {
     type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>() {
+            info!(
+                LOGGER.0,
+                "invalid instruction length, raw.len(): {}",
+                raw.len()
+            );
             return Err(OxidebpfError::InvalidInstructionLength);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
