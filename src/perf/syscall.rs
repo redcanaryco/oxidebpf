@@ -78,7 +78,7 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
         if libc::close(original_mnt_ns_fd as c_int) < 0 {
             let e = errno();
             info!(
-                LOGGER,
+                LOGGER.0,
                 "could not close original mount namespace fd; fd: {}; errno: {}",
                 original_mnt_ns_fd,
                 e
@@ -191,7 +191,7 @@ pub(crate) fn perf_event_open(
     if ret < 0 {
         let e = errno();
         info!(
-            LOGGER,
+            LOGGER.0,
             "error in perf_event_open while calling SYS_perf_event_open; errno: {}", e
         );
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
@@ -454,7 +454,7 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     if ret < 0 {
         let e = errno();
         info!(
-            LOGGER,
+            LOGGER.0,
             "setns error, could not call SYS_setns for fd: {} and nstype: {}; errno: {}",
             fd,
             nstype,

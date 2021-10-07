@@ -50,7 +50,7 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     if ret < 0 {
         let e = errno();
         info!(
-            LOGGER,
+            LOGGER.0,
             "error calling SYS_bpf; cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
         );
         return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));

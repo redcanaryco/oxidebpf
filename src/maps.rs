@@ -266,16 +266,16 @@ impl PerfMap {
         let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
             size if size < 0 => {
                 let e = errno();
-                info!(LOGGER, "perfmap error, size < 0: {}; errno: {}", size, e);
+                info!(LOGGER.0, "perfmap error, size < 0: {}; errno: {}", size, e);
                 return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
             }
             size if size == 0 => {
-                info!(LOGGER, "perfmap error, bad page size (size == 0)");
+                info!(LOGGER.0, "perfmap error, bad page size (size == 0)");
                 return Err(OxidebpfError::BadPageSize);
             }
             size if size > 0 => size as usize,
             size => {
-                info!(LOGGER, "perfmap error, impossible page size: {}", size);
+                info!(LOGGER.0, "perfmap error, impossible page size: {}", size);
                 return Err(OxidebpfError::BadPageSize);
             }
         };
@@ -305,7 +305,7 @@ impl PerfMap {
                     if libc::close(fd) < 0 {
                         let e = errno();
                         info!(
-                            LOGGER,
+                            LOGGER.0,
                             "could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}",
                             mmap_errno,
                             e
@@ -317,7 +317,7 @@ impl PerfMap {
                     }
                 };
                 info!(
-                    LOGGER,
+                    LOGGER.0,
                     "mmap failed while creating perfmap: {:?}", mmap_errno
                 );
                 return Err(OxidebpfError::LinuxError(mmap_errno));

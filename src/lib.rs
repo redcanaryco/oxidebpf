@@ -52,36 +52,18 @@ use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
 use slog::{crit, info, o, warn, Drain, Logger};
-use slog_term::TermDecorator;
-
-/// Helper struct for library logging.
-pub struct Oxidebpf {
-    logger: slog::Logger,
-}
-
-impl Oxidebpf {
-    /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
-    /// everything goes to the terminal.
-    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
-        Oxidebpf {
-            logger: logger.into().unwrap_or_else(|| {
-                slog::Logger::root(
-                    slog_async::Async::new(
-                        slog_term::FullFormat::new(TermDecorator::new().build())
-                            .build()
-                            .fuse(),
-                    )
-                    .build()
-                    .fuse(),
-                    o!(),
-                )
-            }),
-        }
-    }
-}
+use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
-    pub(crate) static ref LOGGER: Logger = Oxidebpf::init(None).logger;
+    pub static ref LOGGER: (Logger, AtomicSwitchCtrl) = create_slogger_root();
+}
+
+fn create_slogger_root() -> (slog::Logger, AtomicSwitchCtrl) {
+    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
+    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+    let drain = AtomicSwitch::new(drain);
+    (slog::Logger::root(drain.clone(), o!()), drain.ctrl())
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -575,7 +557,7 @@ fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
 
         if ret < 0 {
             info!(
-                LOGGER,
+                LOGGER.0,
                 "unable to set memlock limit, errno: {}",
                 nix::errno::errno()
             );
@@ -599,7 +581,7 @@ fn get_memlock_limit() -> Result<usize, OxidebpfError> {
         let ret = libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim as *mut _);
         if ret < 0 {
             info!(
-                LOGGER,
+                LOGGER.0,
                 "could not get memlock limit, errno: {}",
                 nix::errno::errno()
             );
@@ -684,7 +666,7 @@ impl ProgramVersion<'_> {
         match result {
             Ok(_) => Ok(()),
             Err(e) => {
-                crit!(LOGGER, "error in thread polling: {:?}", e);
+                crit!(LOGGER.0, "error in thread polling: {:?}", e);
                 Err(OxidebpfError::ThreadPollingError)
             }
         }
@@ -955,7 +937,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER, "could not close uprobes: {:?}", e);
+                warn!(LOGGER.0, "could not close uprobes: {:?}", e);
                 return;
             }
         };
@@ -965,7 +947,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
+                    warn!(LOGGER.0, "could not close uprobe [{}]: {:?}", line, e);
                     return;
                 }
             }
@@ -979,7 +961,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER, "could not close kprobes: {:?}", e);
+                warn!(LOGGER.0, "could not close kprobes: {:?}", e);
                 return;
             }
         };
@@ -989,7 +971,7 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
+                    warn!(LOGGER.0, "could not close kprobe [{}]: {:?}", line, e);
                     return;
                 }
             }
@@ -1005,7 +987,7 @@ fn perf_map_poller(
     let mut poll = match Poll::new() {
         Ok(p) => p,
         Err(e) => {
-            crit!(LOGGER, "error creating poller: {:?}", e);
+            crit!(LOGGER.0, "error creating poller: {:?}", e);
             return;
         }
     };
@@ -1018,7 +1000,7 @@ fn perf_map_poller(
             .registry()
             .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
         {
-            crit!(LOGGER, "error registering poller: {:?}", e);
+            crit!(LOGGER.0, "error registering poller: {:?}", e);
             return;
         }
 
@@ -1037,7 +1019,7 @@ fn perf_map_poller(
             Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
                 Errno::EINTR => continue,
                 _ => {
-                    crit!(LOGGER, "unrecoverable polling error: {:?}", e);
+                    crit!(LOGGER.0, "unrecoverable polling error: {:?}", e);
                     return;
                 }
             },
@@ -1061,7 +1043,7 @@ fn perf_map_poller(
                         return;
                     }
                     Err(e) => {
-                        crit!(LOGGER, "perfmap read error: {:?}", e);
+                        crit!(LOGGER.0, "perfmap read error: {:?}", e);
                         return;
                     }
                 }
