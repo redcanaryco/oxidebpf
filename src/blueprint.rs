@@ -312,17 +312,18 @@ impl Reloc {
             .map(|(reloc_index, _)| reloc_index);
 
         // If we cant find a relocation section for the program section, assume it has no relocations
-        if reloc_index.is_none() {
-            return Ok(Vec::new());
-        }
+        let reloc_index = match reloc_index {
+            None => return Ok(Vec::new()),
+            Some(r) => r,
+        };
 
         // retrieve the relocation section
         let reloc_section = elf
             .shdr_relocs
             .iter()
-            .find(|(index, _relocs)| *index == reloc_index.unwrap())
+            .find(|(index, _relocs)| *index == reloc_index)
             .map(|(_index, relocs)| relocs)
-            .ok_or_else(|| OxidebpfError::MissingRelocationSection(reloc_index.unwrap() as u32))?;
+            .ok_or_else(|| OxidebpfError::MissingRelocationSection(reloc_index as u32))?;
 
         Ok(reloc_section
             .iter()
