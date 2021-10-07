@@ -394,6 +394,10 @@ pub(crate) fn attach_kprobe_debugfs(
                 let new_path = event_path.replace("kretprobe", "kprobe");
                 perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
             } else {
+                info!(
+                    LOGGER.0,
+                    "perf_attach_tracepoint_with_debugfs error, event_path: {}", event_path
+                );
                 Err(OxidebpfError::FileIOError)
             }
         }
@@ -425,6 +429,15 @@ pub(crate) fn attach_kprobe(
             return_bit |= 1 << bit;
         }
     } else {
+        info!(
+            LOGGER.0,
+            "attach_kprobe error, fd: {}, attach_point: {}, is_return: {}, offset: {:?}, cpu: {}",
+            fd,
+            attach_point,
+            is_return,
+            offset,
+            cpu
+        );
         return Err(OxidebpfError::FileIOError);
     }
 
