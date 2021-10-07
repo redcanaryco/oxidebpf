@@ -98,15 +98,18 @@ pub(crate) fn bpf_prog_load(
         match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
+                info!(
+                    LOGGER.0,
+                    "bpf_prog_load error with sys_bpf; bpf_attr: {:?}", bpf_attr
+                );
                 #[cfg(feature = "log_buf")]
                 {
-                    Err(OxidebpfError::BpfProgLoadError((
-                        Box::new(e),
-                        String::from_utf8(Vec::from(log_buf))
-                            .unwrap_or_else(|_| String::from(""))
-                            .trim_matches('\0')
-                            .to_string(),
-                    )))
+                    let log_string = String::from_utf8(Vec::from(log_buf))
+                        .unwrap_or_else(|_| String::from(""))
+                        .trim_matches('\0')
+                        .to_string();
+                    info!(LOGGER.0 "bpf_prog_load log_buf: {}", log_string);
+                    Err(OxidebpfError::BpfProgLoadError((Box::new(e), log_string)))
                 }
                 #[cfg(not(feature = "log_buf"))]
                 {
