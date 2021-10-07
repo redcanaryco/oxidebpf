@@ -1,5 +1,6 @@
 use std::convert::TryFrom;
 use std::ffi::CStr;
+use std::fmt::{Debug, Formatter};
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::{bpf_prog_type, BPF_OBJ_NAME_LEN};
@@ -322,7 +323,7 @@ struct BpfBtfLoad {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct TaskFdQuery {
     pid: c_uint,
     fd: c_uint,
@@ -342,6 +343,12 @@ union LinkTarget {
     target_ifindex: c_uint,
 }
 
+impl Debug for LinkTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LinkTarget")
+    }
+}
+
 impl Default for LinkTarget {
     fn default() -> Self {
         Self { target_fd: 0 }
@@ -349,7 +356,7 @@ impl Default for LinkTarget {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct LinkTargetIterInfo {
     iter_info: c_ulong,
     iter_info_len: c_uint,
@@ -362,6 +369,12 @@ union LinkTargetInfo {
     info: LinkTargetIterInfo,
 }
 
+impl Debug for LinkTargetInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LinkTargetInfo")
+    }
+}
+
 impl Default for LinkTargetInfo {
     fn default() -> Self {
         Self { target_btf_id: 0 }
@@ -369,7 +382,7 @@ impl Default for LinkTargetInfo {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkCreate {
     prog_fd: c_uint,
     target: LinkTarget,
@@ -379,7 +392,7 @@ struct BpfLinkCreate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkUpdate {
     link_fd: c_uint,
     new_prog_fd: c_uint,
@@ -388,26 +401,26 @@ struct BpfLinkUpdate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkDetach {
     link_fd: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfEnableStats {
     stat_type: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfIterCreate {
     link_fd: c_uint,
     flags: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfProgBindMap {
     prog_fd: c_uint,
     map_fd: c_uint,
@@ -416,6 +429,7 @@ struct BpfProgBindMap {
 
 /// Holds a BpfAttr union where only the specified `size`, in bytes, is to be used for
 /// underlying bpf syscalls.
+#[derive(Debug)]
 pub(crate) struct SizedBpfAttr {
     pub(crate) bpf_attr: BpfAttr,
     /// The amount of used bytes of the given [`BpfAttr`]. See [`sys_bpf`](Fn@sys_bpf) for
@@ -447,6 +461,12 @@ pub(crate) union BpfAttr {
     bpf_enable_state: BpfEnableStats,  // BPF_ENABLE_STATS
     bpf_iter_create: BpfIterCreate,    // BPF_ITER_CREATE
     bpf_prog_bind_map: BpfProgBindMap, // BPF_PROG_BIND_MAP
+}
+
+impl Debug for BpfAttr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BpfAttr")
+    }
 }
 
 #[derive(Debug, Clone)]

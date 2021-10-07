@@ -1,5 +1,6 @@
 #[cfg(feature = "log_buf")]
 use lazy_static::lazy_static;
+use slog::info;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -12,6 +13,7 @@ use crate::bpf::constant::bpf_cmd::{
 };
 use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
+use crate::LOGGER;
 
 pub type BpfMapType = u32;
 
@@ -46,7 +48,12 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
 
     let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER,
+            "error calling SYS_bpf; cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
+        );
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
     }
     Ok(ret as usize)
 }

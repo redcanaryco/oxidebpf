@@ -51,7 +51,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, o, warn, Drain, Logger};
+use slog::{crit, info, o, warn, Drain, Logger};
 use slog_term::TermDecorator;
 
 /// Helper struct for library logging.
@@ -62,26 +62,40 @@ pub struct Oxidebpf {
 impl Oxidebpf {
     /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
     /// everything goes to the terminal.
-    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
-        Oxidebpf {
-            logger: logger.into().unwrap_or_else(|| {
-                slog::Logger::root(
-                    slog_async::Async::new(
-                        slog_term::FullFormat::new(TermDecorator::new().build())
+    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) {
+        unsafe {
+            if let None = LIB {
+                LIB = Some(Oxidebpf {
+                    logger: logger.into().unwrap_or_else(|| {
+                        slog::Logger::root(
+                            slog_async::Async::new(
+                                slog_term::FullFormat::new(TermDecorator::new().build())
+                                    .build()
+                                    .fuse(),
+                            )
                             .build()
                             .fuse(),
-                    )
-                    .build()
-                    .fuse(),
-                    o!(),
-                )
-            }),
+                            o!(),
+                        )
+                    }),
+                });
+            }
         }
     }
 }
 
+static mut LIB: Option<Oxidebpf> = None;
+
 lazy_static! {
-    pub(crate) static ref LOGGER: Logger = Oxidebpf::init(None).logger;
+    pub(crate) static ref LOGGER: &'static Logger = {
+        Oxidebpf::init(None);
+        unsafe {
+            match &LIB {
+                None => &slog::Logger::root(slog::Discard, o!()),
+                Some(lib) => &lib.logger,
+            }
+        }
+    };
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -574,6 +588,11 @@ fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
         let ret = libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim as *const _);
 
         if ret < 0 {
+            info!(
+                LOGGER,
+                "unable to set memlock limit, errno: {}",
+                nix::errno::errno()
+            );
             Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
                 nix::errno::errno(),
             )))
@@ -593,6 +612,11 @@ fn get_memlock_limit() -> Result<usize, OxidebpfError> {
 
         let ret = libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim as *mut _);
         if ret < 0 {
+            info!(
+                LOGGER,
+                "could not get memlock limit, errno: {}",
+                nix::errno::errno()
+            );
             return Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
                 nix::errno::errno(),
             )));

@@ -16,7 +16,10 @@ use crate::error::OxidebpfError;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
+use slog::info;
 use std::fmt::{Debug, Display, Formatter};
+
+use crate::LOGGER;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -262,13 +265,19 @@ impl PerfMap {
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
         let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
             size if size < 0 => {
-                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+                let e = errno();
+                info!(LOGGER, "perfmap error, size < 0: {}; errno: {}", size, e);
+                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
             }
             size if size == 0 => {
+                info!(LOGGER, "perfmap error, bad page size (size == 0)");
                 return Err(OxidebpfError::BadPageSize);
             }
             size if size > 0 => size as usize,
-            _ => return Err(OxidebpfError::BadPageSize),
+            size => {
+                info!(LOGGER, "perfmap error, impossible page size: {}", size);
+                return Err(OxidebpfError::BadPageSize);
+            }
         };
         let page_count = (event_buffer_size as f64 / page_size as f64).ceil() as usize;
         if page_count == 0 {
@@ -294,12 +303,23 @@ impl PerfMap {
                 let mmap_errno = nix::errno::from_i32(errno());
                 unsafe {
                     if libc::close(fd) < 0 {
+                        let e = errno();
+                        info!(
+                            LOGGER,
+                            "could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}",
+                            mmap_errno,
+                            e
+                        );
                         return Err(OxidebpfError::MultipleErrors(vec![
                             OxidebpfError::LinuxError(mmap_errno),
-                            OxidebpfError::LinuxError(nix::errno::from_i32(errno())),
+                            OxidebpfError::LinuxError(nix::errno::from_i32(e)),
                         ]));
                     }
                 };
+                info!(
+                    LOGGER,
+                    "mmap failed while creating perfmap: {:?}", mmap_errno
+                );
                 return Err(OxidebpfError::LinuxError(mmap_errno));
             }
             perf_event_ioc_enable(fd)?;

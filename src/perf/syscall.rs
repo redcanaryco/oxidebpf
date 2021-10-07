@@ -22,6 +22,8 @@ use crate::perf::constant::{
 
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 use crate::ProgramType;
+use crate::LOGGER;
+use slog::info;
 use std::ffi::CString;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
@@ -74,7 +76,14 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
     setns(original_mnt_ns_fd, CLONE_NEWNS)?;
     unsafe {
         if libc::close(original_mnt_ns_fd as c_int) < 0 {
-            Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())))
+            let e = errno();
+            info!(
+                LOGGER,
+                "could not close original mount namespace fd; fd: {}; errno: {}",
+                original_mnt_ns_fd,
+                e
+            );
+            Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)))
         } else {
             Ok(())
         }
@@ -180,7 +189,12 @@ pub(crate) fn perf_event_open(
         )
     };
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER,
+            "error in perf_event_open while calling SYS_perf_event_open; errno: {}", e
+        );
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
     }
     Ok(ret as RawFd)
 }
@@ -438,7 +452,15 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER,
+            "setns error, could not call SYS_setns for fd: {} and nstype: {}; errno: {}",
+            fd,
+            nstype,
+            e
+        );
+        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(e)));
     }
     Ok(ret as usize)
 }
