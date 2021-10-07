@@ -59,8 +59,7 @@ lazy_static! {
 }
 
 fn create_slogger_root() -> (slog::Logger, AtomicSwitchCtrl) {
-    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
-    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+    let drain = slog::Logger::root(slog::Discard, o!());
     let drain = slog_async::Async::new(drain).build().fuse();
     let drain = AtomicSwitch::new(drain);
     (slog::Logger::root(drain.clone(), o!()), drain.ctrl())
