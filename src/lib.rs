@@ -789,12 +789,14 @@ impl ProgramVersion<'_> {
                     }
                     sum += program_object.code.0.len() * 8; // BPF insns are always 8 bytes
                 }
-                // check memlock limit
-                let current_limit = get_memlock_limit()?;
-                if sum > current_limit {
-                    set_memlock_limit(sum)?;
-                }
-                // if we're under, do nothing
+                // tmp override, set memlock to unlimited unconditionally
+                set_memlock_limit(libc::RLIM_INFINITY as usize)?;
+                //// check memlock limit
+                //let current_limit = get_memlock_limit()?;
+                //if sum > current_limit {
+                //    set_memlock_limit(sum)?;
+                //}
+                //// if we're under, do nothing
             }
         }
 
