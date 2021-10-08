@@ -11,6 +11,7 @@ use itertools::Itertools;
 
 use crate::bpf::*;
 use crate::error::*;
+use crate::set_memlock_limit;
 use crate::ProgramType;
 
 /// Structure that parses eBPF objects from an ELF object.
@@ -498,6 +499,10 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
     let utsname = nix::sys::utsname::uname();
     let release = utsname.release();
     let version_base = kernel_major_minor_str_to_u32(release);
+
+    if let Err(_) = set_memlock_limit(libc::RLIM_INFINITY as usize) {
+        info!(LOGGER.0, "failed to set memlock_limit");
+    }
 
     // There doesn't seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal
     // ebpf program and load it with different versions until we find one that works. At most, we

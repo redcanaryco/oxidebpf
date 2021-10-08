@@ -616,7 +616,7 @@ impl<'a> ProgramGroup<'a> {
     }
 }
 
-fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
+pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     unsafe {
         let rlim = libc::rlimit {
             rlim_cur: limit as u64,
