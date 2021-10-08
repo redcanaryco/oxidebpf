@@ -20,6 +20,11 @@ pub enum OxidebpfError {
     KernelVersionNotFound,
     MissingRelocationSection(u32),
     InvalidMapObject,
+    /// If Errno is EPERM when receiving this error, check that the calling process
+    /// has appropriate capabilities (CAP_SYS_ADMIN, CAP_NET_ADMIN, and CAP_BPF are
+    /// typically required) and that the user's memlock limit is high enough to load
+    /// your programs. If the memlock limit is too low, this library exposes a
+    /// `set_memlock_limit(new_limit)` function which can raise it for you.
     LinuxError(String, Errno),
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),

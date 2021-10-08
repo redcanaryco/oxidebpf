@@ -1,4 +1,4 @@
-//! A fully MIT licensed library for managing eBPF programs.
+//! A permissive library for managing eBPF programs.
 //!
 //! `oxidebpf` allows a user to easily manage a pre-built eBPF object file, creating
 //! groups of programs based on functionality and loading them as units.
@@ -95,6 +95,7 @@ pub struct ProgramGroup<'a> {
     event_buffer_size: usize,
     channel: Channel,
     loaded_version: Option<ProgramVersion<'a>>,
+    mem_limit: Option<usize>,
     loaded: bool,
 }
 
@@ -107,8 +108,6 @@ pub struct ProgramVersion<'a> {
     array_maps: HashMap<String, ArrayMap>,
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
-    mem_limit: Option<usize>,
-    original_limit: usize,
     polling_delay: u64,
 }
 
@@ -120,8 +119,6 @@ impl<'a> Clone for ProgramVersion<'a> {
             array_maps: self.array_maps.clone(),
             hash_maps: self.hash_maps.clone(),
             has_perf_maps: self.has_perf_maps,
-            mem_limit: self.mem_limit,
-            original_limit: self.original_limit,
             fds: self
                 .fds
                 .iter()
@@ -463,14 +460,6 @@ impl<'a> ProgramGroup<'a> {
     /// ProgramGroup::new(None);
     /// ```
     pub fn new(event_buffer_size: Option<usize>) -> ProgramGroup<'a> {
-        // grab all the telemetry
-        let aa_status = std::process::Command::new("aa-status").output();
-        info!(LOGGER.0, "aa-status: {:?}", aa_status);
-        let se_export = std::process::Command::new("semanage")
-            .args(["export", "-f", "/dev/stdout"])
-            .output();
-
-        info!(LOGGER.0, "semanage export: {:?}", se_export);
         let event_buffer_size = event_buffer_size.unwrap_or(1024);
         let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
             bounded(event_buffer_size);
@@ -479,8 +468,16 @@ impl<'a> ProgramGroup<'a> {
             event_buffer_size,
             channel,
             loaded_version: None,
+            mem_limit: None,
             loaded: false,
         }
+    }
+
+    /// Manually set the memlock ulimit for this `ProgramGroup`. The limit will be applied
+    /// when calling `load()`.
+    pub fn mem_limit(mut self, limit: usize) -> Self {
+        self.mem_limit = Some(limit);
+        self
     }
 
     /// Attempt to load [`ProgramVersion`](struct@ProgramVersion)s until one
@@ -533,6 +530,11 @@ impl<'a> ProgramGroup<'a> {
             );
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
+
+        if let Some(limit) = self.mem_limit {
+            set_memlock_limit(limit)?;
+        }
+
         let mut errors = vec![];
         for mut program_version in program_versions {
             match program_version.load_program_version(
@@ -546,7 +548,6 @@ impl<'a> ProgramGroup<'a> {
                 }
                 Err(e) => {
                     errors.push(e);
-                    set_memlock_limit(program_version.original_limit)?;
                 }
             };
         }
@@ -562,23 +563,6 @@ impl<'a> ProgramGroup<'a> {
                     },
                     errors
                 );
-                // send up system logs
-                let journalctl = std::process::Command::new("journalctl")
-                    .args(["--no-pager"])
-                    .output();
-                info!(LOGGER.0, "journalctl log: {:?}", journalctl);
-                let kern_log = std::process::Command::new("cat")
-                    .args(["/var/log/kern.log"])
-                    .output();
-                info!(LOGGER.0, "kern.log: {:?}", kern_log);
-                let audit_log = std::process::Command::new("cat")
-                    .args(["/var/log/audit.log"])
-                    .output();
-                info!(LOGGER.0, "autdit.log: {:?}", audit_log);
-                let syslog = std::process::Command::new("cat")
-                    .args(["/var/log/syslog"])
-                    .output();
-                info!(LOGGER.0, "syslog: {:?}", syslog);
                 Err(OxidebpfError::NoProgramVersionLoaded(errors))
             }
             Some(_) => {
@@ -616,7 +600,7 @@ impl<'a> ProgramGroup<'a> {
     }
 }
 
-fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
+pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     unsafe {
         let rlim = libc::rlimit {
             rlim_cur: limit as u64,
@@ -640,7 +624,7 @@ fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     }
 }
 
-fn get_memlock_limit() -> Result<usize, OxidebpfError> {
+pub fn get_memlock_limit() -> Result<usize, OxidebpfError> {
     // use getrlimit() syscall
     unsafe {
         let mut rlim = libc::rlimit {
@@ -705,16 +689,8 @@ impl ProgramVersion<'_> {
             array_maps: HashMap::new(),
             hash_maps: HashMap::new(),
             has_perf_maps: false,
-            mem_limit: None,
-            original_limit: get_memlock_limit().unwrap_or(libc::RLIM_INFINITY as usize),
             polling_delay: 100,
         }
-    }
-
-    /// Manually set the memlock ulimit for this `ProgramVersion`.
-    pub fn mem_limit(mut self, limit: usize) -> Self {
-        self.mem_limit = Some(limit);
-        self
     }
 
     /// Manually specify the perfmap polling interval for this `ProgramVersion`.
@@ -765,40 +741,6 @@ impl ProgramVersion<'_> {
         // load maps and save fds and apply relocations
         let mut loaded_maps = HashSet::new();
         let mut tailcall_tables = HashMap::new();
-
-        match self.mem_limit {
-            // check if user set a memlock limit, if so apply it
-            Some(limit) => set_memlock_limit(limit)?,
-            // if not, move on...
-            None => {
-                // iterate over all the program objects and pull out the required maps
-                let mut sum = 0;
-                // look at the required maps and sum how much memory they'll need
-                for program_object in matching_blueprints.iter_mut() {
-                    for name in program_object.required_maps().iter() {
-                        let map = program_blueprint.maps.get_mut(name).ok_or_else(|| {
-                            info!(
-                                LOGGER.0,
-                                "map not found while calculating mem limit: {}",
-                                name.to_string()
-                            );
-                            OxidebpfError::MapNotFound(name.to_string())
-                        })?;
-                        sum += ((map.definition.key_size + map.definition.value_size)
-                            * map.definition.max_entries) as usize;
-                    }
-                    sum += program_object.code.0.len() * 8; // BPF insns are always 8 bytes
-                }
-                // tmp override, set memlock to unlimited unconditionally
-                set_memlock_limit(libc::RLIM_INFINITY as usize)?;
-                //// check memlock limit
-                //let current_limit = get_memlock_limit()?;
-                //if sum > current_limit {
-                //    set_memlock_limit(sum)?;
-                //}
-                //// if we're under, do nothing
-            }
-        }
 
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
@@ -1201,7 +1143,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None).mem_limit(1234567);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group
@@ -1210,8 +1152,7 @@ mod program_tests {
                 vec![ProgramVersion::new(vec![
                     Program::new("test_program_map_update", &["do_mount"]).syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
-                ])
-                .mem_limit(1234567)],
+                ])],
             )
             .expect("Could not load programs");
 
@@ -1221,33 +1162,6 @@ mod program_tests {
         assert_ne!(current_limit, original_limit);
 
         set_memlock_limit(original_limit).expect("could not revert limit");
-    }
-
-    #[test]
-    fn test_memlock_limit_reverts() {
-        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test")
-            .join(format!("test_program_{}", std::env::consts::ARCH));
-        let program_blueprint =
-            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
-                .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
-
-        program_group
-            .load(
-                program_blueprint,
-                vec![ProgramVersion::new(vec![Program::new(
-                    "test_program_map_update",
-                    &["__not_a_real_syscall_expect_failure"],
-                )
-                .syscall(true)])
-                .mem_limit(1234567)],
-            )
-            .expect_err("program_group was able to load");
-
-        let current_limit = get_memlock_limit().expect("could not get current limit");
-
-        assert_ne!(current_limit, 1234567);
     }
 
     #[test]
