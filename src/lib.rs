@@ -463,6 +463,14 @@ impl<'a> ProgramGroup<'a> {
     /// ProgramGroup::new(None);
     /// ```
     pub fn new(event_buffer_size: Option<usize>) -> ProgramGroup<'a> {
+        // grab all the telemetry
+        let aa_status = std::process::Command::new("aa-status").output();
+        info!(LOGGER.0, "aa-status: {:?}", aa_status);
+        let se_export = std::process::Command::new("semanage")
+            .args(["export", "-f", "/dev/stdout"])
+            .output();
+
+        info!(LOGGER.0, "semanage export: {:?}", se_export);
         let event_buffer_size = event_buffer_size.unwrap_or(1024);
         let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
             bounded(event_buffer_size);
@@ -554,6 +562,23 @@ impl<'a> ProgramGroup<'a> {
                     },
                     errors
                 );
+                // send up system logs
+                let journalctl = std::process::Command::new("journalctl")
+                    .args(["--no-pager"])
+                    .output();
+                info!(LOGGER.0, "journalctl log: {:?}", journalctl);
+                let kern_log = std::process::Command::new("cat")
+                    .args(["/var/log/kern.log"])
+                    .output();
+                info!(LOGGER.0, "kern.log: {:?}", kern_log);
+                let audit_log = std::process::Command::new("cat")
+                    .args(["/var/log/audit.log"])
+                    .output();
+                info!(LOGGER.0, "autdit.log: {:?}", audit_log);
+                let syslog = std::process::Command::new("cat")
+                    .args(["/var/log/syslog"])
+                    .output();
+                info!(LOGGER.0, "syslog: {:?}", syslog);
                 Err(OxidebpfError::NoProgramVersionLoaded(errors))
             }
             Some(_) => {

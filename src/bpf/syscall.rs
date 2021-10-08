@@ -98,7 +98,7 @@ pub(crate) fn bpf_prog_load(
         size: 48, // 48 = minimum for 4.4
     };
     unsafe {
-        match sys_bpf(BPF_PROG_LOAD, bpf_attr.clone()) {
+        match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
                 info!(
