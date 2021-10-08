@@ -150,6 +150,8 @@ impl ProgramBlueprint {
         let mut blueprint = Self::default();
         let kernel_version = get_kernel_version(data, &elf)?;
 
+        info!(LOGGER.0, "Found kernel version: {}", kernel_version);
+
         for (sh_index, sh) in elf
             .section_headers
             .iter()
@@ -457,6 +459,7 @@ fn get_kernel_version(data: &[u8], elf: &Elf) -> Result<u32, OxidebpfError> {
         .unwrap_or(MAGIC_VERSION);
 
     Ok(if version == MAGIC_VERSION {
+        info!(LOGGER.0, "Dynamically finding the running kernel version");
         get_running_kernel_version()?
     } else {
         version
