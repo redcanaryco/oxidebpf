@@ -55,6 +55,8 @@ use slog::{crit, info, o, warn, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
+    /// The slog Logger for the oxidebpf library. You can change the destination
+    /// by accessing the drain control with `LOGGER.1.set(your_new_drain)`.
     pub static ref LOGGER: (Logger, AtomicSwitchCtrl) = create_slogger_root();
 }
 
