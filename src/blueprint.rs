@@ -478,7 +478,7 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
     let elf = Elf::parse(data).map_err(|e| {
         info!(
             LOGGER.0,
-            "parse_and_verify_elf(); Invalid ELF; data: {:?}; error: {:?}", data, e
+            "parse_and_verify_elf(); Invalid ELF; error: {:?}", e
         );
         OxidebpfError::InvalidElf
     })?;

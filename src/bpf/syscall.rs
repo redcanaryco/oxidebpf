@@ -111,7 +111,15 @@ pub(crate) fn bpf_prog_load(
                         .unwrap_or_else(|_| String::from(""))
                         .trim_matches('\0')
                         .to_string();
-                    info!(LOGGER.0, "bpf_prog_load(); log_buf: {}", log_string);
+                    let last_chars: String = log_string
+                        .chars()
+                        .rev()
+                        .take(100)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
+                    info!(LOGGER.0, "bpf_prog_load(); log_buf: {}", last_chars);
                     Err(OxidebpfError::BpfProgLoadError((Box::new(e), log_string)))
                 }
                 #[cfg(not(feature = "log_buf"))]
