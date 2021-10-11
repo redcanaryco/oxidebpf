@@ -151,7 +151,10 @@ impl ProgramBlueprint {
         let mut blueprint = Self::default();
         let kernel_version = get_kernel_version(data, &elf)?;
 
-        info!(LOGGER.0, "Found kernel version: {}", kernel_version);
+        info!(
+            LOGGER.0,
+            "ProgramBlueprint::new(); Found kernel version: {}", kernel_version
+        );
 
         for (sh_index, sh) in elf
             .section_headers
@@ -246,7 +249,7 @@ impl ProgramObject {
     ) -> Result<Self, OxidebpfError> {
         let section_data = get_section_data(data, sh).ok_or_else(|| {
             info!(
-                LOGGER.0, "invalid ELF; program_type: {:?}; name: {:?}; data: {:?}; elf: {:?}, sh_index: {:?}; sh: {:?}, kernel_version: {}",
+                LOGGER.0, "from_section(); Invalid ELF; program_type: {:?}; name: {:?}; data: {:?}; elf: {:?}, sh_index: {:?}; sh: {:?}, kernel_version: {}",
                 program_type,
                 name,
                 data,
@@ -475,7 +478,7 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
     let elf = Elf::parse(data).map_err(|e| {
         info!(
             LOGGER.0,
-            "parse_and_verify_elf, invalid elf; data: {:?}; error: {:?}", data, e
+            "parse_and_verify_elf(); Invalid ELF; data: {:?}; error: {:?}", data, e
         );
         OxidebpfError::InvalidElf
     })?;
@@ -501,7 +504,10 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
     let version_base = kernel_major_minor_str_to_u32(release);
 
     if let Err(_) = set_memlock_limit(libc::RLIM_INFINITY as usize) {
-        info!(LOGGER.0, "failed to set memlock_limit");
+        info!(
+            LOGGER.0,
+            "get_running_kernel_version(); failed to set memlock_limit"
+        );
     }
 
     // There doesn't seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal

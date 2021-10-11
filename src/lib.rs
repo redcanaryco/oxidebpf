@@ -299,7 +299,7 @@ impl<'a> Program<'a> {
                                 Err(errors) => {
                                     info!(
                                         LOGGER.0,
-                                        "multiple kprobe load errors: {:?}; {:?}", e, s
+                                        "Program::attach_kprobe(); multiple kprobe load errors: {:?}; {:?}", e, s
                                     );
                                     errors.extend(vec![e, s])
                                 }
@@ -353,7 +353,7 @@ impl<'a> Program<'a> {
                                 Err(errors) => {
                                     info!(
                                         LOGGER.0,
-                                        "multiple uprobe load errors: {:?}; {:?}", e, s
+                                        "Program::attach_uprobe(); multiple uprobe load errors: {:?}; {:?}", e, s
                                     );
                                     errors.extend(vec![e, s])
                                 }
@@ -378,7 +378,7 @@ impl<'a> Program<'a> {
 
                     self.attach_probes()
                 } else {
-                    info!(LOGGER.0, "attach error: {:?}", e);
+                    info!(LOGGER.0, "Program::attach(); attach error: {:?}", e);
                     Err(e)
                 }
             }
@@ -389,7 +389,7 @@ impl<'a> Program<'a> {
         if !self.loaded {
             info!(
                 LOGGER.0,
-                "attempting to attach probes while program not loaded"
+                "Program::attach_probes(); attempting to attach probes while program not loaded"
             );
             return Err(OxidebpfError::ProgramNotLoaded);
         }
@@ -400,14 +400,14 @@ impl<'a> Program<'a> {
             Some(t) => {
                 info!(
                     LOGGER.0,
-                    "attempting to load unsupported program type {:?}", t
+                    "Program::attach_probes(); attempting to load unsupported program type {:?}", t
                 );
                 Err(OxidebpfError::UnsupportedProgramType)
             }
             _ => {
                 info!(
                     LOGGER.0,
-                    "attempting to load unsupported program type: unknown"
+                    "Program::attach_probes(); attempting to load unsupported program type: unknown"
                 );
                 Err(OxidebpfError::UnsupportedProgramType)
             }
@@ -526,7 +526,7 @@ impl<'a> ProgramGroup<'a> {
         if self.loaded {
             info!(
                 LOGGER.0,
-                "error: attempting to load a program group that was already loaded"
+                "ProgramGroup::load(); error: attempting to load a program group that was already loaded"
             );
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
@@ -556,7 +556,7 @@ impl<'a> ProgramGroup<'a> {
             None => {
                 info!(
                     LOGGER.0,
-                    "error: no program version was able to load for {:?}, errors: {:?}",
+                    "ProgramGroup::load(); error: no program version was able to load for {:?}, errors: {:?}",
                     match std::env::current_exe() {
                         Ok(p) => p,
                         Err(_) => std::path::PathBuf::from("unknown"),
@@ -611,7 +611,7 @@ pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
         if ret < 0 {
             info!(
                 LOGGER.0,
-                "unable to set memlock limit, errno: {}",
+                "set_memlock_limit(); unable to set memlock limit, errno: {}",
                 nix::errno::errno()
             );
             Err(OxidebpfError::LinuxError(
@@ -636,7 +636,7 @@ pub fn get_memlock_limit() -> Result<usize, OxidebpfError> {
         if ret < 0 {
             info!(
                 LOGGER.0,
-                "could not get memlock limit, errno: {}",
+                "get_memlock_limit(); could not get memlock limit, errno: {}",
                 nix::errno::errno()
             );
             return Err(OxidebpfError::LinuxError(
@@ -713,7 +713,7 @@ impl ProgramVersion<'_> {
         match result {
             Ok(_) => Ok(()),
             Err(e) => {
-                crit!(LOGGER.0, "error in thread polling: {:?}", e);
+                crit!(LOGGER.0, "event_poller(); error in thread polling: {:?}", e);
                 Err(OxidebpfError::ThreadPollingError)
             }
         }
@@ -748,7 +748,12 @@ impl ProgramVersion<'_> {
                     .maps
                     .get_mut(name)
                     .ok_or_else(|| {
-                        info!(LOGGER.0, "map not found while iterating through required maps, map name: {}; program name: {}", name, program_object.name);
+                        info!(
+                            LOGGER.0,
+                            "load_program_version(); map not found while iterating through required maps, map name: {}; program name: {}",
+                            name,
+                            program_object.name
+                        );
                         OxidebpfError::MapNotFound(name.to_string())
                     })?;
 
@@ -895,7 +900,10 @@ impl ProgramVersion<'_> {
                         }
 
                         // If it's not optional, fail out of the whole Version
-                        info!(LOGGER.0, "failed out of version with error {:?}", e);
+                        info!(
+                            LOGGER.0,
+                            "load_program_version(); failed out of version with error {:?}", e
+                        );
                         return Err(e);
                     }
                 };
@@ -907,7 +915,7 @@ impl ProgramVersion<'_> {
                         None => {
                             info!(
                                 LOGGER.0,
-                                "tail call mapping not found, could not update: {:?}",
+                                "load_program_version(); tail call mapping not found, could not update: {:?}",
                                 tcm.map.clone()
                             );
                             return Err(OxidebpfError::MapNotFound(tcm.map.clone()));
@@ -922,7 +930,9 @@ impl ProgramVersion<'_> {
                         if !p.optional {
                             info!(
                                 LOGGER.0,
-                                "failed mandatory program load: {}; error: {:?}", p.name, e
+                                "load_program_version(); failed mandatory program load: {}; error: {:?}",
+                                p.name,
+                                e,
                             );
                             return Err(e);
                         }
@@ -971,7 +981,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER.0, "could not close uprobes: {:?}", e);
+                warn!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close uprobes: {:?}", e
+                );
                 return;
             }
         };
@@ -981,7 +994,10 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER.0, "could not close uprobe [{}]: {:?}", line, e);
+                    warn!(
+                        LOGGER.0,
+                        "ProgramVersion::drop(); could not close uprobe [{}]: {:?}", line, e
+                    );
                     return;
                 }
             }
@@ -995,7 +1011,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER.0, "could not close kprobes: {:?}", e);
+                warn!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close kprobes: {:?}", e
+                );
                 return;
             }
         };
@@ -1005,7 +1024,10 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER.0, "could not close kprobe [{}]: {:?}", line, e);
+                    warn!(
+                        LOGGER.0,
+                        "ProgramVersion::drop(); could not close kprobe [{}]: {:?}", line, e
+                    );
                     return;
                 }
             }
@@ -1021,7 +1043,11 @@ fn perf_map_poller(
     let mut poll = match Poll::new() {
         Ok(p) => p,
         Err(e) => {
-            crit!(LOGGER.0, "error creating poller: {:?}", e);
+            crit!(
+                LOGGER.0,
+                "perf_map_poller(); error creating poller: {:?}",
+                e
+            );
             return;
         }
     };
@@ -1034,7 +1060,11 @@ fn perf_map_poller(
             .registry()
             .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
         {
-            crit!(LOGGER.0, "error registering poller: {:?}", e);
+            crit!(
+                LOGGER.0,
+                "perf_map_poller(); error registering poller: {:?}",
+                e
+            );
             return;
         }
 
@@ -1053,7 +1083,11 @@ fn perf_map_poller(
             Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
                 Errno::EINTR => continue,
                 _ => {
-                    crit!(LOGGER.0, "unrecoverable polling error: {:?}", e);
+                    crit!(
+                        LOGGER.0,
+                        "perf_map_poller(); unrecoverable polling error: {:?}",
+                        e
+                    );
                     return;
                 }
             },
@@ -1077,7 +1111,7 @@ fn perf_map_poller(
                         return;
                     }
                     Err(e) => {
-                        crit!(LOGGER.0, "perfmap read error: {:?}", e);
+                        crit!(LOGGER.0, "perf_map_poller(); perfmap read error: {:?}", e);
                         return;
                     }
                 }

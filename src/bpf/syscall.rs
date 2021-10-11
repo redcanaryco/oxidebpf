@@ -51,7 +51,7 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
         let e = errno();
         info!(
             LOGGER.0,
-            "error calling SYS_bpf; cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
+            "sys_bpf(); cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
         );
         return Err(OxidebpfError::LinuxError(
             format!("bpf({}, 0x{:x}, {})", cmd, ptr as u64, size),
@@ -103,7 +103,7 @@ pub(crate) fn bpf_prog_load(
             Err(e) => {
                 info!(
                     LOGGER.0,
-                    "bpf_prog_load error with sys_bpf; bpf_attr: {:?}", bpf_attr
+                    "bpf_prog_load(); error with sys_bpf; bpf_attr: {:?}", bpf_attr
                 );
                 #[cfg(feature = "log_buf")]
                 {
@@ -111,7 +111,7 @@ pub(crate) fn bpf_prog_load(
                         .unwrap_or_else(|_| String::from(""))
                         .trim_matches('\0')
                         .to_string();
-                    info!(LOGGER.0, "bpf_prog_load log_buf: {}", log_string);
+                    info!(LOGGER.0, "bpf_prog_load(); log_buf: {}", log_string);
                     Err(OxidebpfError::BpfProgLoadError((Box::new(e), log_string)))
                 }
                 #[cfg(not(feature = "log_buf"))]

@@ -79,7 +79,7 @@ fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
             let e = errno();
             info!(
                 LOGGER.0,
-                "could not close original mount namespace fd; fd: {}; errno: {}",
+                "restore_mnt_ns(); could not close original mount namespace fd; fd: {}; errno: {}",
                 original_mnt_ns_fd,
                 e
             );
@@ -107,7 +107,7 @@ pub(crate) fn perf_event_open_debugfs(
         t => {
             info!(
                 LOGGER.0,
-                "perf_event_open_debugfs (prefix), unsupported event type: {:?}", t
+                "perf_event_open_debugfs(); (prefix), unsupported event type: {:?}", t
             );
             return Err(OxidebpfError::UnsupportedEventType);
         }
@@ -155,7 +155,7 @@ pub(crate) fn perf_event_open_debugfs(
         t => {
             info!(
                 LOGGER.0,
-                "perf_event_open_debugfs (name), unsupported event type: {:?}", t
+                "perf_event_open_debugfs(); (name), unsupported event type: {:?}", t
             );
             return Err(OxidebpfError::UnsupportedEventType);
         }
@@ -171,7 +171,7 @@ pub(crate) fn perf_event_open_debugfs(
                 // This should be impossible to reach
                 info!(
                     LOGGER.0,
-                    "perf_event_open_debugfs, bad fd, should never happen; fd: {}", my_fd
+                    "perf_event_open_debugfs(); bad fd, should never happen; fd: {}", my_fd
                 );
                 return Err(OxidebpfError::UncaughtMountNsError);
             }
@@ -193,7 +193,7 @@ pub(crate) fn perf_event_open(
 ) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     if !((*PERF_PATH).as_path().exists()) {
-        info!(LOGGER.0, "perf_event_open, PERF_PATH does not exist");
+        info!(LOGGER.0, "perf_event_open(); PERF_PATH does not exist");
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
     let ptr: *const PerfEventAttr = attr;
@@ -212,7 +212,7 @@ pub(crate) fn perf_event_open(
         let e = errno();
         info!(
             LOGGER.0,
-            "error in perf_event_open while calling SYS_perf_event_open; errno: {}", e
+            "perf_event_open(); error while calling SYS_perf_event_open; errno: {}", e
         );
         return Err(OxidebpfError::LinuxError(
             format!(
@@ -370,7 +370,7 @@ pub(crate) fn attach_uprobe(
             return_bit |= 1 << bit;
         }
     } else {
-        info!(LOGGER.0, "attach_uprobe, bad config");
+        info!(LOGGER.0, "attach_uprobe(); bad config");
         return Err(OxidebpfError::FileIOError);
     }
 
@@ -423,7 +423,8 @@ pub(crate) fn attach_kprobe_debugfs(
             } else {
                 info!(
                     LOGGER.0,
-                    "perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry - event_path: {}", event_path
+                    "attach_kprobe_debugfs(); perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry - event_path: {}", 
+                    event_path,
                 );
                 Err(OxidebpfError::FileIOError)
             }
@@ -458,7 +459,7 @@ pub(crate) fn attach_kprobe(
     } else {
         info!(
             LOGGER.0,
-            "attach_kprobe error bad config, fd: {}, attach_point: {}, is_return: {}, offset: {:?}, cpu: {}",
+            "attach_kprobe(); error bad config, fd: {}, attach_point: {}, is_return: {}, offset: {:?}, cpu: {}",
             fd,
             attach_point,
             is_return,
@@ -495,7 +496,7 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
         let e = errno();
         info!(
             LOGGER.0,
-            "setns error, could not call SYS_setns for fd: {} and nstype: {}; errno: {}",
+            "setns(); error, could not call SYS_setns for fd: {} and nstype: {}; errno: {}",
             fd,
             nstype,
             e
