@@ -503,10 +503,10 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
     let release = utsname.release();
     let version_base = kernel_major_minor_str_to_u32(release);
 
-    if let Err(_) = set_memlock_limit(libc::RLIM_INFINITY as usize) {
+    if let Err(e) = set_memlock_limit(libc::RLIM_INFINITY as usize) {
         info!(
             LOGGER.0,
-            "get_running_kernel_version(); failed to set memlock_limit"
+            "get_running_kernel_version(); failed to set memlock_limit; error: {:?}", e,
         );
     }
 
