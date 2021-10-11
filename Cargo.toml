@@ -24,7 +24,6 @@ mio = { version = "0.7.13", features = ["os-poll", "os-ext"] }
 slog = "2.7.0"
 slog-stdlog = "4.1.0"
 slog-term = "2.8.0"
-slog-async = "2.6.0"
 slog-atomic = "3.1.0"
 
 [dev-dependencies]

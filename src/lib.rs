@@ -51,7 +51,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, info, o, warn, Drain, Logger};
+use slog::{crit, info, o, warn, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -60,7 +60,6 @@ lazy_static! {
 
 fn create_slogger_root() -> (slog::Logger, AtomicSwitchCtrl) {
     let drain = slog::Logger::root(slog::Discard, o!());
-    let drain = slog_async::Async::new(drain).build().fuse();
     let drain = AtomicSwitch::new(drain);
     (slog::Logger::root(drain.clone(), o!()), drain.ctrl())
 }
