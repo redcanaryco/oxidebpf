@@ -77,8 +77,6 @@ pub(crate) fn bpf_prog_load(
 
     #[cfg(feature = "log_buf")]
     let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
-    #[cfg(feature = "log_buf")]
-    let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -107,7 +105,7 @@ pub(crate) fn bpf_prog_load(
                 );
                 #[cfg(feature = "log_buf")]
                 {
-                    let log_string = String::from_utf8(Vec::from(log_buf))
+                    let log_string = String::from_utf8(log_buf)
                         .unwrap_or_else(|_| String::from(""))
                         .trim_matches('\0')
                         .to_string();
