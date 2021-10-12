@@ -1,5 +1,6 @@
 #[cfg(feature = "log_buf")]
 use lazy_static::lazy_static;
+use slog::info;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -12,6 +13,7 @@ use crate::bpf::constant::bpf_cmd::{
 };
 use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
+use crate::LOGGER;
 
 pub type BpfMapType = u32;
 
@@ -46,7 +48,15 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
 
     let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER.0,
+            "sys_bpf(); cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
+        );
+        return Err(OxidebpfError::LinuxError(
+            format!("bpf({}, 0x{:x}, {})", cmd, ptr as u64, size),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as usize)
 }
@@ -67,8 +77,6 @@ pub(crate) fn bpf_prog_load(
 
     #[cfg(feature = "log_buf")]
     let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
-    #[cfg(feature = "log_buf")]
-    let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -91,15 +99,26 @@ pub(crate) fn bpf_prog_load(
         match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
+                info!(
+                    LOGGER.0,
+                    "bpf_prog_load(); error with sys_bpf; bpf_attr: {:?}", bpf_attr
+                );
                 #[cfg(feature = "log_buf")]
                 {
-                    Err(OxidebpfError::BpfProgLoadError((
-                        Box::new(e),
-                        String::from_utf8(Vec::from(log_buf))
-                            .unwrap_or_else(|_| String::from(""))
-                            .trim_matches('\0')
-                            .to_string(),
-                    )))
+                    let log_string = String::from_utf8(log_buf)
+                        .unwrap_or_else(|_| String::from(""))
+                        .trim_matches('\0')
+                        .to_string();
+                    let last_chars: String = log_string
+                        .chars()
+                        .rev()
+                        .take(100)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
+                    info!(LOGGER.0, "bpf_prog_load(); log_buf: {}", last_chars);
+                    Err(OxidebpfError::BpfProgLoadError((Box::new(e), log_string)))
                 }
                 #[cfg(not(feature = "log_buf"))]
                 {

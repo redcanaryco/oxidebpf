@@ -1,4 +1,4 @@
-//! A fully MIT licensed library for managing eBPF programs.
+//! A permissive library for managing eBPF programs.
 //!
 //! `oxidebpf` allows a user to easily manage a pre-built eBPF object file, creating
 //! groups of programs based on functionality and loading them as units.
@@ -51,37 +51,19 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, o, warn, Drain, Logger};
-use slog_term::TermDecorator;
-
-/// Helper struct for library logging.
-pub struct Oxidebpf {
-    logger: slog::Logger,
-}
-
-impl Oxidebpf {
-    /// Pass in your own `slog::Logger` here and the library will use it to log. By default,
-    /// everything goes to the terminal.
-    pub fn init<L: Into<Option<slog::Logger>>>(logger: L) -> Self {
-        Oxidebpf {
-            logger: logger.into().unwrap_or_else(|| {
-                slog::Logger::root(
-                    slog_async::Async::new(
-                        slog_term::FullFormat::new(TermDecorator::new().build())
-                            .build()
-                            .fuse(),
-                    )
-                    .build()
-                    .fuse(),
-                    o!(),
-                )
-            }),
-        }
-    }
-}
+use slog::{crit, info, o, warn, Logger};
+use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
-    pub(crate) static ref LOGGER: Logger = Oxidebpf::init(None).logger;
+    /// The slog Logger for the oxidebpf library. You can change the destination
+    /// by accessing the drain control with `LOGGER.1.set(your_new_drain)`.
+    pub static ref LOGGER: (Logger, AtomicSwitchCtrl) = create_slogger_root();
+}
+
+fn create_slogger_root() -> (slog::Logger, AtomicSwitchCtrl) {
+    let drain = slog::Logger::root(slog::Discard, o!());
+    let drain = AtomicSwitch::new(drain);
+    (slog::Logger::root(drain.clone(), o!()), drain.ctrl())
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -114,6 +96,7 @@ pub struct ProgramGroup<'a> {
     event_buffer_size: usize,
     channel: Channel,
     loaded_version: Option<ProgramVersion<'a>>,
+    mem_limit: Option<usize>,
     loaded: bool,
 }
 
@@ -126,8 +109,6 @@ pub struct ProgramVersion<'a> {
     array_maps: HashMap<String, ArrayMap>,
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
-    mem_limit: Option<usize>,
-    original_limit: usize,
     polling_delay: u64,
 }
 
@@ -139,8 +120,6 @@ impl<'a> Clone for ProgramVersion<'a> {
             array_maps: self.array_maps.clone(),
             hash_maps: self.hash_maps.clone(),
             has_perf_maps: self.has_perf_maps,
-            mem_limit: self.mem_limit,
-            original_limit: self.original_limit,
             fds: self
                 .fds
                 .iter()
@@ -318,7 +297,13 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend(vec![e, s]),
+                                Err(errors) => {
+                                    info!(
+                                        LOGGER.0,
+                                        "Program::attach_kprobe(); multiple kprobe load errors: {:?}; {:?}", e, s
+                                    );
+                                    errors.extend(vec![e, s])
+                                }
                             },
                         }
                     }
@@ -366,7 +351,13 @@ impl<'a> Program<'a> {
                             }
                             Err(s) => match &mut result {
                                 Ok(_) => result = Err(vec![e, s]),
-                                Err(errors) => errors.extend(vec![e, s]),
+                                Err(errors) => {
+                                    info!(
+                                        LOGGER.0,
+                                        "Program::attach_uprobe(); multiple uprobe load errors: {:?}; {:?}", e, s
+                                    );
+                                    errors.extend(vec![e, s])
+                                }
                             },
                         }
                     }
@@ -388,6 +379,7 @@ impl<'a> Program<'a> {
 
                     self.attach_probes()
                 } else {
+                    info!(LOGGER.0, "Program::attach(); attach error: {:?}", e);
                     Err(e)
                 }
             }
@@ -396,13 +388,30 @@ impl<'a> Program<'a> {
 
     fn attach_probes(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         if !self.loaded {
+            info!(
+                LOGGER.0,
+                "Program::attach_probes(); attempting to attach probes while program not loaded"
+            );
             return Err(OxidebpfError::ProgramNotLoaded);
         }
 
-        match self.kind {
+        match &self.kind {
             Some(ProgramType::Kprobe | ProgramType::Kretprobe) => self.attach_kprobe(),
             Some(ProgramType::Uprobe | ProgramType::Uretprobe) => self.attach_uprobe(),
-            _ => Err(OxidebpfError::UnsupportedProgramType),
+            Some(t) => {
+                info!(
+                    LOGGER.0,
+                    "Program::attach_probes(); attempting to load unsupported program type {:?}", t
+                );
+                Err(OxidebpfError::UnsupportedProgramType)
+            }
+            _ => {
+                info!(
+                    LOGGER.0,
+                    "Program::attach_probes(); attempting to load unsupported program type: unknown"
+                );
+                Err(OxidebpfError::UnsupportedProgramType)
+            }
         }
     }
 
@@ -460,8 +469,16 @@ impl<'a> ProgramGroup<'a> {
             event_buffer_size,
             channel,
             loaded_version: None,
+            mem_limit: None,
             loaded: false,
         }
+    }
+
+    /// Manually set the memlock ulimit for this `ProgramGroup`. The limit will be applied
+    /// when calling `load()`.
+    pub fn mem_limit(mut self, limit: usize) -> Self {
+        self.mem_limit = Some(limit);
+        self
     }
 
     /// Attempt to load [`ProgramVersion`](struct@ProgramVersion)s until one
@@ -508,8 +525,17 @@ impl<'a> ProgramGroup<'a> {
         program_versions: Vec<ProgramVersion<'a>>,
     ) -> Result<(), OxidebpfError> {
         if self.loaded {
+            info!(
+                LOGGER.0,
+                "ProgramGroup::load(); error: attempting to load a program group that was already loaded"
+            );
             return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
         }
+
+        if let Some(limit) = self.mem_limit {
+            set_memlock_limit(limit)?;
+        }
+
         let mut errors = vec![];
         for mut program_version in program_versions {
             match program_version.load_program_version(
@@ -523,13 +549,23 @@ impl<'a> ProgramGroup<'a> {
                 }
                 Err(e) => {
                     errors.push(e);
-                    set_memlock_limit(program_version.original_limit)?;
                 }
             };
         }
 
         match &self.loaded_version {
-            None => Err(OxidebpfError::NoProgramVersionLoaded(errors)),
+            None => {
+                info!(
+                    LOGGER.0,
+                    "ProgramGroup::load(); error: no program version was able to load for {:?}, errors: {:?}",
+                    match std::env::current_exe() {
+                        Ok(p) => p,
+                        Err(_) => std::path::PathBuf::from("unknown"),
+                    },
+                    errors
+                );
+                Err(OxidebpfError::NoProgramVersionLoaded(errors))
+            }
             Some(_) => {
                 self.loaded = true;
                 Ok(())
@@ -565,7 +601,7 @@ impl<'a> ProgramGroup<'a> {
     }
 }
 
-fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
+pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     unsafe {
         let rlim = libc::rlimit {
             rlim_cur: limit as u64,
@@ -574,16 +610,22 @@ fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
         let ret = libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim as *const _);
 
         if ret < 0 {
-            Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
-                nix::errno::errno(),
-            )))
+            info!(
+                LOGGER.0,
+                "set_memlock_limit(); unable to set memlock limit, errno: {}",
+                nix::errno::errno()
+            );
+            Err(OxidebpfError::LinuxError(
+                "set_memlock_limit".to_string(),
+                nix::errno::Errno::from_i32(nix::errno::errno()),
+            ))
         } else {
             Ok(())
         }
     }
 }
 
-fn get_memlock_limit() -> Result<usize, OxidebpfError> {
+pub fn get_memlock_limit() -> Result<usize, OxidebpfError> {
     // use getrlimit() syscall
     unsafe {
         let mut rlim = libc::rlimit {
@@ -593,9 +635,15 @@ fn get_memlock_limit() -> Result<usize, OxidebpfError> {
 
         let ret = libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim as *mut _);
         if ret < 0 {
-            return Err(OxidebpfError::LinuxError(nix::errno::Errno::from_i32(
-                nix::errno::errno(),
-            )));
+            info!(
+                LOGGER.0,
+                "get_memlock_limit(); could not get memlock limit, errno: {}",
+                nix::errno::errno()
+            );
+            return Err(OxidebpfError::LinuxError(
+                "get_memlock_limit".to_string(),
+                nix::errno::Errno::from_i32(nix::errno::errno()),
+            ));
         }
 
         Ok(rlim.rlim_cur as usize)
@@ -642,16 +690,8 @@ impl ProgramVersion<'_> {
             array_maps: HashMap::new(),
             hash_maps: HashMap::new(),
             has_perf_maps: false,
-            mem_limit: None,
-            original_limit: get_memlock_limit().unwrap_or(libc::RLIM_INFINITY as usize),
             polling_delay: 100,
         }
-    }
-
-    /// Manually set the memlock ulimit for this `ProgramVersion`.
-    pub fn mem_limit(mut self, limit: usize) -> Self {
-        self.mem_limit = Some(limit);
-        self
     }
 
     /// Manually specify the perfmap polling interval for this `ProgramVersion`.
@@ -674,7 +714,7 @@ impl ProgramVersion<'_> {
         match result {
             Ok(_) => Ok(()),
             Err(e) => {
-                crit!(LOGGER, "error in thread polling: {:?}", e);
+                crit!(LOGGER.0, "event_poller(); error in thread polling: {:?}", e);
                 Err(OxidebpfError::ThreadPollingError)
             }
         }
@@ -703,40 +743,20 @@ impl ProgramVersion<'_> {
         let mut loaded_maps = HashSet::new();
         let mut tailcall_tables = HashMap::new();
 
-        match self.mem_limit {
-            // check if user set a memlock limit, if so apply it
-            Some(limit) => set_memlock_limit(limit)?,
-            // if not, move on...
-            None => {
-                // iterate over all the program objects and pull out the required maps
-                let mut sum = 0;
-                // look at the required maps and sum how much memory they'll need
-                for program_object in matching_blueprints.iter_mut() {
-                    for name in program_object.required_maps().iter() {
-                        let map = program_blueprint
-                            .maps
-                            .get_mut(name)
-                            .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
-                        sum += ((map.definition.key_size + map.definition.value_size)
-                            * map.definition.max_entries) as usize;
-                    }
-                    sum += program_object.code.0.len() * 8; // BPF insns are always 8 bytes
-                }
-                // check memlock limit
-                let current_limit = get_memlock_limit()?;
-                if sum > current_limit {
-                    set_memlock_limit(sum)?;
-                }
-                // if we're under, do nothing
-            }
-        }
-
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
                 let map = program_blueprint
                     .maps
                     .get_mut(name)
-                    .ok_or_else(|| OxidebpfError::MapNotFound(name.to_string()))?;
+                    .ok_or_else(|| {
+                        info!(
+                            LOGGER.0,
+                            "load_program_version(); map not found while iterating through required maps, map name: {}; program name: {}",
+                            name,
+                            program_object.name
+                        );
+                        OxidebpfError::MapNotFound(name.to_string())
+                    })?;
 
                 if !loaded_maps.contains(&map.name) {
                     let sized_attr = SizedBpfAttr {
@@ -863,7 +883,7 @@ impl ProgramVersion<'_> {
                 let program_type = match &p.kind {
                     Some(k) => k,
                     None => {
-                        p.kind = Some(blueprint.program_type.clone());
+                        p.kind = Some(blueprint.program_type);
                         &blueprint.program_type
                     }
                 };
@@ -881,6 +901,10 @@ impl ProgramVersion<'_> {
                         }
 
                         // If it's not optional, fail out of the whole Version
+                        info!(
+                            LOGGER.0,
+                            "load_program_version(); failed out of version with error {:?}", e
+                        );
                         return Err(e);
                     }
                 };
@@ -889,7 +913,14 @@ impl ProgramVersion<'_> {
                 if let Some(tcm) = &p.tail_call_mapping {
                     match tailcall_tables.get(&tcm.map) {
                         Some(map) => bpf_map_update_elem(*map.get_fd(), tcm.index, fd)?,
-                        None => return Err(OxidebpfError::MapNotFound(tcm.map.clone())),
+                        None => {
+                            info!(
+                                LOGGER.0,
+                                "load_program_version(); tail call mapping not found, could not update: {:?}",
+                                tcm.map.clone()
+                            );
+                            return Err(OxidebpfError::MapNotFound(tcm.map.clone()));
+                        }
                     }
                 }
 
@@ -898,6 +929,12 @@ impl ProgramVersion<'_> {
                 match p.attach() {
                     Err(e) => {
                         if !p.optional {
+                            info!(
+                                LOGGER.0,
+                                "load_program_version(); failed mandatory program load: {}; error: {:?}",
+                                p.name,
+                                e,
+                            );
                             return Err(e);
                         }
                     }
@@ -945,7 +982,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER, "could not close uprobes: {:?}", e);
+                warn!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close uprobes: {:?}", e
+                );
                 return;
             }
         };
@@ -955,7 +995,10 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER, "could not close uprobe [{}]: {:?}", line, e);
+                    warn!(
+                        LOGGER.0,
+                        "ProgramVersion::drop(); could not close uprobe [{}]: {:?}", line, e
+                    );
                     return;
                 }
             }
@@ -969,7 +1012,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         {
             Ok(f) => f,
             Err(e) => {
-                warn!(LOGGER, "could not close kprobes: {:?}", e);
+                warn!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close kprobes: {:?}", e
+                );
                 return;
             }
         };
@@ -979,7 +1025,10 @@ impl<'a> Drop for ProgramVersion<'a> {
             let line = line.unwrap();
             if line.contains("oxidebpf_") {
                 if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(LOGGER, "could not close kprobe [{}]: {:?}", line, e);
+                    warn!(
+                        LOGGER.0,
+                        "ProgramVersion::drop(); could not close kprobe [{}]: {:?}", line, e
+                    );
                     return;
                 }
             }
@@ -995,7 +1044,11 @@ fn perf_map_poller(
     let mut poll = match Poll::new() {
         Ok(p) => p,
         Err(e) => {
-            crit!(LOGGER, "error creating poller: {:?}", e);
+            crit!(
+                LOGGER.0,
+                "perf_map_poller(); error creating poller: {:?}",
+                e
+            );
             return;
         }
     };
@@ -1008,7 +1061,11 @@ fn perf_map_poller(
             .registry()
             .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
         {
-            crit!(LOGGER, "error registering poller: {:?}", e);
+            crit!(
+                LOGGER.0,
+                "perf_map_poller(); error registering poller: {:?}",
+                e
+            );
             return;
         }
 
@@ -1027,7 +1084,11 @@ fn perf_map_poller(
             Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
                 Errno::EINTR => continue,
                 _ => {
-                    crit!(LOGGER, "unrecoverable polling error: {:?}", e);
+                    crit!(
+                        LOGGER.0,
+                        "perf_map_poller(); unrecoverable polling error: {:?}",
+                        e
+                    );
                     return;
                 }
             },
@@ -1051,7 +1112,7 @@ fn perf_map_poller(
                         return;
                     }
                     Err(e) => {
-                        crit!(LOGGER, "perfmap read error: {:?}", e);
+                        crit!(LOGGER.0, "perf_map_poller(); perfmap read error: {:?}", e);
                         return;
                     }
                 }
@@ -1117,7 +1178,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None).mem_limit(1234567);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group
@@ -1126,8 +1187,7 @@ mod program_tests {
                 vec![ProgramVersion::new(vec![
                     Program::new("test_program_map_update", &["do_mount"]).syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
-                ])
-                .mem_limit(1234567)],
+                ])],
             )
             .expect("Could not load programs");
 
@@ -1137,33 +1197,6 @@ mod program_tests {
         assert_ne!(current_limit, original_limit);
 
         set_memlock_limit(original_limit).expect("could not revert limit");
-    }
-
-    #[test]
-    fn test_memlock_limit_reverts() {
-        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test")
-            .join(format!("test_program_{}", std::env::consts::ARCH));
-        let program_blueprint =
-            ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
-                .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
-
-        program_group
-            .load(
-                program_blueprint,
-                vec![ProgramVersion::new(vec![Program::new(
-                    "test_program_map_update",
-                    &["__not_a_real_syscall_expect_failure"],
-                )
-                .syscall(true)])
-                .mem_limit(1234567)],
-            )
-            .expect_err("program_group was able to load");
-
-        let current_limit = get_memlock_limit().expect("could not get current limit");
-
-        assert_ne!(current_limit, 1234567);
     }
 
     #[test]
@@ -1338,7 +1371,7 @@ mod program_tests {
 }
 
 /// An enum of the different BPF program types.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ProgramType {
     /// Unspecified program type.
     Unspec,

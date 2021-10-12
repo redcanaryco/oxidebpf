@@ -1,10 +1,13 @@
+use slog::info;
 use std::convert::TryFrom;
 use std::ffi::CStr;
+use std::fmt::{Debug, Formatter};
 use std::os::raw::{c_int, c_short, c_uchar, c_uint, c_ulong};
 
 use crate::bpf::constant::{bpf_prog_type, BPF_OBJ_NAME_LEN};
 use crate::error::OxidebpfError;
 use crate::ProgramType;
+use crate::LOGGER;
 
 pub(crate) mod constant;
 pub(crate) mod syscall;
@@ -110,6 +113,11 @@ impl TryFrom<&[u8]> for MapDefinition {
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         // at the very least, we need the first 4 entries.
         if raw.len() < std::mem::size_of::<c_uint>() * 4 {
+            info!(
+                LOGGER.0,
+                "MapDefinition::try_from(); Invalid map object, raw.len(): {}",
+                raw.len()
+            );
             return Err(OxidebpfError::InvalidMapObject);
         }
         let mut data = vec![0; std::mem::size_of::<MapDefinition>()];
@@ -322,7 +330,7 @@ struct BpfBtfLoad {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct TaskFdQuery {
     pid: c_uint,
     fd: c_uint,
@@ -342,6 +350,12 @@ union LinkTarget {
     target_ifindex: c_uint,
 }
 
+impl Debug for LinkTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LinkTarget")
+    }
+}
+
 impl Default for LinkTarget {
     fn default() -> Self {
         Self { target_fd: 0 }
@@ -349,7 +363,7 @@ impl Default for LinkTarget {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct LinkTargetIterInfo {
     iter_info: c_ulong,
     iter_info_len: c_uint,
@@ -362,6 +376,12 @@ union LinkTargetInfo {
     info: LinkTargetIterInfo,
 }
 
+impl Debug for LinkTargetInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LinkTargetInfo")
+    }
+}
+
 impl Default for LinkTargetInfo {
     fn default() -> Self {
         Self { target_btf_id: 0 }
@@ -369,7 +389,7 @@ impl Default for LinkTargetInfo {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkCreate {
     prog_fd: c_uint,
     target: LinkTarget,
@@ -379,7 +399,7 @@ struct BpfLinkCreate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkUpdate {
     link_fd: c_uint,
     new_prog_fd: c_uint,
@@ -388,26 +408,26 @@ struct BpfLinkUpdate {
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfLinkDetach {
     link_fd: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfEnableStats {
     stat_type: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfIterCreate {
     link_fd: c_uint,
     flags: c_uint,
 }
 
 #[repr(align(8), C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct BpfProgBindMap {
     prog_fd: c_uint,
     map_fd: c_uint,
@@ -416,6 +436,7 @@ struct BpfProgBindMap {
 
 /// Holds a BpfAttr union where only the specified `size`, in bytes, is to be used for
 /// underlying bpf syscalls.
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct SizedBpfAttr {
     pub(crate) bpf_attr: BpfAttr,
     /// The amount of used bytes of the given [`BpfAttr`]. See [`sys_bpf`](Fn@sys_bpf) for
@@ -449,6 +470,14 @@ pub(crate) union BpfAttr {
     bpf_prog_bind_map: BpfProgBindMap, // BPF_PROG_BIND_MAP
 }
 
+impl Debug for BpfAttr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let size = std::mem::size_of::<BpfAttr>();
+        let raw_union = unsafe { std::slice::from_raw_parts(self as *const _ as *const u8, size) };
+        write!(f, "BpfAttr: {:?}", raw_union)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BpfCode(pub Vec<BpfInsn>);
 
@@ -458,7 +487,12 @@ impl TryFrom<&[u8]> for BpfCode {
         if raw.len() < std::mem::size_of::<BpfInsn>()
             || raw.len() % std::mem::size_of::<BpfInsn>() != 0
         {
-            return Err(OxidebpfError::InvalidProgramObject);
+            info!(
+                LOGGER.0,
+                "BpfCode::try_from(); Invalid program length, raw.len(): {}",
+                raw.len()
+            );
+            return Err(OxidebpfError::InvalidProgramLength);
         }
         let mut instructions: Vec<BpfInsn> = Vec::new();
         for i in (0..raw.len()).step_by(std::mem::size_of::<BpfInsn>()) {
@@ -483,7 +517,12 @@ impl TryFrom<&[u8]> for BpfInsn {
     type Error = OxidebpfError;
     fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
         if raw.len() < std::mem::size_of::<BpfInsn>() {
-            return Err(OxidebpfError::InvalidProgramObject);
+            info!(
+                LOGGER.0,
+                "BpfInsn::try_from(); invalid instruction length, raw.len(): {}",
+                raw.len()
+            );
+            return Err(OxidebpfError::InvalidInstructionLength);
         }
         Ok(unsafe { std::ptr::read(raw.as_ptr() as *const _) })
     }

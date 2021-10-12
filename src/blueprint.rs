@@ -3,11 +3,15 @@ use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 
+use crate::LOGGER;
+use slog::info;
+
 use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
 use itertools::Itertools;
 
 use crate::bpf::*;
 use crate::error::*;
+use crate::set_memlock_limit;
 use crate::ProgramType;
 
 /// Structure that parses eBPF objects from an ELF object.
@@ -147,6 +151,11 @@ impl ProgramBlueprint {
         let mut blueprint = Self::default();
         let kernel_version = get_kernel_version(data, &elf)?;
 
+        info!(
+            LOGGER.0,
+            "ProgramBlueprint::new(); Found kernel version: {}", kernel_version
+        );
+
         for (sh_index, sh) in elf
             .section_headers
             .iter()
@@ -238,7 +247,19 @@ impl ProgramObject {
         sh: &'a SectionHeader,
         kernel_version: u32,
     ) -> Result<Self, OxidebpfError> {
-        let section_data = get_section_data(data, sh).ok_or(OxidebpfError::InvalidElf)?;
+        let section_data = get_section_data(data, sh).ok_or_else(|| {
+            info!(
+                LOGGER.0, "from_section(); Invalid ELF; program_type: {:?}; name: {:?}; data: {:?}; elf: {:?}, sh_index: {:?}; sh: {:?}, kernel_version: {}",
+                program_type,
+                name,
+                data,
+                elf,
+                sh_index,
+                sh,
+                kernel_version
+            );
+            OxidebpfError::InvalidElf
+        })?;
         let code = BpfCode::try_from(section_data)?;
 
         let symbol_name = elf
@@ -250,7 +271,7 @@ impl ProgramObject {
 
         // For object naming, we prioritize the section name over the symbol name
         Ok(Self {
-            program_type: program_type.clone(),
+            program_type: *program_type,
             name: name.map(str::to_string).unwrap_or(symbol_name),
             code,
             relocations: Reloc::get_map_relocations(sh_index, elf)?,
@@ -312,17 +333,18 @@ impl Reloc {
             .map(|(reloc_index, _)| reloc_index);
 
         // If we cant find a relocation section for the program section, assume it has no relocations
-        if reloc_index.is_none() {
-            return Ok(Vec::new());
-        }
+        let reloc_index = match reloc_index {
+            None => return Ok(Vec::new()),
+            Some(r) => r,
+        };
 
         // retrieve the relocation section
         let reloc_section = elf
             .shdr_relocs
             .iter()
-            .find(|(index, _relocs)| *index == reloc_index.unwrap())
+            .find(|(index, _relocs)| *index == reloc_index)
             .map(|(_index, relocs)| relocs)
-            .ok_or(OxidebpfError::InvalidProgramObject)?;
+            .ok_or_else(|| OxidebpfError::MissingRelocationSection(reloc_index as u32))?;
 
         Ok(reloc_section
             .iter()
@@ -441,6 +463,7 @@ fn get_kernel_version(data: &[u8], elf: &Elf) -> Result<u32, OxidebpfError> {
         .unwrap_or(MAGIC_VERSION);
 
     Ok(if version == MAGIC_VERSION {
+        info!(LOGGER.0, "Dynamically finding the running kernel version");
         get_running_kernel_version()?
     } else {
         version
@@ -452,7 +475,13 @@ fn get_symbol_name(elf: &Elf, sym: &Sym) -> Option<String> {
 }
 
 fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
-    let elf = Elf::parse(data).map_err(|_e| OxidebpfError::InvalidElf)?;
+    let elf = Elf::parse(data).map_err(|e| {
+        info!(
+            LOGGER.0,
+            "parse_and_verify_elf(); Invalid ELF; error: {:?}", e
+        );
+        OxidebpfError::InvalidElf
+    })?;
 
     match elf.header.e_machine {
         header::EM_BPF | header::EM_NONE => (),
@@ -474,6 +503,13 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
     let release = utsname.release();
     let version_base = kernel_major_minor_str_to_u32(release);
 
+    if let Err(e) = set_memlock_limit(libc::RLIM_INFINITY as usize) {
+        info!(
+            LOGGER.0,
+            "get_running_kernel_version(); failed to set memlock_limit; error: {:?}", e,
+        );
+    }
+
     // There doesn't seem a portable way to find the "LINUX_VERSION_CODE", so we create a minimal
     // ebpf program and load it with different versions until we find one that works. At most, we
     // do this 255 times, as we only enumerate the revision number (1 byte).
@@ -494,7 +530,7 @@ fn get_running_kernel_version() -> Result<u32, OxidebpfError> {
         }
     }
 
-    Err(OxidebpfError::InvalidProgramObject)
+    Err(OxidebpfError::KernelVersionNotFound)
 }
 
 #[cfg(test)]

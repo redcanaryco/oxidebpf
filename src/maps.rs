@@ -16,7 +16,10 @@ use crate::error::OxidebpfError;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
+use slog::info;
 use std::fmt::{Debug, Display, Formatter};
+
+use crate::LOGGER;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -46,25 +49,42 @@ pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, Oxidebp
         if sublist.contains('-') {
             let pair: Vec<&str> = sublist.split('-').collect();
             if pair.len() != 2 {
+                info!(
+                    LOGGER.0,
+                    "process_cpu_string(); cpu online formatting error: {}", cpu_string
+                );
                 return Err(OxidebpfError::CpuOnlineFormatError);
             }
 
             // we checked the length above so indexing is OK
-            let from: i32 = pair[0]
-                .parse()
-                .map_err(|_| OxidebpfError::CpuOnlineFormatError)?;
-            let to: i32 = pair[1]
-                .parse()
-                .map_err(|_| OxidebpfError::CpuOnlineFormatError)?;
+            let from: i32 = pair[0].parse().map_err(|e| {
+                info!(
+                    LOGGER.0,
+                    "process_cpu_string(); cpu online i32 parse error; pair: {:?}; error: {:?}",
+                    pair,
+                    e
+                );
+                OxidebpfError::CpuOnlineFormatError
+            })?;
+            let to: i32 = pair[1].parse().map_err(|e| {
+                info!(
+                    LOGGER.0,
+                    "process_cpu_string(); cpu online i32 parse error; pair: {:?}; error: {:?}",
+                    pair,
+                    e
+                );
+                OxidebpfError::CpuOnlineFormatError
+            })?;
 
             cpus.extend(from..=to)
         } else {
-            cpus.push(
-                sublist
-                    .trim()
-                    .parse()
-                    .map_err(|_| OxidebpfError::NumberParserError)?,
-            );
+            cpus.push(sublist.trim().parse().map_err(|e| {
+                info!(
+                    LOGGER.0,
+                    "process_cpu_string(); sublist number parsing error; sublist: {:?}; error: {:?}", sublist, e
+                );
+                OxidebpfError::NumberParserError
+            })?);
         }
     }
 
@@ -72,10 +92,22 @@ pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, Oxidebp
 }
 
 pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
-    let cpu_string = String::from_utf8(
-        std::fs::read("/sys/devices/system/cpu/online").map_err(|_| OxidebpfError::FileIOError)?,
-    )
-    .map_err(|_| OxidebpfError::Utf8StringConversionError)?;
+    let cpu_string = String::from_utf8(std::fs::read("/sys/devices/system/cpu/online").map_err(
+        |e| {
+            info!(
+                LOGGER.0,
+                "get_cpus(); could not read /sys/devices/system/cpu/online; error: {:?}", e
+            );
+            OxidebpfError::FileIOError
+        },
+    )?)
+    .map_err(|e| {
+        info!(
+            LOGGER.0,
+            "get_cpus(); utf8 string conversion error while getting cpus; error: {:?}", e
+        );
+        OxidebpfError::Utf8StringConversionError
+    })?;
     process_cpu_string(cpu_string)
 }
 
@@ -262,16 +294,35 @@ impl PerfMap {
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
         let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
             size if size < 0 => {
-                return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+                let e = errno();
+                info!(
+                    LOGGER.0,
+                    "PerfMap::new_group(); perfmap error, size < 0: {}; errno: {}", size, e
+                );
+                return Err(OxidebpfError::LinuxError(
+                    "perf map get PAGE_SIZE".to_string(),
+                    nix::errno::from_i32(e),
+                ));
             }
             size if size == 0 => {
+                info!(
+                    LOGGER.0,
+                    "PerfMap::new_group(); perfmap error, bad page size (size == 0)"
+                );
                 return Err(OxidebpfError::BadPageSize);
             }
             size if size > 0 => size as usize,
-            _ => return Err(OxidebpfError::BadPageSize),
+            size => {
+                info!(
+                    LOGGER.0,
+                    "PerfMap::new_group(); perfmap error, impossible page size: {}", size
+                );
+                return Err(OxidebpfError::BadPageSize);
+            }
         };
         let page_count = (event_buffer_size as f64 / page_size as f64).ceil() as usize;
         if page_count == 0 {
+            info!(LOGGER.0, "PerfMap::new_group(); bad page count (0)");
             return Err(OxidebpfError::BadPageCount);
         }
         let mmap_size = page_size * (page_count + 1);
@@ -294,13 +345,33 @@ impl PerfMap {
                 let mmap_errno = nix::errno::from_i32(errno());
                 unsafe {
                     if libc::close(fd) < 0 {
+                        let e = errno();
+                        info!(
+                            LOGGER.0,
+                            "PerfMap::new_group(); could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}",
+                            mmap_errno,
+                            e
+                        );
                         return Err(OxidebpfError::MultipleErrors(vec![
-                            OxidebpfError::LinuxError(mmap_errno),
-                            OxidebpfError::LinuxError(nix::errno::from_i32(errno())),
+                            OxidebpfError::LinuxError(
+                                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
+                                mmap_errno,
+                            ),
+                            OxidebpfError::LinuxError(
+                                format!("perf_map cleanup => close({})", fd),
+                                nix::errno::from_i32(e),
+                            ),
                         ]));
                     }
                 };
-                return Err(OxidebpfError::LinuxError(mmap_errno));
+                info!(
+                    LOGGER.0,
+                    "PerfMap::new_group(); mmap failed while creating perfmap: {:?}", mmap_errno
+                );
+                return Err(OxidebpfError::LinuxError(
+                    format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
+                    mmap_errno,
+                ));
             }
             perf_event_ioc_enable(fd)?;
             loaded_perfmaps.push(PerfMap {
@@ -335,6 +406,7 @@ impl PerfMap {
             end = ((data_tail + (*event).size as u64) % raw_size) as usize;
         }
         if data_head == data_tail {
+            // common and nonfatal - do not log
             return Err(OxidebpfError::NoPerfData);
         }
 
@@ -366,7 +438,7 @@ impl PerfMap {
                         let header_bytes: [u8; size_of::<PerfEventHeader>()] = buf
                             [..size_of::<PerfEventHeader>()]
                             .try_into()
-                            .map_err(|_| OxidebpfError::BadPerfSample)?;
+                            .map_err(|_| OxidebpfError::BadPerfSample)?; // infallible, do not log
                         std::ptr::read(header_bytes.as_ptr() as *const _)
                     };
 
@@ -374,7 +446,7 @@ impl PerfMap {
                         let size_bytes: [u8; size_of::<u32>()] = buf[size_of::<PerfEventHeader>()
                             ..(size_of::<u32>() + size_of::<PerfEventHeader>())]
                             .try_into()
-                            .map_err(|_| OxidebpfError::BadPerfSample)?;
+                            .map_err(|_| OxidebpfError::BadPerfSample)?; // infallible, do not log
                         u32::from_ne_bytes(size_bytes)
                     };
 
@@ -584,12 +656,26 @@ impl<T> RWMap<T, c_uint> for ArrayMap {
     /// ```
     unsafe fn read(&self, key: c_uint) -> Result<T, OxidebpfError> {
         if !self.base.loaded {
+            info!(
+                LOGGER.0,
+                "ArrayMap::read(); attempted to read unloaded array map {}", self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if self.base.fd < 0 {
+            info!(
+                LOGGER.0,
+                "ArrayMap::read(); attempted to read array map with negative fd {}", self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            info!(
+                LOGGER.0,
+                "ArrayMap::read(); attempted to read array map with incorrect size; gave {}; should be {}",
+                std::mem::size_of::<T>(),
+                self.base.map_config.value_size
+            );
             return Err(OxidebpfError::MapValueSizeMismatch);
         }
         bpf_map_lookup_elem(self.base.fd, key)
@@ -626,9 +712,18 @@ impl<T> RWMap<T, c_uint> for ArrayMap {
     /// ```
     unsafe fn write(&self, key: c_uint, value: T) -> Result<(), OxidebpfError> {
         if !self.base.loaded {
+            info!(
+                LOGGER.0,
+                "ArrayMap::write(); attempted to write unloaded array map {}", self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if self.base.fd < 0 {
+            info!(
+                LOGGER.0,
+                "ArrayMap::write(); attempted to write array map with negative fd {}",
+                self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
 
@@ -674,15 +769,36 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// ```
     unsafe fn read(&self, key: U) -> Result<T, OxidebpfError> {
         if !self.base.loaded {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::read(); attempted to read unloaded bpf hash map {}", self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if self.base.fd < 0 {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::read(); attempted to read bpf hash map with negative fd {}",
+                self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::read(); attempted to read bpf hash map with incorrect value size; gave {}; should be {}",
+                std::mem::size_of::<T>(),
+                self.base.map_config.value_size
+            );
             return Err(OxidebpfError::MapValueSizeMismatch);
         }
         if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::read(); attempted to read bpf hash map with incorrect key size; gave {}; should be {}",
+                std::mem::size_of::<U>(),
+                self.base.map_config.key_size
+            );
             return Err(OxidebpfError::MapKeySizeMismatch);
         }
         bpf_map_lookup_elem(self.base.fd, key)
@@ -721,17 +837,38 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// ```
     unsafe fn write(&self, key: U, value: T) -> Result<(), OxidebpfError> {
         if !self.base.loaded {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::write(); attempted to write unloaded bpf hash map {}", self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
         if self.base.fd < 0 {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::write(); attempted to write bpf hash map with negative fd {}",
+                self.base.name
+            );
             return Err(OxidebpfError::MapNotLoaded);
         }
 
         // Try and verify that size of the value type matches the size of the value field in the map
         if std::mem::size_of::<T>() as u32 != self.base.map_config.value_size {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::write(); attempted to write bpf hash map with incorrect value size; gave {}; should be {}",
+                std::mem::size_of::<T>(),
+                self.base.map_config.value_size
+            );
             return Err(OxidebpfError::MapValueSizeMismatch);
         }
         if std::mem::size_of::<U>() as u32 != self.base.map_config.key_size {
+            info!(
+                LOGGER.0,
+                "BpfHashMap::write(); attempted to write bpf hash map with incorrect key size; gave {}; should be {}",
+                std::mem::size_of::<U>(),
+                self.base.map_config.key_size
+            );
             return Err(OxidebpfError::MapKeySizeMismatch);
         }
         bpf_map_update_elem(self.base.fd, key, value)
@@ -851,10 +988,15 @@ mod map_tests {
             unsafe { map.write(idx as u32, *num).expect("could not write to map") };
         }
         let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(100) };
-        assert_eq!(
-            should_fail.err().unwrap(),
-            OxidebpfError::LinuxError(Errno::ENOENT)
-        );
+        assert!(should_fail.is_err());
+        match should_fail {
+            Err(OxidebpfError::LinuxError(_, errno)) => {
+                assert_eq!(errno, Errno::ENOENT)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     // Test writing outside the size of the array
@@ -881,7 +1023,14 @@ mod map_tests {
 
         // Should return E2BIG
         let should_fail = unsafe { map.write(100, 12345u64).err().unwrap() };
-        assert_eq!(should_fail, OxidebpfError::LinuxError(Errno::E2BIG));
+        match should_fail {
+            OxidebpfError::LinuxError(_, errno) => {
+                assert_eq!(errno, Errno::E2BIG)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     // Test storing a more complex structure
@@ -972,10 +1121,15 @@ mod map_tests {
         };
         let _ = unsafe { map.write(1234, 1234) };
         let should_fail: Result<u64, OxidebpfError> = unsafe { map.read(4321) };
-        assert_eq!(
-            should_fail.err().unwrap(),
-            OxidebpfError::LinuxError(Errno::ENOENT)
-        );
+        assert!(should_fail.is_err());
+        match should_fail {
+            Err(OxidebpfError::LinuxError(_, errno)) => {
+                assert_eq!(errno, Errno::ENOENT)
+            }
+            _ => {
+                panic!("invalid OxidebpfError: {:?}", should_fail);
+            }
+        }
     }
 
     #[test]
