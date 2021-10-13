@@ -977,7 +977,7 @@ fn drop_debugfs_uprobes() {
     let mut up_writer = BufWriter::new(&up_file);
     for line in up_reader.lines() {
         let line = line.unwrap();
-        if line.contains(format!("oxidebpf_{}_", nix::unistd::gettid()).as_str()) {
+        if line.contains("oxidebpf_") {
             if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
                 info!(
                     LOGGER.0,
@@ -1009,7 +1009,7 @@ fn drop_debugfs_kprobes() {
     let mut kp_writer = BufWriter::new(&kp_file);
     for line in kp_reader.lines() {
         let line = line.unwrap();
-        if line.contains(format!("oxidebpf_{}_", nix::unistd::gettid()).as_str()) {
+        if line.contains("oxidebpf_") {
             if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
                 info!(
                     LOGGER.0,

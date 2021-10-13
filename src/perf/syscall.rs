@@ -122,7 +122,7 @@ pub(crate) fn perf_event_open_debugfs(
 
     let mut uuid = uuid::Uuid::new_v4().to_string();
     uuid.truncate(8);
-    let event_alias = format!("oxidebpf_{}_{}", nix::unistd::gettid(), uuid);
+    let event_alias = format!("oxidebpf_{}", uuid);
     let mut my_fd: RawFd = -1;
     let name = match event_type {
         ProgramType::Kprobe => {
