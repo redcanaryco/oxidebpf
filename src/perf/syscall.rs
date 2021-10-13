@@ -117,8 +117,14 @@ pub(crate) fn perf_event_open_debugfs(
     let mut event_file = std::fs::OpenOptions::new()
         .write(true)
         .append(true)
-        .open(event_path)
-        .map_err(|_e| OxidebpfError::FileIOError)?;
+        .open(&event_path)
+        .map_err(|_e| {
+            info!(
+                LOGGER.0,
+                "failed to open debugfs tracing path: '{}'", event_path
+            );
+            OxidebpfError::FileIOError
+        })?;
 
     let mut uuid = uuid::Uuid::new_v4().to_string();
     uuid.truncate(8);
