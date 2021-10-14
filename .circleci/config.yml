@@ -1,0 +1,66 @@
+version: 2.1
+commands:
+  depends:
+    description: "Install dependencies"
+    steps:
+      - run:
+          name: Install dependencies
+          command: |
+            apt-get update && apt-get install -y make coreutils
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- -y
+            echo "source /root/.cargo/env" >> $BASH_ENV
+            source /root/.cargo/env
+  build-bpf:
+    description: Build BPF programs
+    steps:
+      - run:
+          name: build the test BPF program
+          command: |
+            pushd test
+            docker-compose run --rm test-builder
+            popd
+jobs:
+  verify-purity:
+    docker:
+      - image: ubuntu:16.04
+    resource_class: xlarge
+    environment:
+      TZ: "/usr/share/zoneinfo/America/Denver"
+      ARCH: x86_64
+    steps:
+      - checkout
+      - depends
+      - run:
+          name: Check formatting
+          command: |
+            rustup component add rustfmt
+            cargo fmt --all
+            git diff --exit-code
+      - run:
+          name: Clippy
+          command: |
+            rustup component add clippy
+            make analyze
+  build-and-test:
+    machine:
+      image: ubuntu-2004:202107-02
+    resource_class: medium
+    environment:
+      TZ: "/usr/share/zoneinfo/America/Denver"
+      ARCH: x86_64
+    steps:
+      - checkout
+      - depends
+      - build-bpf
+      - run:
+          name: cargo test
+          command: |
+            cargo test -- --test-threads=1
+
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - verify-purity
+      - build-and-test
