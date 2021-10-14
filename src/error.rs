@@ -30,7 +30,7 @@ pub enum OxidebpfError {
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),
     MapNotLoaded,
-    ProgramNotFound,
+    ProgramNotFound(String),
     MapNotFound(String),
     NoProgramVersionLoaded(Vec<OxidebpfError>),
     FileIOError,
