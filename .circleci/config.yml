@@ -6,7 +6,7 @@ commands:
       - run:
           name: Install dependencies
           command: |
-            sudo apt-get update && apt-get install -y make coreutils
+            sudo apt-get update && sudo apt-get install -y make coreutils
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- --allow
             echo "source $HOME/.cargo/env" >> $BASH_ENV
             source $HOME/.cargo/env
@@ -21,9 +21,9 @@ commands:
             popd
 jobs:
   verify-purity:
-    docker:
-      - image: ubuntu:16.04
-    resource_class: xlarge
+    machine:
+      image: ubuntu-2004:202107-02
+    resource_class: medium
     environment:
       TZ: "/usr/share/zoneinfo/America/Denver"
       ARCH: x86_64
