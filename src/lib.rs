@@ -735,7 +735,11 @@ impl ProgramVersion<'_> {
                     .get(p.name)
                     .cloned()
                     .ok_or_else(|| {
-                        info!("Failed to find eBPF program: {}", p.name.to_string());
+                        info!(
+                            LOGGER.0,
+                            "Failed to find eBPF program: {}",
+                            p.name.to_string()
+                        );
                         OxidebpfError::ProgramNotFound(p.name.to_string())
                     })
             })
