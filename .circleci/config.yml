@@ -6,8 +6,11 @@ commands:
       - run:
           name: Install dependencies
           command: |
-            sudo apt-get update && sudo apt-get install -y make coreutils
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- --allow
+            sudo apt-get update && sudo apt-get install --allow-downgrades \
+              --allow-remove-essential --allow-change-held-packages \
+              curl make coreutils
+
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- -y
             echo "source $HOME/.cargo/env" >> $BASH_ENV
             source $HOME/.cargo/env
   build-bpf:
