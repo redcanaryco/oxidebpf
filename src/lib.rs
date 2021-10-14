@@ -40,6 +40,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display, Formatter},
     format,
+    fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
     thread,
@@ -735,7 +736,11 @@ impl ProgramVersion<'_> {
                     .get(p.name)
                     .cloned()
                     .ok_or_else(|| {
-                        info!("Failed to find eBPF program: {}", p.name.to_string());
+                        info!(
+                            LOGGER.0,
+                            "Failed to find eBPF program: {}",
+                            p.name.to_string()
+                        );
                         OxidebpfError::ProgramNotFound(p.name.to_string())
                     })
             })
@@ -960,18 +965,20 @@ impl ProgramVersion<'_> {
     }
 }
 
-fn drop_debugfs_uprobes() {
+fn drop_debugfs_uprobes(debugfs_mount: &str) {
     let up_file = match std::fs::OpenOptions::new()
         .append(true)
         .write(true)
         .read(true)
-        .open("/sys/kernel/debug/tracing/uprobe_events")
+        .open(format!("{}/tracing/uprobe_events", debugfs_mount))
     {
         Ok(f) => f,
         Err(e) => {
             info!(
                 LOGGER.0,
-                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/uprobe_events: {:?}", e
+                "ProgramVersion::drop(); could not modify {}/tracing/uprobe_events: {:?}",
+                debugfs_mount,
+                e
             );
             return;
         }
@@ -992,18 +999,20 @@ fn drop_debugfs_uprobes() {
     }
 }
 
-fn drop_debugfs_kprobes() {
+fn drop_debugfs_kprobes(debugfs_mount: &str) {
     let kp_file = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .append(true)
-        .open("/sys/kernel/debug/tracing/kprobe_events")
+        .open(format!("{}/tracing/uprobe_events", debugfs_mount))
     {
         Ok(f) => f,
         Err(e) => {
             info!(
                 LOGGER.0,
-                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/kprobe_events: {:?}", e
+                "ProgramVersion::drop(); could not modify {}/tracing/kprobe_events: {:?}",
+                debugfs_mount,
+                e
             );
             return;
         }
@@ -1039,8 +1048,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         // we might end up stuck with a bunch of unused probes clogging the namespace.
         // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
-        drop_debugfs_uprobes();
-        drop_debugfs_kprobes();
+        let debugfs_mount =
+            debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+        drop_debugfs_uprobes(&debugfs_mount);
+        drop_debugfs_kprobes(&debugfs_mount);
     }
 }
 
@@ -1152,10 +1163,86 @@ fn perf_map_poller(
     }
 }
 
+fn parse_mounts_line(line: &str) -> (String, String, String, String) {
+    let mut fields = line.split_whitespace();
+    let fs_spec = fields.next().unwrap_or("").to_string();
+    let fs_file = fields.next().unwrap_or("").to_string();
+    let fs_type = fields.next().unwrap_or("").to_string();
+    let fs_mntops = fields.next().unwrap_or("").to_string();
+    // Spaces and tabs are escaped as `\040` and `\011` respectively.
+    let fs_file = fs_file.replace("\\040", " ").replace("\\011", "\t");
+
+    (fs_spec, fs_file, fs_type, fs_mntops)
+}
+
+/// Returns the path where `debugfs` is mounted or None if not mounted at all.
+pub fn debugfs_mount_point() -> Option<String> {
+    const MOUNTS_PATH: &str = "/proc/self/mounts";
+
+    let file = match File::open(MOUNTS_PATH) {
+        Ok(f) => f,
+        Err(e) => {
+            info!(
+                LOGGER.0,
+                "failed to open '{}': {}",
+                MOUNTS_PATH,
+                e.to_string()
+            );
+            return None;
+        }
+    };
+
+    // The format of the `/proc/self/mounts` is documented in `man fstab`.
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let line = line.unwrap_or_else(|_| "".to_string());
+        let (_, fs_file, fs_type, _) = parse_mounts_line(&line);
+
+        // The `fs_spec` (first field) may sometimes show up as `none`, but the `fs_type` should
+        // always be `debugfs`.
+        if fs_type == "debugfs" && !fs_file.is_empty() {
+            return Some(fs_file);
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod program_tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn test_debugfs_mounts_parsing() {
+        let path_with_space = "debugfs /mnt/debug\\040fs debugfs rw,relatime 0 0";
+        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&path_with_space);
+        assert_eq!(fs_spec, "debugfs");
+        assert_eq!(fs_file, "/mnt/debug fs");
+        assert_eq!(fs_type, "debugfs");
+        assert_eq!(fs_opts, "rw,relatime");
+
+        let path_with_tab = "debugfs /mnt/debug\\011fs debugfs rw,relatime 0 0";
+        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&path_with_tab);
+        assert_eq!(fs_spec, "debugfs");
+        assert_eq!(fs_file, "/mnt/debug\tfs");
+        assert_eq!(fs_type, "debugfs");
+        assert_eq!(fs_opts, "rw,relatime");
+
+        let standard_path = "debugfs /sys/kernel/debug debugfs rw,relatime 0 0";
+        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&standard_path);
+        assert_eq!(fs_spec, "debugfs");
+        assert_eq!(fs_file, "/sys/kernel/debug");
+        assert_eq!(fs_type, "debugfs");
+        assert_eq!(fs_opts, "rw,relatime");
+
+        let without_spec = "none /sys/kernel/debug debugfs rw,relatime 0 0";
+        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&without_spec);
+        assert_eq!(fs_spec, "none");
+        assert_eq!(fs_file, "/sys/kernel/debug");
+        assert_eq!(fs_type, "debugfs");
+        assert_eq!(fs_opts, "rw,relatime");
+    }
 
     #[test]
     fn test_program_group() {
