@@ -6,10 +6,10 @@ commands:
       - run:
           name: Install dependencies
           command: |
-            apt-get update && apt-get install -y make coreutils
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- -y
-            echo "source /root/.cargo/env" >> $BASH_ENV
-            source /root/.cargo/env
+            sudo apt-get update && apt-get install -y make coreutils
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- --allow
+            echo "source $HOME/.cargo/env" >> $BASH_ENV
+            source $HOME/.cargo/env
   build-bpf:
     description: Build BPF programs
     steps:
@@ -40,7 +40,7 @@ jobs:
           name: Clippy
           command: |
             rustup component add clippy
-            make analyze
+            cargo clippy
   build-and-test:
     machine:
       image: ubuntu-2004:202107-02
@@ -55,8 +55,7 @@ jobs:
       - run:
           name: cargo test
           command: |
-            cargo test -- --test-threads=1
-
+            sudo -E $HOME/.cargo/bin/cargo test -- --test-threads=1
 
 workflows:
   version: 2
