@@ -734,7 +734,10 @@ impl ProgramVersion<'_> {
                     .programs
                     .get(p.name)
                     .cloned()
-                    .ok_or(OxidebpfError::ProgramNotFound)
+                    .ok_or_else(|| {
+                        info!("Failed to find eBPF program: {}", p.name.to_string());
+                        OxidebpfError::ProgramNotFound(p.name.to_string())
+                    })
             })
             .collect::<Result<_, OxidebpfError>>()?;
 
