@@ -10,7 +10,7 @@ commands:
               --allow-remove-essential --allow-change-held-packages \
               curl make coreutils
 
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -- -y
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "source $HOME/.cargo/env" >> $BASH_ENV
             source $HOME/.cargo/env
   build-bpf:
