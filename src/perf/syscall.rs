@@ -222,8 +222,8 @@ pub(crate) fn perf_event_open(
         );
         return Err(OxidebpfError::LinuxError(
             format!(
-                "perf_event_open(0x{:x}, {}, {}, {}, {})",
-                ptr as u64, pid, cpu, group_fd, flags
+                "perf_event_open(0x{:x} [{:?}], {}, {}, {}, {})",
+                ptr as u64, attr, pid, cpu, group_fd, flags
             ),
             nix::errno::from_i32(e),
         ));
