@@ -231,21 +231,42 @@ pub(crate) fn perf_event_open(
         );
 
         // check if we're missing capabilities
-        let mut hdrp = CapUserHeader::default();
+        let mut hdrp = CapUserHeader {
+            version: 0x20080522, // version 3
+            pid: 0,              // calling process
+        };
+
         let mut datap = CapUserData::default();
 
-        let ret =
-            unsafe { libc::syscall(libc::SYS_capset, &mut hdrp as *mut _, &mut datap as *mut _) };
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_capget,
+                &mut hdrp as *mut _ as *mut libc::c_void,
+                &mut datap as *mut _ as *mut libc::c_void,
+            )
+        };
 
         if ret < 0 {
-            info!(LOGGER.0, "could not read capabilities")
+            let errno = nix::errno::errno();
+            info!(LOGGER.0, "could not read capabilities: {}", errno);
         } else {
-            info!(LOGGER.0, "CapHeader: {:?}; CapData: {:?}", hdrp, datap);
+            info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdrp, datap);
         }
+
+        info!(
+            LOGGER.0,
+            "perf_event_open(0x{:x} [{:#?}], {}, {}, {}, {})",
+            ptr as u64,
+            attr,
+            pid,
+            cpu,
+            group_fd,
+            flags
+        );
 
         return Err(OxidebpfError::LinuxError(
             format!(
-                "perf_event_open(0x{:x} [{:?}], {}, {}, {}, {})",
+                "perf_event_open(0x{:x} [{:#?}], {}, {}, {}, {})",
                 ptr as u64, attr, pid, cpu, group_fd, flags
             ),
             nix::errno::from_i32(e),
