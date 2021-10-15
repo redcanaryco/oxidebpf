@@ -51,7 +51,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, info, o, warn, Logger};
+use slog::{crit, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -734,7 +734,14 @@ impl ProgramVersion<'_> {
                     .programs
                     .get(p.name)
                     .cloned()
-                    .ok_or(OxidebpfError::ProgramNotFound)
+                    .ok_or_else(|| {
+                        info!(
+                            LOGGER.0,
+                            "Failed to find eBPF program: {}",
+                            p.name.to_string()
+                        );
+                        OxidebpfError::ProgramNotFound(p.name.to_string())
+                    })
             })
             .collect::<Result<_, OxidebpfError>>()?;
 
@@ -957,6 +964,70 @@ impl ProgramVersion<'_> {
     }
 }
 
+fn drop_debugfs_uprobes() {
+    let up_file = match std::fs::OpenOptions::new()
+        .append(true)
+        .write(true)
+        .read(true)
+        .open("/sys/kernel/debug/tracing/uprobe_events")
+    {
+        Ok(f) => f,
+        Err(e) => {
+            info!(
+                LOGGER.0,
+                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/uprobe_events: {:?}", e
+            );
+            return;
+        }
+    };
+    let up_reader = BufReader::new(&up_file);
+    let mut up_writer = BufWriter::new(&up_file);
+    for line in up_reader.lines() {
+        let line = line.unwrap();
+        if line.contains("oxidebpf_") {
+            if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
+                info!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close uprobe [{}]: {:?}", line, e
+                );
+                return;
+            }
+        }
+    }
+}
+
+fn drop_debugfs_kprobes() {
+    let kp_file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .append(true)
+        .open("/sys/kernel/debug/tracing/kprobe_events")
+    {
+        Ok(f) => f,
+        Err(e) => {
+            info!(
+                LOGGER.0,
+                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/kprobe_events: {:?}", e
+            );
+            return;
+        }
+    };
+    let kp_reader = BufReader::new(&kp_file);
+    let mut kp_writer = BufWriter::new(&kp_file);
+    for line in kp_reader.lines() {
+        let line = line.unwrap();
+        if line.contains("oxidebpf_") {
+            if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
+                info!(
+                    LOGGER.0,
+                    "ProgramVersion::drop(); could not close kprobe [{}]: {:?}", line, e
+                );
+                return;
+            }
+        }
+    }
+}
+
 impl<'a> Drop for ProgramVersion<'a> {
     fn drop(&mut self) {
         // Detach everything, close remaining attachpoints
@@ -972,67 +1043,8 @@ impl<'a> Drop for ProgramVersion<'a> {
         // we might end up stuck with a bunch of unused probes clogging the namespace.
         // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
-
-        // uprobe
-        let up_file = match std::fs::OpenOptions::new()
-            .append(true)
-            .write(true)
-            .read(true)
-            .open("/sys/kernel/debug/tracing/uprobe_events")
-        {
-            Ok(f) => f,
-            Err(e) => {
-                warn!(
-                    LOGGER.0,
-                    "ProgramVersion::drop(); could not close uprobes: {:?}", e
-                );
-                return;
-            }
-        };
-        let up_reader = BufReader::new(&up_file);
-        let mut up_writer = BufWriter::new(&up_file);
-        for line in up_reader.lines() {
-            let line = line.unwrap();
-            if line.contains("oxidebpf_") {
-                if let Err(e) = up_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(
-                        LOGGER.0,
-                        "ProgramVersion::drop(); could not close uprobe [{}]: {:?}", line, e
-                    );
-                    return;
-                }
-            }
-        }
-        // kprobe
-        let kp_file = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .append(true)
-            .open("/sys/kernel/debug/tracing/kprobe_events")
-        {
-            Ok(f) => f,
-            Err(e) => {
-                warn!(
-                    LOGGER.0,
-                    "ProgramVersion::drop(); could not close kprobes: {:?}", e
-                );
-                return;
-            }
-        };
-        let kp_reader = BufReader::new(&kp_file);
-        let mut kp_writer = BufWriter::new(&kp_file);
-        for line in kp_reader.lines() {
-            let line = line.unwrap();
-            if line.contains("oxidebpf_") {
-                if let Err(e) = kp_writer.write_all(format!("-:{}\n", &line[2..]).as_bytes()) {
-                    warn!(
-                        LOGGER.0,
-                        "ProgramVersion::drop(); could not close kprobe [{}]: {:?}", line, e
-                    );
-                    return;
-                }
-            }
-        }
+        drop_debugfs_uprobes();
+        drop_debugfs_kprobes();
     }
 }
 
