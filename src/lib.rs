@@ -40,7 +40,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display, Formatter},
     format,
-    fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
     thread,
@@ -52,6 +51,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
+use proc_mounts::MountIter;
 use slog::{crit, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
@@ -1163,45 +1163,27 @@ fn perf_map_poller(
     }
 }
 
-fn parse_mounts_line(line: &str) -> (String, String, String, String) {
-    let mut fields = line.split_whitespace();
-    let fs_spec = fields.next().unwrap_or("").to_string();
-    let fs_file = fields.next().unwrap_or("").to_string();
-    let fs_type = fields.next().unwrap_or("").to_string();
-    let fs_mntops = fields.next().unwrap_or("").to_string();
-    // Spaces and tabs are escaped as `\040` and `\011` respectively.
-    let fs_file = fs_file.replace("\\040", " ").replace("\\011", "\t");
-
-    (fs_spec, fs_file, fs_type, fs_mntops)
-}
-
-/// Returns the path where `debugfs` is mounted or None if not mounted at all.
+/// Returns the path where `debugfs` is mounted or None if unable to locate.
 pub fn debugfs_mount_point() -> Option<String> {
-    const MOUNTS_PATH: &str = "/proc/self/mounts";
-
-    let file = match File::open(MOUNTS_PATH) {
-        Ok(f) => f,
+    let mount_iter = match MountIter::new() {
+        Ok(mount_iter) => mount_iter,
         Err(e) => {
-            info!(
-                LOGGER.0,
-                "failed to open '{}': {}",
-                MOUNTS_PATH,
-                e.to_string()
-            );
+            info!(LOGGER.0, "failed to create MountIter: {}", e.to_string());
             return None;
         }
     };
 
-    // The format of the `/proc/self/mounts` is documented in `man fstab`.
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line.unwrap_or_else(|_| "".to_string());
-        let (_, fs_file, fs_type, _) = parse_mounts_line(&line);
-
-        // The `fs_spec` (first field) may sometimes show up as `none`, but the `fs_type` should
-        // always be `debugfs`.
-        if fs_type == "debugfs" && !fs_file.is_empty() {
-            return Some(fs_file);
+    for mount_info in mount_iter {
+        if let Ok(mount_info) = mount_info {
+            if mount_info.fstype != "debugfs" {
+                continue;
+            }
+            let mount_point = mount_info
+                .dest
+                .into_os_string()
+                .into_string()
+                .unwrap_or_default();
+            return Some(mount_point);
         }
     }
 
@@ -1212,37 +1194,6 @@ pub fn debugfs_mount_point() -> Option<String> {
 mod program_tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn test_debugfs_mounts_parsing() {
-        let path_with_space = "debugfs /mnt/debug\\040fs debugfs rw,relatime 0 0";
-        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&path_with_space);
-        assert_eq!(fs_spec, "debugfs");
-        assert_eq!(fs_file, "/mnt/debug fs");
-        assert_eq!(fs_type, "debugfs");
-        assert_eq!(fs_opts, "rw,relatime");
-
-        let path_with_tab = "debugfs /mnt/debug\\011fs debugfs rw,relatime 0 0";
-        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&path_with_tab);
-        assert_eq!(fs_spec, "debugfs");
-        assert_eq!(fs_file, "/mnt/debug\tfs");
-        assert_eq!(fs_type, "debugfs");
-        assert_eq!(fs_opts, "rw,relatime");
-
-        let standard_path = "debugfs /sys/kernel/debug debugfs rw,relatime 0 0";
-        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&standard_path);
-        assert_eq!(fs_spec, "debugfs");
-        assert_eq!(fs_file, "/sys/kernel/debug");
-        assert_eq!(fs_type, "debugfs");
-        assert_eq!(fs_opts, "rw,relatime");
-
-        let without_spec = "none /sys/kernel/debug debugfs rw,relatime 0 0";
-        let (fs_spec, fs_file, fs_type, fs_opts) = parse_mounts_line(&without_spec);
-        assert_eq!(fs_spec, "none");
-        assert_eq!(fs_file, "/sys/kernel/debug");
-        assert_eq!(fs_type, "debugfs");
-        assert_eq!(fs_opts, "rw,relatime");
-    }
 
     #[test]
     fn test_program_group() {

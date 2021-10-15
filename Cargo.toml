@@ -21,6 +21,7 @@ crossbeam-channel = "0.5.1"
 lazy_static = "1.4.0"
 uuid = { version = "0.8.2", features = ["v4"] }
 mio = { version = "0.7.13", features = ["os-poll", "os-ext"] }
+proc-mounts = "0.2.4"
 slog = "2.7.0"
 slog-stdlog = "4.1.0"
 slog-term = "2.8.0"
