@@ -1173,18 +1173,16 @@ pub fn debugfs_mount_point() -> Option<String> {
         }
     };
 
-    for mount_info in mount_iter {
-        if let Ok(mount_info) = mount_info {
-            if mount_info.fstype != "debugfs" {
-                continue;
-            }
-            let mount_point = mount_info
-                .dest
-                .into_os_string()
-                .into_string()
-                .unwrap_or_default();
-            return Some(mount_point);
+    for mount_info in mount_iter.flatten() {
+        if mount_info.fstype != "debugfs" {
+            continue;
         }
+        let mount_point = mount_info
+            .dest
+            .into_os_string()
+            .into_string()
+            .unwrap_or_default();
+        return Some(mount_point);
     }
 
     None
