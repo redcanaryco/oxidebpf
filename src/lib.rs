@@ -51,6 +51,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
+use proc_mounts::MountIter;
 use slog::{crit, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
@@ -1007,18 +1008,20 @@ impl ProgramVersion<'_> {
     }
 }
 
-fn drop_debugfs_uprobes() {
+fn drop_debugfs_uprobes(debugfs_mount: &str) {
     let up_file = match std::fs::OpenOptions::new()
         .append(true)
         .write(true)
         .read(true)
-        .open("/sys/kernel/debug/tracing/uprobe_events")
+        .open(format!("{}/tracing/uprobe_events", debugfs_mount))
     {
         Ok(f) => f,
         Err(e) => {
             info!(
                 LOGGER.0,
-                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/uprobe_events: {:?}", e
+                "ProgramVersion::drop(); could not modify {}/tracing/uprobe_events: {:?}",
+                debugfs_mount,
+                e
             );
             return;
         }
@@ -1039,18 +1042,20 @@ fn drop_debugfs_uprobes() {
     }
 }
 
-fn drop_debugfs_kprobes() {
+fn drop_debugfs_kprobes(debugfs_mount: &str) {
     let kp_file = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .append(true)
-        .open("/sys/kernel/debug/tracing/kprobe_events")
+        .open(format!("{}/tracing/uprobe_events", debugfs_mount))
     {
         Ok(f) => f,
         Err(e) => {
             info!(
                 LOGGER.0,
-                "ProgramVersion::drop(); could not modify /sys/kernel/debug/tracing/kprobe_events: {:?}", e
+                "ProgramVersion::drop(); could not modify {}/tracing/kprobe_events: {:?}",
+                debugfs_mount,
+                e
             );
             return;
         }
@@ -1086,8 +1091,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         // we might end up stuck with a bunch of unused probes clogging the namespace.
         // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
-        drop_debugfs_uprobes();
-        drop_debugfs_kprobes();
+        let debugfs_mount =
+            debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+        drop_debugfs_uprobes(&debugfs_mount);
+        drop_debugfs_kprobes(&debugfs_mount);
     }
 }
 
@@ -1197,6 +1204,31 @@ fn perf_map_poller(
         }
         thread::sleep(polling_delay);
     }
+}
+
+/// Returns the path where `debugfs` is mounted or None if unable to locate.
+pub fn debugfs_mount_point() -> Option<String> {
+    let mount_iter = match MountIter::new() {
+        Ok(mount_iter) => mount_iter,
+        Err(e) => {
+            info!(LOGGER.0, "failed to create MountIter: {}", e.to_string());
+            return None;
+        }
+    };
+
+    for mount_info in mount_iter.flatten() {
+        if mount_info.fstype != "debugfs" {
+            continue;
+        }
+        let mount_point = mount_info
+            .dest
+            .into_os_string()
+            .into_string()
+            .unwrap_or_default();
+        return Some(mount_point);
+    }
+
+    None
 }
 
 #[cfg(test)]
