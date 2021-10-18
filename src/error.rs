@@ -90,3 +90,12 @@ impl From<retry::Error<OxidebpfError>> for OxidebpfError {
         }
     }
 }
+
+impl From<retry::Error<&str>> for OxidebpfError {
+    fn from(e: retry::Error<&str>) -> Self {
+        match e {
+            retry::Error::Operation { error, .. } => OxidebpfError::RetryError(error.to_string()),
+            retry::Error::Internal(i) => OxidebpfError::RetryError(i),
+        }
+    }
+}

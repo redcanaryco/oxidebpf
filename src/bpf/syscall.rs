@@ -49,12 +49,14 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     let size = arg_bpf_attr.size;
     let ptr: *const BpfAttr = &arg_bpf_attr.bpf_attr;
 
+    let mut e = 0;
+
     // ebpf can fail with EAGAIN for a variety of reasons, just retry it.
-    let result = retry_with_index(NoDelay().take(5), |idx| {
+    let result = retry_with_index(NoDelay.take(5), |idx| {
         let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
 
         if ret < 0 {
-            let e = errno();
+            e = errno();
             info!(
                 LOGGER.0,
                 "sys_bpf(); cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
@@ -62,10 +64,7 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
             if Errno::from_i32(e) == EAGAIN && idx < 5 {
                 OperationResult::Retry("EAGAIN")
             } else {
-                OxidebpfError::LinuxError(
-                    format!("bpf({}, {})", cmd, size),
-                    nix::errno::from_i32(e),
-                )
+                OperationResult::Err("Unrecoverable error retrying BPF load")
             }
         } else {
             OperationResult::Ok(ret as usize)
@@ -74,7 +73,16 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
 
     match result {
         Ok(size) => Ok(size),
-        Err(e) => Err(e.into()),
+        Err(err) => {
+            if e == 0 {
+                Err(err.into())
+            } else {
+                Err(OxidebpfError::LinuxError(
+                    format!("sys_bpf({}, {:#?})", cmd, arg_bpf_attr),
+                    Errno::from_i32(e),
+                ))
+            }
+        }
     }
 }
 
