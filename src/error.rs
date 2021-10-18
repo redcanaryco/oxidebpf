@@ -85,8 +85,8 @@ impl From<Vec<OxidebpfError>> for OxidebpfError {
 impl From<retry::Error<OxidebpfError>> for OxidebpfError {
     fn from(e: retry::Error<OxidebpfError>) -> Self {
         match e {
-           retry::Error::Operation { error, .. } => error,
-           retry::Error::Internal(i) => OxidebpfError::RetryError(i)
+            retry::Error::Operation { error, .. } => error,
+            retry::Error::Internal(i) => OxidebpfError::RetryError(i),
         }
     }
 }

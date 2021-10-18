@@ -1,11 +1,11 @@
 #[cfg(feature = "log_buf")]
 use lazy_static::lazy_static;
+use retry::delay::Fixed;
+use retry::retry;
 use slog::info;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
-use retry::retry;
-use retry::delay::Fixed;
 
 use libc::{c_uint, syscall, SYS_bpf};
 use nix::errno::errno;
@@ -60,8 +60,8 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
             );
             Err(OxidebpfError::LinuxError(
                 format!("bpf({}, 0x{:x}, {})", cmd, ptr as u64, size),
-                nix::errno::from_i32(e))
-            )
+                nix::errno::from_i32(e),
+            ))
         } else {
             Ok(ret as usize)
         }
@@ -69,7 +69,7 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
 
     match result {
         Ok(size) => Ok(size),
-        Err(e) => Err(e.into())
+        Err(e) => Err(e.into()),
     }
 }
 
