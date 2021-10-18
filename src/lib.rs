@@ -661,7 +661,7 @@ pub fn get_capabilities() -> Result<(CapUserHeader, CapUserData), OxidebpfError>
     if ret < 0 {
         Err(OxidebpfError::LinuxError(
             "get_capabilities()".to_string(),
-            nix::errno::from_i32(e),
+            nix::errno::from_i32(nix::errno::errno()),
         ))
     } else {
         Ok((hdrp, datap))

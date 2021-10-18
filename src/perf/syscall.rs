@@ -13,7 +13,7 @@ use nix::{ioctl_none, ioctl_write_int};
 use crate::debugfs_mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
-use crate::perf::{CapUserData, CapUserHeader};
+use crate::{CapUserData, CapUserHeader};
 
 // the compiler doesn't recognize that these _are_ used
 #[allow(unused_imports)]
