@@ -231,7 +231,7 @@ pub(crate) fn perf_event_open(
         );
 
         let (hdr, caps) = crate::get_capabilities()?;
-        info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdrp, caps);
+        info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdr, caps);
 
         info!(
             LOGGER.0,
