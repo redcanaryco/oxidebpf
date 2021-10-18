@@ -46,6 +46,7 @@ pub enum OxidebpfError {
     MapValueSizeMismatch,
     MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
+    RetryError(String),
 }
 
 impl Display for OxidebpfError {
@@ -78,5 +79,14 @@ impl Display for OxidebpfError {
 impl From<Vec<OxidebpfError>> for OxidebpfError {
     fn from(e: Vec<OxidebpfError>) -> Self {
         Self::MultipleErrors(e)
+    }
+}
+
+impl From<retry::Error<OxidebpfError>> for OxidebpfError {
+    fn from(e: retry::Error<OxidebpfError>) -> Self {
+        match e {
+           retry::Error::Operation { error, .. } => error,
+           retry::Error::Internal(i) => OxidebpfError::RetryError(i)
+        }
     }
 }

@@ -4,6 +4,8 @@ use slog::info;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
+use retry::retry;
+use retry::delay::Fixed;
 
 use libc::{c_uint, syscall, SYS_bpf};
 use nix::errno::errno;
@@ -43,31 +45,31 @@ lazy_static! {
 unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
 
-    // ebpf can fail with EAGAIN for a variety of reasons, just retry it.
-    let mut retries = 5;
-
     let size = arg_bpf_attr.size;
     let ptr: *const BpfAttr = &arg_bpf_attr.bpf_attr;
 
-    loop {
+    // ebpf can fail with EAGAIN for a variety of reasons, just retry it.
+    let result = retry(Fixed::from_millis(1).take(5), || {
         let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
+
         if ret < 0 {
-            if retries > 0 {
-                retries -= 1;
-                continue;
-            }
             let e = errno();
             info!(
                 LOGGER.0,
                 "sys_bpf(); cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
             );
-            return Err(OxidebpfError::LinuxError(
+            Err(OxidebpfError::LinuxError(
                 format!("bpf({}, 0x{:x}, {})", cmd, ptr as u64, size),
-                nix::errno::from_i32(e),
-            ));
+                nix::errno::from_i32(e))
+            )
         } else {
-            return Ok(ret as usize);
+            Ok(ret as usize)
         }
+    });
+
+    match result {
+        Ok(size) => Ok(size),
+        Err(e) => Err(e.into())
     }
 }
 
