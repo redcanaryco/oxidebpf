@@ -137,18 +137,3 @@ impl Default for PerfEventAttr {
         }
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Default)]
-struct CapUserHeader {
-    version: u32,
-    pid: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-struct CapUserData {
-    effective: u32,
-    permitted: u32,
-    inheritable: u32,
-}
