@@ -10,8 +10,10 @@ use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 
+use crate::debugfs_mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
+use crate::perf::{CapUserData, CapUserHeader};
 
 // the compiler doesn't recognize that these _are_ used
 #[allow(unused_imports)]
@@ -113,7 +115,8 @@ pub(crate) fn perf_event_open_debugfs(
         }
     };
 
-    let event_path = format!("/sys/kernel/debug/tracing/{}_events", prefix);
+    let debugfs_path = debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+    let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
     let mut event_file = std::fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -220,10 +223,32 @@ pub(crate) fn perf_event_open(
             LOGGER.0,
             "perf_event_open(); error while calling SYS_perf_event_open; errno: {}", e
         );
+
+        // check if the kernel is too paranoid
+        let perf_paranoid_setting =
+            std::fs::read_to_string((*PERF_PATH).as_path()).unwrap_or_else(|e| e.to_string());
+        info!(
+            LOGGER.0,
+            "Perf paranoid settings: {}", perf_paranoid_setting
+        );
+
+        // check if we're missing capabilities
+        let mut hdrp = CapUserHeader::default();
+        let mut datap = CapUserData::default();
+
+        let ret =
+            unsafe { libc::syscall(libc::SYS_capset, &mut hdrp as *mut _, &mut datap as *mut _) };
+
+        if ret < 0 {
+            info!(LOGGER.0, "could not read capabilities")
+        } else {
+            info!(LOGGER.0, "CapHeader: {:?}; CapData: {:?}", hdrp, datap);
+        }
+
         return Err(OxidebpfError::LinuxError(
             format!(
-                "perf_event_open(0x{:x}, {}, {}, {}, {})",
-                ptr as u64, pid, cpu, group_fd, flags
+                "perf_event_open(0x{:x} [{:?}], {}, {}, {}, {})",
+                ptr as u64, attr, pid, cpu, group_fd, flags
             ),
             nix::errno::from_i32(e),
         ));
@@ -269,7 +294,8 @@ fn perf_attach_tracepoint_with_debugfs(
         .map_err(|_| OxidebpfError::NumberParserError)?;
 
     let config = std::fs::read_to_string(format!(
-        "/sys/kernel/debug/tracing/events/{}/id",
+        "{}/tracing/events/{}/id",
+        debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
         event_path
     ))
     .map_err(|_| OxidebpfError::FileIOError)?

@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::os::raw::{c_int, c_uint, c_ulong, c_ushort};
 
 pub(crate) mod constant;
@@ -7,6 +8,13 @@ pub(crate) mod syscall;
 pub(crate) union PerfSample {
     pub(crate) sample_period: c_ulong,
     pub(crate) sample_freq: c_ulong,
+}
+
+impl Debug for PerfSample {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = unsafe { self.sample_freq };
+        write!(f, "PerfSample: {}", value)
+    }
 }
 
 impl Default for PerfSample {
@@ -23,6 +31,13 @@ pub(crate) union PerfWakeup {
     pub(crate) wakeup_watermark: c_uint,
 }
 
+impl Debug for PerfWakeup {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = unsafe { self.wakeup_watermark };
+        write!(f, "PerfWakeup: {}", value)
+    }
+}
+
 impl Default for PerfWakeup {
     fn default() -> Self {
         Self {
@@ -37,6 +52,13 @@ pub(crate) union PerfBpAddr {
     pub(crate) config1: c_ulong,
 }
 
+impl Debug for PerfBpAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = unsafe { self.bp_addr };
+        write!(f, "PerfBpAddr: {}", value)
+    }
+}
+
 impl Default for PerfBpAddr {
     fn default() -> Self {
         Self { bp_addr: 0u64 }
@@ -49,6 +71,13 @@ pub(crate) union PerfBpLen {
     pub(crate) config2: c_ulong,
 }
 
+impl Debug for PerfBpLen {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = unsafe { self.bp_len };
+        write!(f, "PerfBpLen: {}", value)
+    }
+}
+
 impl Default for PerfBpLen {
     fn default() -> Self {
         Self { bp_len: 0u64 }
@@ -56,6 +85,7 @@ impl Default for PerfBpLen {
 }
 
 #[repr(align(8), C)]
+#[derive(Debug)]
 pub struct PerfEventAttr {
     pub(crate) p_type: c_uint,
     pub(crate) size: c_uint,
@@ -106,4 +136,19 @@ impl Default for PerfEventAttr {
             __reserved_3: 0,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct CapUserHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct CapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
 }
