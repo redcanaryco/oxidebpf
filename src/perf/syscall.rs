@@ -13,7 +13,7 @@ use nix::{ioctl_none, ioctl_write_int};
 use crate::debugfs_mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
-use crate::perf::{CapUserData, CapUserHeader};
+use crate::{CapUserData, CapUserHeader};
 
 // the compiler doesn't recognize that these _are_ used
 #[allow(unused_imports)]
@@ -232,23 +232,18 @@ pub(crate) fn perf_event_open(
             "Perf paranoid settings: {}", perf_paranoid_setting
         );
 
-        // check if we're missing capabilities
-        let mut hdrp = CapUserHeader::default();
-        let mut datap = CapUserData::default();
+        let (hdr, caps) = crate::get_capabilities()?;
+        info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdr, caps);
 
-        let ret =
-            unsafe { libc::syscall(libc::SYS_capset, &mut hdrp as *mut _, &mut datap as *mut _) };
-
-        if ret < 0 {
-            info!(LOGGER.0, "could not read capabilities")
-        } else {
-            info!(LOGGER.0, "CapHeader: {:?}; CapData: {:?}", hdrp, datap);
-        }
+        info!(
+            LOGGER.0,
+            "perf_event_open([{:#?}], {}, {}, {}, {})", attr, pid, cpu, group_fd, flags
+        );
 
         return Err(OxidebpfError::LinuxError(
             format!(
-                "perf_event_open(0x{:x} [{:?}], {}, {}, {}, {})",
-                ptr as u64, attr, pid, cpu, group_fd, flags
+                "perf_event_open([{:#?}], {}, {}, {}, {})",
+                attr, pid, cpu, group_fd, flags
             ),
             nix::errno::from_i32(e),
         ));

@@ -72,6 +72,21 @@ const ARCH_SYSCALL_PREFIX: &str = "__arm64_";
 #[cfg(target_arch = "x86_64")]
 const ARCH_SYSCALL_PREFIX: &str = "__x64_";
 
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct CapUserHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct CapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
 /// Message format for messages sent back across the channel. It includes
 /// the map name, cpu id, and message data.
 #[derive(Debug)]
@@ -626,6 +641,34 @@ pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     }
 }
 
+/// Return the current process capabilities header and set.
+pub fn get_capabilities() -> Result<(CapUserHeader, CapUserData), OxidebpfError> {
+    let mut hdrp = CapUserHeader {
+        version: 0x20080522, // version 3
+        pid: 0,              // calling process
+    };
+
+    let mut datap = CapUserData::default();
+
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_capget,
+            &mut hdrp as *mut _ as *mut libc::c_void,
+            &mut datap as *mut _ as *mut libc::c_void,
+        )
+    };
+
+    if ret < 0 {
+        Err(OxidebpfError::LinuxError(
+            "get_capabilities()".to_string(),
+            nix::errno::from_i32(nix::errno::errno()),
+        ))
+    } else {
+        Ok((hdrp, datap))
+    }
+}
+
+/// Return the current memlock limit.
 pub fn get_memlock_limit() -> Result<usize, OxidebpfError> {
     // use getrlimit() syscall
     unsafe {
