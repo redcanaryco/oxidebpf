@@ -14,6 +14,7 @@
 
 mod blueprint;
 mod bpf;
+mod debugfs;
 mod error;
 mod maps;
 mod perf;
@@ -28,6 +29,7 @@ use bpf::{
     syscall::{self, bpf_map_update_elem},
     BpfAttr, MapConfig, SizedBpfAttr,
 };
+use debugfs::debugfs_mount_point;
 
 use maps::{PerCpu, PerfEvent, PerfMap, ProgMap};
 use perf::{
@@ -51,7 +53,6 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use proc_mounts::MountIter;
 use slog::{crit, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
@@ -114,6 +115,7 @@ pub struct ProgramGroup<'a> {
     loaded_version: Option<ProgramVersion<'a>>,
     mem_limit: Option<usize>,
     loaded: bool,
+    debugfs_mount: Option<String>,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -166,6 +168,7 @@ pub struct Program<'a> {
     fd: RawFd,
     pid: Option<pid_t>,
     tail_call_mapping: Option<TailCallMapping>,
+    debugfs_mount: Option<String>,
 }
 
 impl<'a> Program<'a> {
@@ -205,6 +208,7 @@ impl<'a> Program<'a> {
             fd: -1,
             pid: None,
             tail_call_mapping: None,
+            debugfs_mount: None,
         }
     }
 
@@ -289,6 +293,18 @@ impl<'a> Program<'a> {
         self
     }
 
+    fn set_debugfs_mount_point(&mut self, debugfs_mount: Option<String>) {
+        self.debugfs_mount = debugfs_mount
+    }
+
+    fn mount_debugfs(&self) {
+        if let Some(mount_point) = self.debugfs_mount.as_deref() {
+            if let Err(mount_err) = crate::debugfs::mount_debugfs(mount_point) {
+                info!(LOGGER.0, "Failed to mount debugfs: {:?}", mount_err);
+            }
+        }
+    }
+
     fn attach_kprobe(&self) -> Result<(Vec<String>, Vec<RawFd>), OxidebpfError> {
         let is_return = self.kind == Some(ProgramType::Kretprobe);
 
@@ -303,6 +319,7 @@ impl<'a> Program<'a> {
                         }
                     }
                     Err(e) => {
+                        self.mount_debugfs();
                         match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
                             Ok((path, fd)) => {
                                 // skip if we already failed
@@ -350,6 +367,7 @@ impl<'a> Program<'a> {
                         }
                     }
                     Err(e) => {
+                        self.mount_debugfs();
                         match attach_uprobe_debugfs(
                             self.fd,
                             attach_point,
@@ -486,6 +504,7 @@ impl<'a> ProgramGroup<'a> {
             channel,
             loaded_version: None,
             mem_limit: None,
+            debugfs_mount: None,
             loaded: false,
         }
     }
@@ -494,6 +513,15 @@ impl<'a> ProgramGroup<'a> {
     /// when calling `load()`.
     pub fn mem_limit(mut self, limit: usize) -> Self {
         self.mem_limit = Some(limit);
+        self
+    }
+
+    /// If `debugfs` is needed to attach {k,u}probes, then automatically mount debugfs
+    /// if it is not currently mounted. You can optionally specify the path to mount debugfs to
+    /// with `custom_path`, or use the system default path, `/sys/kernel/debug`, if `None` is
+    /// specified.
+    pub fn auto_mount_debugfs(mut self, custom_path: Option<&str>) -> Self {
+        self.debugfs_mount = custom_path.or(Some("/sys/kernel/debug")).map(String::from);
         self
     }
 
@@ -551,9 +579,11 @@ impl<'a> ProgramGroup<'a> {
         if let Some(limit) = self.mem_limit {
             set_memlock_limit(limit)?;
         }
-
         let mut errors = vec![];
         for mut program_version in program_versions {
+            //
+            program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
+
             match program_version.load_program_version(
                 program_blueprint.clone(),
                 self.channel.clone(),
@@ -742,6 +772,12 @@ impl ProgramVersion<'_> {
     pub fn polling_delay(mut self, delay: u64) -> Self {
         self.polling_delay = delay;
         self
+    }
+
+    fn set_debugfs_mount_point(&mut self, debugfs_mount: Option<String>) {
+        for program in self.programs.iter_mut() {
+            program.debugfs_mount = debugfs_mount.clone()
+        }
     }
 
     fn event_poller(
@@ -1091,10 +1127,10 @@ impl<'a> Drop for ProgramVersion<'a> {
         // we might end up stuck with a bunch of unused probes clogging the namespace.
         // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
-        let debugfs_mount =
-            debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
-        drop_debugfs_uprobes(&debugfs_mount);
-        drop_debugfs_kprobes(&debugfs_mount);
+        if let Some(debugfs_mount) = debugfs_mount_point().as_deref() {
+            drop_debugfs_uprobes(debugfs_mount);
+            drop_debugfs_kprobes(debugfs_mount);
+        }
     }
 }
 
@@ -1204,31 +1240,6 @@ fn perf_map_poller(
         }
         thread::sleep(polling_delay);
     }
-}
-
-/// Returns the path where `debugfs` is mounted or None if unable to locate.
-pub fn debugfs_mount_point() -> Option<String> {
-    let mount_iter = match MountIter::new() {
-        Ok(mount_iter) => mount_iter,
-        Err(e) => {
-            info!(LOGGER.0, "failed to create MountIter: {}", e.to_string());
-            return None;
-        }
-    };
-
-    for mount_info in mount_iter.flatten() {
-        if mount_info.fstype != "debugfs" {
-            continue;
-        }
-        let mount_point = mount_info
-            .dest
-            .into_os_string()
-            .into_string()
-            .unwrap_or_default();
-        return Some(mount_point);
-    }
-
-    None
 }
 
 #[cfg(test)]
