@@ -516,12 +516,10 @@ impl<'a> ProgramGroup<'a> {
         self
     }
 
-    /// If `debugfs` is needed to attach {k,u}probes, then automatically mount debugfs
-    /// if it is not currently mounted. You can optionally specify the path to mount debugfs to
-    /// with `custom_path`, or use the system default path, `/sys/kernel/debug`, if `None` is
-    /// specified.
-    pub fn auto_mount_debugfs(mut self, custom_path: Option<&str>) -> Self {
-        self.debugfs_mount = custom_path.or(Some("/sys/kernel/debug")).map(String::from);
+    /// If `debugfs` is needed to attach {k,u}probes, then automatically mount debugfs to the
+    /// specified path, `mount_path`. Most systems usually mount debugfs to `/sys/kernel/debug`.
+    pub fn auto_mount_debugfs(mut self, mount_path: Option<&str>) -> Self {
+        self.debugfs_mount = mount_path.map(String::from);
         self
     }
 
