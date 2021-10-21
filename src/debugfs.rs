@@ -4,7 +4,7 @@ use nix::{
     unistd,
 };
 use proc_mounts::MountIter;
-use slog::{error, info};
+use slog::info;
 use std::{
     fs::{create_dir_all, File},
     path::Path,
@@ -66,7 +66,7 @@ pub(crate) fn mount_debugfs(mount_location: &str) -> Result<(), OxidebpfError> {
                 })
             })
         {
-            error!(
+            info!(
                 LOGGER.0,
                 "failure to create mount point directory: {}",
                 e.to_string()
