@@ -106,7 +106,7 @@ struct Channel {
     rx: Receiver<PerfChannelMessage>,
 }
 
-/// Enum which containing the options to how a ['ProgramGroup'](struct@ProgramBlueprint) handles
+/// Enum describing how a [ProgramGroup](struct@ProgramBlueprint) handles
 /// auto-mounting debugfs.
 #[derive(Clone)]
 pub enum DebugfsMountOpts {
@@ -557,7 +557,7 @@ impl<'a> ProgramGroup<'a> {
 
     /// Controls whether `debugfs` is mounted before attaching {k,u}probes. This operation only
     /// occurs if `perf_event_open` is not supported and debugfs is not mounted. The
-    /// ['DebugfsMountOpts'](enum@DebugfsMountOpts) enum determines where `debugfs` gets mounted to.
+    /// [DebugfsMountOpts](enum@DebugfsMountOpts) enum determines where `debugfs` gets mounted to.
     pub fn auto_mount_debugfs(mut self, mount_options: DebugfsMountOpts) -> Self {
         self.debugfs_mount = mount_options;
         self
