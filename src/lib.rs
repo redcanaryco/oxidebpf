@@ -613,7 +613,6 @@ impl<'a> ProgramGroup<'a> {
         }
         let mut errors = vec![];
         for mut program_version in program_versions {
-            //
             program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
 
             match program_version.load_program_version(
