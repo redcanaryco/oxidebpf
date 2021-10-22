@@ -6,6 +6,7 @@ use std::fmt::Display;
 pub enum OxidebpfError {
     BadPerfSample,
     NoPerfData,
+    DebugFsNotMounted,
     EbpfPollerError(String),
     CStrConversionError,
     ThreadPollingError,

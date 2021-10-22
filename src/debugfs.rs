@@ -1,20 +1,16 @@
-use fs2::FileExt;
 use nix::{
     mount::{mount, MsFlags},
     unistd,
 };
 use proc_mounts::MountIter;
 use slog::info;
-use std::{
-    fs::{create_dir_all, File},
-    path::Path,
-};
+use std::{fs::create_dir_all, path::Path};
 
 use crate::error::OxidebpfError;
 use crate::LOGGER;
 
 /// Returns the path where `debugfs` is mounted or None if unable to locate.
-pub fn debugfs_mount_point() -> Option<String> {
+pub(crate) fn get_debugfs_mount_point() -> Option<String> {
     let mount_iter = match MountIter::new() {
         Ok(mount_iter) => mount_iter,
         Err(e) => {
@@ -23,38 +19,21 @@ pub fn debugfs_mount_point() -> Option<String> {
         }
     };
 
-    for mount_info in mount_iter.flatten() {
-        if mount_info.fstype != "debugfs" {
-            continue;
-        }
-        let mount_point = mount_info
-            .dest
-            .into_os_string()
-            .into_string()
-            .unwrap_or_default();
-        return Some(mount_point);
-    }
-
-    None
+    mount_iter
+        .flatten()
+        .find(|m| m.fstype == "debugfs")
+        .map(|m| m.dest.into_os_string().into_string().unwrap_or_default())
 }
 
 /// Mounts debugfs to the specified location if it hasn't been mounted already.
-pub(crate) fn mount_debugfs(mount_location: &str) -> Result<(), OxidebpfError> {
-    let file_lock = File::create("/tmp/.debugfs.lock").map_err(|_e| OxidebpfError::FileIOError)?;
-
-    // fs2 is using flock(), so when the the File goes out of scope (or the fd is closed),
-    // the file will be unlocked.
-    file_lock
-        .lock_exclusive()
-        .map_err(|_e| OxidebpfError::FileIOError)?;
-
-    if debugfs_mount_point().is_some() {
+pub(crate) fn mount_debugfs_if_missing(mount_location: &str) -> Result<(), OxidebpfError> {
+    if get_debugfs_mount_point().is_some() {
         return Ok(());
     }
 
     let path = Path::new(mount_location);
     if !path.exists() {
-        // creation is best effort - log errors and continue
+        // creation is best effort - chown may fail on some paths, such as `/sys/kernel/debug`
         if let Err(e) = create_dir_all(path)
             .map_err(|_e| OxidebpfError::FileIOError)
             .and_then(|_| {

@@ -10,7 +10,7 @@ use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 
-use crate::debugfs::debugfs_mount_point;
+use crate::debugfs::get_debugfs_mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
 
@@ -114,7 +114,7 @@ pub(crate) fn perf_event_open_debugfs(
         }
     };
 
-    let debugfs_path = debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+    let debugfs_path = get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
     let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
     let mut event_file = std::fs::OpenOptions::new()
         .write(true)
@@ -125,7 +125,7 @@ pub(crate) fn perf_event_open_debugfs(
                 LOGGER.0,
                 "failed to open debugfs tracing path: '{}'", event_path
             );
-            OxidebpfError::FileIOError
+            OxidebpfError::DebugFsNotMounted
         })?;
 
     let mut uuid = uuid::Uuid::new_v4().to_string();
@@ -289,10 +289,10 @@ fn perf_attach_tracepoint_with_debugfs(
 
     let config = std::fs::read_to_string(format!(
         "{}/tracing/events/{}/id",
-        debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
+        get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
         event_path
     ))
-    .map_err(|_| OxidebpfError::FileIOError)?
+    .map_err(|_| OxidebpfError::DebugFsNotMounted)?
     .trim()
     .to_string()
     .parse::<u64>()

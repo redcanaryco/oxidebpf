@@ -29,7 +29,7 @@ use bpf::{
     syscall::{self, bpf_map_update_elem},
     BpfAttr, MapConfig, SizedBpfAttr,
 };
-use debugfs::debugfs_mount_point;
+use debugfs::{get_debugfs_mount_point, mount_debugfs_if_missing};
 
 use maps::{PerCpu, PerfEvent, PerfMap, ProgMap};
 use perf::{
@@ -106,6 +106,35 @@ struct Channel {
     rx: Receiver<PerfChannelMessage>,
 }
 
+///
+#[derive(Clone)]
+pub enum DebugfsMountOpts {
+    Disabled,
+    Default,
+    Custom(String),
+}
+
+impl Default for DebugfsMountOpts {
+    fn default() -> Self {
+        DebugfsMountOpts::Disabled
+    }
+}
+
+impl From<&str> for DebugfsMountOpts {
+    fn from(value: &str) -> Self {
+        DebugfsMountOpts::Custom(value.to_string())
+    }
+}
+
+impl From<Option<&str>> for DebugfsMountOpts {
+    fn from(value: Option<&str>) -> DebugfsMountOpts {
+        match value {
+            Some(v) => v.into(),
+            None => DebugfsMountOpts::Disabled,
+        }
+    }
+}
+
 /// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
@@ -115,7 +144,7 @@ pub struct ProgramGroup<'a> {
     loaded_version: Option<ProgramVersion<'a>>,
     mem_limit: Option<usize>,
     loaded: bool,
-    debugfs_mount: Option<String>,
+    debugfs_mount: DebugfsMountOpts,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -168,7 +197,7 @@ pub struct Program<'a> {
     fd: RawFd,
     pid: Option<pid_t>,
     tail_call_mapping: Option<TailCallMapping>,
-    debugfs_mount: Option<String>,
+    debugfs_mount: DebugfsMountOpts,
 }
 
 impl<'a> Program<'a> {
@@ -208,7 +237,7 @@ impl<'a> Program<'a> {
             fd: -1,
             pid: None,
             tail_call_mapping: None,
-            debugfs_mount: None,
+            debugfs_mount: DebugfsMountOpts::Disabled,
         }
     }
 
@@ -293,15 +322,21 @@ impl<'a> Program<'a> {
         self
     }
 
-    fn set_debugfs_mount_point(&mut self, debugfs_mount: Option<String>) {
+    fn set_debugfs_mount_point(&mut self, debugfs_mount: DebugfsMountOpts) {
         self.debugfs_mount = debugfs_mount
     }
 
-    fn mount_debugfs(&self) {
-        if let Some(mount_point) = self.debugfs_mount.as_deref() {
-            if let Err(mount_err) = crate::debugfs::mount_debugfs(mount_point) {
-                info!(LOGGER.0, "Failed to mount debugfs: {:?}", mount_err);
+    fn mount_debugfs_if_missing(&self) {
+        let mount_point = match &self.debugfs_mount {
+            DebugfsMountOpts::Disabled => {
+                return;
             }
+            DebugfsMountOpts::Default => "/sys/kernel/debug",
+            DebugfsMountOpts::Custom(value) => value.as_str(),
+        };
+
+        if let Err(mount_err) = mount_debugfs_if_missing(mount_point) {
+            info!(LOGGER.0, "Failed to mount debugfs: {:?}", mount_err);
         }
     }
 
@@ -319,7 +354,7 @@ impl<'a> Program<'a> {
                         }
                     }
                     Err(e) => {
-                        self.mount_debugfs();
+                        self.mount_debugfs_if_missing();
                         match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
                             Ok((path, fd)) => {
                                 // skip if we already failed
@@ -367,7 +402,7 @@ impl<'a> Program<'a> {
                         }
                     }
                     Err(e) => {
-                        self.mount_debugfs();
+                        self.mount_debugfs_if_missing();
                         match attach_uprobe_debugfs(
                             self.fd,
                             attach_point,
@@ -504,7 +539,7 @@ impl<'a> ProgramGroup<'a> {
             channel,
             loaded_version: None,
             mem_limit: None,
-            debugfs_mount: None,
+            debugfs_mount: DebugfsMountOpts::Disabled,
             loaded: false,
         }
     }
@@ -516,10 +551,9 @@ impl<'a> ProgramGroup<'a> {
         self
     }
 
-    /// If `debugfs` is needed to attach {k,u}probes, then automatically mount debugfs to the
-    /// specified path, `mount_path`. Most systems usually mount debugfs to `/sys/kernel/debug`.
-    pub fn auto_mount_debugfs(mut self, mount_path: Option<&str>) -> Self {
-        self.debugfs_mount = mount_path.map(String::from);
+    /// Control whether `debugfs` is mounted before attach {k,u}probes.
+    pub fn auto_mount_debugfs(mut self, mount_options: DebugfsMountOpts) -> Self {
+        self.debugfs_mount = mount_options;
         self
     }
 
@@ -772,9 +806,9 @@ impl ProgramVersion<'_> {
         self
     }
 
-    fn set_debugfs_mount_point(&mut self, debugfs_mount: Option<String>) {
+    fn set_debugfs_mount_point(&mut self, debugfs_mount: DebugfsMountOpts) {
         for program in self.programs.iter_mut() {
-            program.debugfs_mount = debugfs_mount.clone()
+            program.set_debugfs_mount_point(debugfs_mount.clone());
         }
     }
 
@@ -1125,7 +1159,7 @@ impl<'a> Drop for ProgramVersion<'a> {
         // we might end up stuck with a bunch of unused probes clogging the namespace.
         // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
         // with customer user probes or probes from other frameworks.
-        if let Some(debugfs_mount) = debugfs_mount_point().as_deref() {
+        if let Some(debugfs_mount) = get_debugfs_mount_point().as_deref() {
             drop_debugfs_uprobes(debugfs_mount);
             drop_debugfs_kprobes(debugfs_mount);
         }
