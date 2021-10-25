@@ -111,22 +111,22 @@ struct Channel {
 #[derive(Clone)]
 pub enum DebugfsMountOpts {
     /// Do not mount debugfs at all.
-    Disabled,
-    /// Mount debugfs to the default location (`/sys/kernel/debug`).
-    Default,
+    MountDisabled,
+    /// Mount debugfs to the conventional location (`/sys/kernel/debug`).
+    MountConventional,
     /// Mount debugfs to a custom location.
-    Custom(String),
+    MountCustom(String),
 }
 
 impl Default for DebugfsMountOpts {
     fn default() -> Self {
-        DebugfsMountOpts::Disabled
+        DebugfsMountOpts::MountDisabled
     }
 }
 
 impl From<&str> for DebugfsMountOpts {
     fn from(value: &str) -> Self {
-        DebugfsMountOpts::Custom(value.to_string())
+        DebugfsMountOpts::MountCustom(value.to_string())
     }
 }
 
@@ -134,7 +134,7 @@ impl From<Option<&str>> for DebugfsMountOpts {
     fn from(value: Option<&str>) -> DebugfsMountOpts {
         match value {
             Some(v) => v.into(),
-            None => DebugfsMountOpts::Disabled,
+            None => DebugfsMountOpts::MountDisabled,
         }
     }
 }
@@ -241,7 +241,7 @@ impl<'a> Program<'a> {
             fd: -1,
             pid: None,
             tail_call_mapping: None,
-            debugfs_mount: DebugfsMountOpts::Disabled,
+            debugfs_mount: DebugfsMountOpts::MountDisabled,
         }
     }
 
@@ -332,11 +332,11 @@ impl<'a> Program<'a> {
 
     fn mount_debugfs_if_missing(&self) {
         let mount_point = match &self.debugfs_mount {
-            DebugfsMountOpts::Disabled => {
+            DebugfsMountOpts::MountDisabled => {
                 return;
             }
-            DebugfsMountOpts::Default => "/sys/kernel/debug",
-            DebugfsMountOpts::Custom(value) => value.as_str(),
+            DebugfsMountOpts::MountConventional => "/sys/kernel/debug",
+            DebugfsMountOpts::MountCustom(value) => value.as_str(),
         };
 
         if let Err(mount_err) = mount_debugfs_if_missing(mount_point) {
@@ -543,7 +543,7 @@ impl<'a> ProgramGroup<'a> {
             channel,
             loaded_version: None,
             mem_limit: None,
-            debugfs_mount: DebugfsMountOpts::Disabled,
+            debugfs_mount: DebugfsMountOpts::MountDisabled,
             loaded: false,
         }
     }
