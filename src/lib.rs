@@ -167,14 +167,16 @@ pub enum SchedulingPolicy {
     /// the job's period, all in nanoseconds. See the following diagram from the `sched`
     /// manpage:
     ///
-    ///            arrival/wakeup                    absolute deadline
-    ///                 |    start time                    |
-    ///                 |        |                         |
-    ///                 v        v                         v
-    ///            -----x--------xooooooooooooooooo--------x--------x---
-    ///                          |<-- Runtime ------->|
-    ///                 |<----------- Deadline ----------->|
-    ///                 |<-------------- Period ------------------->|
+    /// ```text
+    ///  arrival/wakeup                    absolute deadline
+    ///       |    start time                    |
+    ///       |        |                         |
+    ///       v        v                         v
+    ///  -----x--------xooooooooooooooooo--------x--------x---
+    ///                |<-- Runtime ------->|
+    ///       |<----------- Deadline ----------->|
+    ///       |<-------------- Period ------------------->|
+    /// ```
     ///
     /// The provided priority number will be interpreted as the estimated runtime, and the deadline
     /// and period will be set to match (the kernel enforces runtime <= deadline <= period).
