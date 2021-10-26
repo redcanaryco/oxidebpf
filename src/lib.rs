@@ -139,6 +139,48 @@ impl From<Option<&str>> for DebugfsMountOpts {
     }
 }
 
+/// Different Linux scheduling policies, intended to be paired with a priority number in the
+/// builder function [`polling_thread_priority`](fn@polling_thread_priority) of
+/// [`ProgramGroup`](struct@ProgramGroup).
+pub enum SchedulingPolicy {
+    /// The default Linux scheduling technique. When paired with a priority number, the
+    /// priority number will be interpreted as a niceness value (-20 to 19, inclusive).
+    Other,
+    /// The lowest possible priority on the system. This cannot be modified by a niceness value,
+    /// and provided numbers will be ignored.
+    Idle,
+    /// Similar to Other, except the scheduler will always assume this thread is CPU-intensive
+    /// for scheduling purposes. Any provided priority number will be interpreted as a niceness
+    /// value (-20 to 19, inclusive).
+    Batch,
+    /// Use first-in-first-out scheduling for this thread. The provided priority value will be
+    /// the thread's overall priority (0 to 99, inclusive). Note that the polling thread will not
+    /// be preempted (unless by a higher priority process) when using this policy, until it
+    /// finishes processing a batch and blocks on polling.
+    FIFO,
+    /// A Round-Robin modification of the FIFO scheduling policy that preempts the process after
+    /// reaching some maximum time quantum limit, and puts it at the back of the queue. The provided
+    /// priority should be the same as FIFO (0 to 99, inclusive).
+    RR,
+    /// The deadline policy attempts to finish periodic jobs by a certain deadline. It takes
+    /// three numbers: the job's expected runtime, the job's deadline time, and
+    /// the job's period, all in nanoseconds. See the following diagram from the `sched`
+    /// manpage:
+    ///
+    ///            arrival/wakeup                    absolute deadline
+    ///                 |    start time                    |
+    ///                 |        |                         |
+    ///                 v        v                         v
+    ///            -----x--------xooooooooooooooooo--------x--------x---
+    ///                          |<-- Runtime ------->|
+    ///                 |<----------- Deadline ----------->|
+    ///                 |<-------------- Period ------------------->|
+    ///
+    /// The provided priority number will be interpreted as the estimated runtime, and the deadline
+    /// and period will be set to match (the kernel enforces runtime <= deadline <= period).
+    Deadline,
+}
+
 /// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
@@ -149,6 +191,8 @@ pub struct ProgramGroup<'a> {
     mem_limit: Option<usize>,
     loaded: bool,
     debugfs_mount: DebugfsMountOpts,
+    polling_thread_priority: Option<i32>,
+    polling_thread_policy: Option<SchedulingPolicy>,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -545,6 +589,8 @@ impl<'a> ProgramGroup<'a> {
             mem_limit: None,
             debugfs_mount: DebugfsMountOpts::MountDisabled,
             loaded: false,
+            polling_thread_priority: None,
+            polling_thread_policy: None,
         }
     }
 
@@ -560,6 +606,45 @@ impl<'a> ProgramGroup<'a> {
     /// [DebugfsMountOpts](enum@DebugfsMountOpts) enum determines where `debugfs` gets mounted to.
     pub fn auto_mount_debugfs(mut self, mount_options: DebugfsMountOpts) -> Self {
         self.debugfs_mount = mount_options;
+        self
+    }
+
+    /// Sets the thread priority for the thread that polls perfmaps for events coming from eBPF
+    /// to userspace. The priority number specified should be valid for the scheduling policy you
+    /// provide (documented in the enum).
+    pub fn polling_thread_priority(
+        mut self,
+        priority: i32,
+        scheduling_policy: SchedulingPolicy,
+    ) -> Self {
+        // cap the priority to a reasonable value
+        let mut priority = priority;
+        match scheduling_policy {
+            // 0 only
+            SchedulingPolicy::Idle => {
+                priority = 0;
+            }
+            // -20 to 19
+            SchedulingPolicy::Other | SchedulingPolicy::Batch => {
+                if priority < -20 {
+                    priority = -20;
+                } else if priority > 19 {
+                    priority = 19;
+                }
+            }
+            // 0 to 99
+            SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
+                if priority < 0 {
+                    priority = 0;
+                } else if priority > 99 {
+                    priority = 99;
+                }
+            }
+            // unbounded
+            SchedulingPolicy::Deadline => {}
+        }
+        self.polling_thread_priority = Some(priority);
+        self.polling_thread_policy = Some(scheduling_policy);
         self
     }
 
