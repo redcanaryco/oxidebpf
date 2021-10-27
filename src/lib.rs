@@ -53,7 +53,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, error, info, o, Logger};
+use slog::{crit, error, info, o, warn, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -163,6 +163,8 @@ pub enum SchedulingPolicy {
     /// reaching some maximum time quantum limit, and puts it at the back of the queue. The provided
     /// priority should be the same as FIFO (0 to 99, inclusive).
     RR,
+    /// NOTE: NOT CURRENTLY SUPPORTED, WILL DEFAULT TO RoundRobin
+    ///
     /// The deadline policy attempts to finish periodic jobs by a certain deadline. It takes
     /// three numbers: the job's expected runtime, the job's deadline time, and
     /// the job's period, all in nanoseconds. See the following diagram from the `sched`
@@ -618,7 +620,8 @@ impl<'a> ProgramGroup<'a> {
 
     /// Sets the thread priority for the thread that polls perfmaps for events coming from eBPF
     /// to userspace. The priority number specified should be valid for the scheduling policy you
-    /// provide (documented in the enum).
+    /// provide (documented in the enum). This may be useful if you find you're missing messages
+    /// that you expect to be present, or are dropping more messages than seems reasonable.
     pub fn polling_thread_priority(
         mut self,
         priority: i32,
@@ -641,6 +644,7 @@ impl<'a> ProgramGroup<'a> {
             }
             // 0 to 99
             SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
+                // `thread-priority` crate fails if priority == 0, so we bump this up later
                 if priority < 0 {
                     priority = 0;
                 } else if priority > 99 {
@@ -648,7 +652,9 @@ impl<'a> ProgramGroup<'a> {
                 }
             }
             // unbounded, priority is nanoseconds for deadline
-            SchedulingPolicy::Deadline => {}
+            SchedulingPolicy::Deadline => {
+                warn!(LOGGER.0, "SchedulingPolicy::Deadline is not currently supported and will revert to RoundRobin.");
+            }
         }
         self.polling_thread_priority = Some(priority);
         self.polling_thread_policy = Some(scheduling_policy);
@@ -1291,14 +1297,18 @@ fn perf_map_poller(
     polling_policy: SchedulingPolicy,
     polling_priority: i32,
 ) {
-    // set thread policy and priority
     let native_id = thread_priority::thread_native_id();
     let priority = match polling_policy {
         SchedulingPolicy::Other | SchedulingPolicy::Idle | SchedulingPolicy::Batch => {
             thread_priority::ThreadPriority::Specific(0)
         }
         SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
-            thread_priority::ThreadPriority::Specific(polling_priority as u32)
+            // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
+            thread_priority::ThreadPriority::Specific(if polling_priority <= 0 {
+                1
+            } else {
+                polling_priority
+            } as u32)
         }
         // not supported by thread_priority library
         SchedulingPolicy::Deadline => {
@@ -1327,7 +1337,7 @@ fn perf_map_poller(
     };
 
     // This call throws errors if the passed in priority and policies don't match, so we need
-    // to ensure that it's what's expected (0 to 99 inclusive for realtime, 0 for all others).
+    // to ensure that it's what's expected (1 to 99 inclusive for realtime, 0 for all others).
     if let Err(e) = thread_priority::set_thread_priority_and_policy(native_id, priority, policy) {
         error!(
             LOGGER.0,
@@ -1335,6 +1345,8 @@ fn perf_map_poller(
         );
     };
 
+    // Once we've set our scheduling policy and priority, we'll want to set the niceness value
+    // (if relevant).
     match polling_policy {
         SchedulingPolicy::Other | SchedulingPolicy::Batch => {
             // SAFETY: continuing at the default is not fatal
