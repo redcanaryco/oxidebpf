@@ -15,7 +15,7 @@ edition = "2018"
 [dependencies]
 libc = "0.2.105"
 goblin = "0.4.3"
-nix = "0.23.0"
+nix = "0.22.2"
 itertools = "0.10.1"
 crossbeam-channel = "0.5.1"
 lazy_static = "1.4.0"
@@ -33,7 +33,7 @@ thread-priority = "0.2.4"
 oxidebpf = { path = ".", features = ["log_buf"] }
 memmap = "0.7.0"
 scopeguard = "1.1.0"
-ctrlc = "3.2.1"
+ctrlc = "3.1"
 
 [features]
 log_buf = []
