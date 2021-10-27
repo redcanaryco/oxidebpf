@@ -53,7 +53,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, info, o, Logger};
+use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -142,6 +142,7 @@ impl From<Option<&str>> for DebugfsMountOpts {
 /// Different Linux scheduling policies, intended to be paired with a priority number in the
 /// builder function [`polling_thread_priority`](fn@polling_thread_priority) of
 /// [`ProgramGroup`](struct@ProgramGroup).
+#[derive(Clone, Copy)]
 pub enum SchedulingPolicy {
     /// The default Linux scheduling technique. When paired with a priority number, the
     /// priority number will be interpreted as a niceness value (-20 to 19, inclusive).
@@ -207,6 +208,8 @@ pub struct ProgramVersion<'a> {
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
     polling_delay: u64,
+    polling_thread_priority: Option<i32>,
+    polling_thread_policy: Option<SchedulingPolicy>,
 }
 
 impl<'a> Clone for ProgramVersion<'a> {
@@ -223,6 +226,8 @@ impl<'a> Clone for ProgramVersion<'a> {
                 .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
                 .collect(),
             polling_delay: self.polling_delay,
+            polling_thread_priority: self.polling_thread_priority,
+            polling_thread_policy: self.polling_thread_policy,
         }
     }
 }
@@ -642,7 +647,7 @@ impl<'a> ProgramGroup<'a> {
                     priority = 99;
                 }
             }
-            // unbounded
+            // unbounded, priority is nanoseconds for deadline
             SchedulingPolicy::Deadline => {}
         }
         self.polling_thread_priority = Some(priority);
@@ -707,6 +712,8 @@ impl<'a> ProgramGroup<'a> {
         let mut errors = vec![];
         for mut program_version in program_versions {
             program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
+            program_version
+                .set_polling_policy(self.polling_thread_priority, self.polling_thread_policy);
 
             match program_version.load_program_version(
                 program_blueprint.clone(),
@@ -889,6 +896,8 @@ impl ProgramVersion<'_> {
             hash_maps: HashMap::new(),
             has_perf_maps: false,
             polling_delay: 100,
+            polling_thread_priority: None,
+            polling_thread_policy: None,
         }
     }
 
@@ -904,16 +913,33 @@ impl ProgramVersion<'_> {
         }
     }
 
+    fn set_polling_policy(&mut self, priority: Option<i32>, policy: Option<SchedulingPolicy>) {
+        self.polling_thread_policy = policy;
+        self.polling_thread_priority = priority;
+    }
+
     fn event_poller(
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
     ) -> Result<(), OxidebpfError> {
         let polling_delay = Duration::from_millis(self.polling_delay);
+        let polling_policy = self
+            .polling_thread_policy
+            .unwrap_or(SchedulingPolicy::Other);
+        let polling_priority = self.polling_thread_priority.unwrap_or(0);
 
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
-            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay));
+            .spawn(move || {
+                perf_map_poller(
+                    perfmaps,
+                    tx,
+                    polling_delay,
+                    polling_policy,
+                    polling_priority,
+                )
+            });
 
         match result {
             Ok(_) => Ok(()),
@@ -1262,7 +1288,70 @@ fn perf_map_poller(
     perfmaps: Vec<PerfMap>,
     tx: Sender<PerfChannelMessage>,
     polling_delay: Duration,
+    polling_policy: SchedulingPolicy,
+    polling_priority: i32,
 ) {
+    // set thread policy and priority
+    let native_id = thread_priority::thread_native_id();
+    let priority = match polling_policy {
+        SchedulingPolicy::Other | SchedulingPolicy::Idle | SchedulingPolicy::Batch => {
+            thread_priority::ThreadPriority::Specific(0)
+        }
+        SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
+            thread_priority::ThreadPriority::Specific(polling_priority as u32)
+        }
+        // not supported by thread_priority library
+        SchedulingPolicy::Deadline => {
+            thread_priority::ThreadPriority::Specific(polling_priority as u32)
+        }
+    };
+    let policy = match polling_policy {
+        SchedulingPolicy::Other => thread_priority::ThreadSchedulePolicy::Normal(
+            thread_priority::NormalThreadSchedulePolicy::Other,
+        ),
+        SchedulingPolicy::Idle => thread_priority::ThreadSchedulePolicy::Normal(
+            thread_priority::NormalThreadSchedulePolicy::Idle,
+        ),
+        SchedulingPolicy::Batch => thread_priority::ThreadSchedulePolicy::Normal(
+            thread_priority::NormalThreadSchedulePolicy::Batch,
+        ),
+        SchedulingPolicy::FIFO => thread_priority::ThreadSchedulePolicy::Realtime(
+            thread_priority::RealtimeThreadSchedulePolicy::Fifo,
+        ),
+        SchedulingPolicy::RR => thread_priority::ThreadSchedulePolicy::Realtime(
+            thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
+        ),
+        SchedulingPolicy::Deadline => thread_priority::ThreadSchedulePolicy::Realtime(
+            thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
+        ),
+    };
+
+    // This call throws errors if the passed in priority and policies don't match, so we need
+    // to ensure that it's what's expected (0 to 99 inclusive for realtime, 0 for all others).
+    if let Err(e) = thread_priority::set_thread_priority_and_policy(native_id, priority, policy) {
+        error!(
+            LOGGER.0,
+            "perf_map_poller(); could not set thread priority, continuing at inherited: {:?}", e
+        );
+    };
+
+    match polling_policy {
+        SchedulingPolicy::Other | SchedulingPolicy::Batch => {
+            // SAFETY: continuing at the default is not fatal
+            unsafe {
+                if libc::nice(polling_priority) < 0 {
+                    let errno = nix::errno::Errno::from_i32(nix::errno::errno());
+                    error!(
+                        LOGGER.0,
+                        "perf_map_poller(); could not set niceness, continuing at 0: {:?}", errno
+                    );
+                }
+            };
+        }
+        // we don't need to set a niceness value for anything else
+        _ => {}
+    }
+
     let mut poll = match Poll::new() {
         Ok(p) => p,
         Err(e) => {
