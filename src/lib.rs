@@ -1398,8 +1398,8 @@ fn perf_map_poller(
     let mut events = Events::with_capacity(1024);
 
     // for tracking dropped event statistics inside the loop
-    let mut dropped = 0;
-    let mut processed = 0;
+    let mut dropped = 0_i32;
+    let mut processed = 0_i32;
 
     'outer: loop {
         match poll.poll(&mut events, Some(Duration::from_millis(100))) {
@@ -1443,8 +1443,8 @@ fn perf_map_poller(
         for event in perf_events.into_iter() {
             let message = match event.2 {
                 None => continue,
-                Some(PerfEvent::Lost(_)) => {
-                    dropped += 1;
+                Some(PerfEvent::Lost(l)) => {
+                    dropped.wrapping_add(l.count as i32);
                     if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
                         let d = dropped;
                         dropped = 0;
@@ -1461,7 +1461,7 @@ fn perf_map_poller(
                 Err(_) => break 'outer,
             };
 
-            processed += 1;
+            processed.wrapping_add(1);
         }
         thread::sleep(polling_delay);
     }
