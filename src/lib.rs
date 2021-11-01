@@ -1297,7 +1297,13 @@ fn perf_map_poller(
     polling_policy: SchedulingPolicy,
     polling_priority: i32,
 ) {
-    let native_id = thread_priority::thread_native_id();
+    let native_id = match polling_policy {
+        SchedulingPolicy::Deadline => {
+            // SAFETY: this syscall is always successful
+            unsafe { libc::syscall(libc::SYS_gettid) as libc::pthread_t }
+        }
+        _ => thread_priority::thread_native_id(),
+    };
     let priority = match polling_policy {
         SchedulingPolicy::Other | SchedulingPolicy::Idle | SchedulingPolicy::Batch => {
             thread_priority::ThreadPriority::Specific(0)
@@ -1332,7 +1338,7 @@ fn perf_map_poller(
             thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
         ),
         SchedulingPolicy::Deadline => thread_priority::ThreadSchedulePolicy::Realtime(
-            thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
+            thread_priority::RealtimeThreadSchedulePolicy::Deadline,
         ),
     };
 
@@ -1444,7 +1450,7 @@ fn perf_map_poller(
             let message = match event.2 {
                 None => continue,
                 Some(PerfEvent::Lost(l)) => {
-                    dropped.wrapping_add(l.count as i32);
+                    dropped = dropped.wrapping_add(l.count as i32);
                     if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
                         let d = dropped;
                         dropped = 0;
@@ -1461,7 +1467,7 @@ fn perf_map_poller(
                 Err(_) => break 'outer,
             };
 
-            processed.wrapping_add(1);
+            processed = processed.wrapping_add(1);
         }
         thread::sleep(polling_delay);
     }

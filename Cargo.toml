@@ -37,3 +37,6 @@ ctrlc = "3.1"
 
 [features]
 log_buf = []
+
+[patch.crates-io]
+thread-priority = { git = "https://github.com/RafaelOrtizRC/thread-priority.git", branch = "deadline-support" }
