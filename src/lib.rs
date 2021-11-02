@@ -53,7 +53,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, error, info, o, warn, Logger};
+use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -146,23 +146,23 @@ impl From<Option<&str>> for DebugfsMountOpts {
 pub enum SchedulingPolicy {
     /// The default Linux scheduling technique. When paired with a priority number, the
     /// priority number will be interpreted as a niceness value (-20 to 19, inclusive).
-    Other,
+    Other(i8),
     /// The lowest possible priority on the system. This cannot be modified by a niceness value,
     /// and provided numbers will be ignored.
     Idle,
     /// Similar to Other, except the scheduler will always assume this thread is CPU-intensive
     /// for scheduling purposes. Any provided priority number will be interpreted as a niceness
     /// value (-20 to 19, inclusive).
-    Batch,
+    Batch(i8),
     /// Use first-in-first-out scheduling for this thread. The provided priority value will be
     /// the thread's overall priority (0 to 99, inclusive). Note that the polling thread will not
     /// be preempted (unless by a higher priority process) when using this policy, until it
     /// finishes processing a batch and blocks on polling.
-    FIFO,
+    FIFO(u8),
     /// A Round-Robin modification of the FIFO scheduling policy that preempts the process after
     /// reaching some maximum time quantum limit, and puts it at the back of the queue. The provided
     /// priority should be the same as FIFO (0 to 99, inclusive).
-    RR,
+    RR(u8),
     /// NOTE: NOT CURRENTLY SUPPORTED, WILL DEFAULT TO RoundRobin
     ///
     /// The deadline policy attempts to finish periodic jobs by a certain deadline. It takes
@@ -183,7 +183,50 @@ pub enum SchedulingPolicy {
     ///
     /// The provided priority number will be interpreted as the estimated runtime, and the deadline
     /// and period will be set to match (the kernel enforces runtime <= deadline <= period).
-    Deadline,
+    Deadline(u64),
+}
+
+impl From<SchedulingPolicy> for thread_priority::ThreadSchedulePolicy {
+    fn from(policy: SchedulingPolicy) -> Self {
+        match policy {
+            SchedulingPolicy::Other(_) => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Other,
+            ),
+            SchedulingPolicy::Idle => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Idle,
+            ),
+            SchedulingPolicy::Batch(_) => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Batch,
+            ),
+            SchedulingPolicy::FIFO(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::Fifo,
+            ),
+            SchedulingPolicy::RR(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
+            ),
+            SchedulingPolicy::Deadline(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::Deadline,
+            ),
+        }
+    }
+}
+
+impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
+    fn from(policy: SchedulingPolicy) -> Self {
+        match policy {
+            SchedulingPolicy::Other(_) | SchedulingPolicy::Idle | SchedulingPolicy::Batch(_) => {
+                thread_priority::ThreadPriority::Specific(0)
+            }
+            SchedulingPolicy::FIFO(polling_priority) | SchedulingPolicy::RR(polling_priority) => {
+                // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
+                thread_priority::ThreadPriority::Specific(polling_priority.clamp(1, 99) as u32)
+            }
+            // not supported by thread_priority library
+            SchedulingPolicy::Deadline(polling_priority) => {
+                thread_priority::ThreadPriority::Specific(polling_priority as u32)
+            }
+        }
+    }
 }
 
 /// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
@@ -196,7 +239,6 @@ pub struct ProgramGroup<'a> {
     mem_limit: Option<usize>,
     loaded: bool,
     debugfs_mount: DebugfsMountOpts,
-    polling_thread_priority: Option<i32>,
     polling_thread_policy: Option<SchedulingPolicy>,
 }
 
@@ -210,7 +252,6 @@ pub struct ProgramVersion<'a> {
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
     polling_delay: u64,
-    polling_thread_priority: Option<i32>,
     polling_thread_policy: Option<SchedulingPolicy>,
 }
 
@@ -228,7 +269,6 @@ impl<'a> Clone for ProgramVersion<'a> {
                 .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
                 .collect(),
             polling_delay: self.polling_delay,
-            polling_thread_priority: self.polling_thread_priority,
             polling_thread_policy: self.polling_thread_policy,
         }
     }
@@ -598,7 +638,6 @@ impl<'a> ProgramGroup<'a> {
             mem_limit: None,
             debugfs_mount: DebugfsMountOpts::MountDisabled,
             loaded: false,
-            polling_thread_priority: None,
             polling_thread_policy: None,
         }
     }
@@ -622,41 +661,7 @@ impl<'a> ProgramGroup<'a> {
     /// to userspace. The priority number specified should be valid for the scheduling policy you
     /// provide (documented in the enum). This may be useful if you find you're missing messages
     /// that you expect to be present, or are dropping more messages than seems reasonable.
-    pub fn polling_thread_priority(
-        mut self,
-        priority: i32,
-        scheduling_policy: SchedulingPolicy,
-    ) -> Self {
-        // cap the priority to a reasonable value
-        let mut priority = priority;
-        match scheduling_policy {
-            // 0 only
-            SchedulingPolicy::Idle => {
-                priority = 0;
-            }
-            // -20 to 19
-            SchedulingPolicy::Other | SchedulingPolicy::Batch => {
-                if priority < -20 {
-                    priority = -20;
-                } else if priority > 19 {
-                    priority = 19;
-                }
-            }
-            // 0 to 99
-            SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
-                // `thread-priority` crate fails if priority == 0, so we bump this up later
-                if priority < 0 {
-                    priority = 0;
-                } else if priority > 99 {
-                    priority = 99;
-                }
-            }
-            // unbounded, priority is nanoseconds for deadline
-            SchedulingPolicy::Deadline => {
-                warn!(LOGGER.0, "SchedulingPolicy::Deadline is not currently supported and will revert to RoundRobin.");
-            }
-        }
-        self.polling_thread_priority = Some(priority);
+    pub fn polling_thread_priority(mut self, scheduling_policy: SchedulingPolicy) -> Self {
         self.polling_thread_policy = Some(scheduling_policy);
         self
     }
@@ -718,8 +723,7 @@ impl<'a> ProgramGroup<'a> {
         let mut errors = vec![];
         for mut program_version in program_versions {
             program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
-            program_version
-                .set_polling_policy(self.polling_thread_priority, self.polling_thread_policy);
+            program_version.set_polling_policy(self.polling_thread_policy);
 
             match program_version.load_program_version(
                 program_blueprint.clone(),
@@ -902,7 +906,6 @@ impl ProgramVersion<'_> {
             hash_maps: HashMap::new(),
             has_perf_maps: false,
             polling_delay: 100,
-            polling_thread_priority: None,
             polling_thread_policy: None,
         }
     }
@@ -919,9 +922,8 @@ impl ProgramVersion<'_> {
         }
     }
 
-    fn set_polling_policy(&mut self, priority: Option<i32>, policy: Option<SchedulingPolicy>) {
+    fn set_polling_policy(&mut self, policy: Option<SchedulingPolicy>) {
         self.polling_thread_policy = policy;
-        self.polling_thread_priority = priority;
     }
 
     fn event_poller(
@@ -932,20 +934,11 @@ impl ProgramVersion<'_> {
         let polling_delay = Duration::from_millis(self.polling_delay);
         let polling_policy = self
             .polling_thread_policy
-            .unwrap_or(SchedulingPolicy::Other);
-        let polling_priority = self.polling_thread_priority.unwrap_or(0);
+            .unwrap_or(SchedulingPolicy::Other(0));
 
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
-            .spawn(move || {
-                perf_map_poller(
-                    perfmaps,
-                    tx,
-                    polling_delay,
-                    polling_policy,
-                    polling_priority,
-                )
-            });
+            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay, polling_policy));
 
         match result {
             Ok(_) => Ok(()),
@@ -1295,52 +1288,16 @@ fn perf_map_poller(
     tx: Sender<PerfChannelMessage>,
     polling_delay: Duration,
     polling_policy: SchedulingPolicy,
-    polling_priority: i32,
 ) {
     let native_id = match polling_policy {
-        SchedulingPolicy::Deadline => {
+        SchedulingPolicy::Deadline(_) => {
             // SAFETY: this syscall is always successful
             unsafe { libc::syscall(libc::SYS_gettid) as libc::pthread_t }
         }
         _ => thread_priority::thread_native_id(),
     };
-    let priority = match polling_policy {
-        SchedulingPolicy::Other | SchedulingPolicy::Idle | SchedulingPolicy::Batch => {
-            thread_priority::ThreadPriority::Specific(0)
-        }
-        SchedulingPolicy::FIFO | SchedulingPolicy::RR => {
-            // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
-            thread_priority::ThreadPriority::Specific(if polling_priority <= 0 {
-                1
-            } else {
-                polling_priority
-            } as u32)
-        }
-        // not supported by thread_priority library
-        SchedulingPolicy::Deadline => {
-            thread_priority::ThreadPriority::Specific(polling_priority as u32)
-        }
-    };
-    let policy = match polling_policy {
-        SchedulingPolicy::Other => thread_priority::ThreadSchedulePolicy::Normal(
-            thread_priority::NormalThreadSchedulePolicy::Other,
-        ),
-        SchedulingPolicy::Idle => thread_priority::ThreadSchedulePolicy::Normal(
-            thread_priority::NormalThreadSchedulePolicy::Idle,
-        ),
-        SchedulingPolicy::Batch => thread_priority::ThreadSchedulePolicy::Normal(
-            thread_priority::NormalThreadSchedulePolicy::Batch,
-        ),
-        SchedulingPolicy::FIFO => thread_priority::ThreadSchedulePolicy::Realtime(
-            thread_priority::RealtimeThreadSchedulePolicy::Fifo,
-        ),
-        SchedulingPolicy::RR => thread_priority::ThreadSchedulePolicy::Realtime(
-            thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
-        ),
-        SchedulingPolicy::Deadline => thread_priority::ThreadSchedulePolicy::Realtime(
-            thread_priority::RealtimeThreadSchedulePolicy::Deadline,
-        ),
-    };
+    let priority = polling_policy.into();
+    let policy = polling_policy.into();
 
     // This call throws errors if the passed in priority and policies don't match, so we need
     // to ensure that it's what's expected (1 to 99 inclusive for realtime, 0 for all others).
@@ -1354,10 +1311,11 @@ fn perf_map_poller(
     // Once we've set our scheduling policy and priority, we'll want to set the niceness value
     // (if relevant).
     match polling_policy {
-        SchedulingPolicy::Other | SchedulingPolicy::Batch => {
-            // SAFETY: continuing at the default is not fatal
+        SchedulingPolicy::Other(polling_priority) | SchedulingPolicy::Batch(polling_priority) => {
+            // SAFETY: continuing at the default is not fatal, casting i8 to i32 is safe, clamp
             unsafe {
-                if libc::nice(polling_priority) < 0 {
+                let polling_priority = polling_priority.clamp(-20, 19);
+                if libc::nice(polling_priority as i32) < 0 {
                     let errno = nix::errno::Errno::from_i32(nix::errno::errno());
                     error!(
                         LOGGER.0,
