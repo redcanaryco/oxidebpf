@@ -53,7 +53,7 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
-use slog::{crit, info, o, Logger};
+use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -139,6 +139,96 @@ impl From<Option<&str>> for DebugfsMountOpts {
     }
 }
 
+/// Different Linux scheduling policies, intended to be paired with a priority number in the
+/// builder function [`polling_thread_priority`](fn@polling_thread_priority) of
+/// [`ProgramGroup`](struct@ProgramGroup).
+#[derive(Clone, Copy)]
+pub enum SchedulingPolicy {
+    /// The default Linux scheduling technique. When paired with a priority number, the
+    /// priority number will be interpreted as a niceness value (-20 to 19, inclusive).
+    Other(i8),
+    /// The lowest possible priority on the system. This cannot be modified by a niceness value,
+    /// and provided numbers will be ignored.
+    Idle,
+    /// Similar to Other, except the scheduler will always assume this thread is CPU-intensive
+    /// for scheduling purposes. Any provided priority number will be interpreted as a niceness
+    /// value (-20 to 19, inclusive).
+    Batch(i8),
+    /// Use first-in-first-out scheduling for this thread. The provided priority value will be
+    /// the thread's overall priority (0 to 99, inclusive). Note that the polling thread will not
+    /// be preempted (unless by a higher priority process) when using this policy, until it
+    /// finishes processing a batch and blocks on polling.
+    FIFO(u8),
+    /// A Round-Robin modification of the FIFO scheduling policy that preempts the process after
+    /// reaching some maximum time quantum limit, and puts it at the back of the queue. The provided
+    /// priority should be the same as FIFO (0 to 99, inclusive).
+    RR(u8),
+    /// NOTE: NOT CURRENTLY SUPPORTED, WILL DEFAULT TO RoundRobin
+    ///
+    /// The deadline policy attempts to finish periodic jobs by a certain deadline. It takes
+    /// three numbers: the job's expected runtime, the job's deadline time, and
+    /// the job's period, all in nanoseconds. See the following diagram from the `sched`
+    /// manpage:
+    ///
+    /// ```text
+    ///  arrival/wakeup                    absolute deadline
+    ///       |    start time                    |
+    ///       |        |                         |
+    ///       v        v                         v
+    ///  -----x--------xooooooooooooooooo--------x--------x---
+    ///                |<-- Runtime ------->|
+    ///       |<----------- Deadline ----------->|
+    ///       |<-------------- Period ------------------->|
+    /// ```
+    ///
+    /// The provided priority number will be interpreted as the estimated runtime, and the deadline
+    /// and period will be set to match (the kernel enforces runtime <= deadline <= period).
+    Deadline(u64),
+}
+
+impl From<SchedulingPolicy> for thread_priority::ThreadSchedulePolicy {
+    fn from(policy: SchedulingPolicy) -> Self {
+        match policy {
+            SchedulingPolicy::Other(_) => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Other,
+            ),
+            SchedulingPolicy::Idle => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Idle,
+            ),
+            SchedulingPolicy::Batch(_) => thread_priority::ThreadSchedulePolicy::Normal(
+                thread_priority::NormalThreadSchedulePolicy::Batch,
+            ),
+            SchedulingPolicy::FIFO(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::Fifo,
+            ),
+            SchedulingPolicy::RR(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
+            ),
+            SchedulingPolicy::Deadline(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+                thread_priority::RealtimeThreadSchedulePolicy::Deadline,
+            ),
+        }
+    }
+}
+
+impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
+    fn from(policy: SchedulingPolicy) -> Self {
+        match policy {
+            SchedulingPolicy::Other(_) | SchedulingPolicy::Idle | SchedulingPolicy::Batch(_) => {
+                thread_priority::ThreadPriority::Specific(0)
+            }
+            SchedulingPolicy::FIFO(polling_priority) | SchedulingPolicy::RR(polling_priority) => {
+                // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
+                thread_priority::ThreadPriority::Specific(polling_priority.clamp(1, 99) as u32)
+            }
+            // not supported by thread_priority library
+            SchedulingPolicy::Deadline(polling_priority) => {
+                thread_priority::ThreadPriority::Specific(polling_priority as u32)
+            }
+        }
+    }
+}
+
 /// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
@@ -149,6 +239,7 @@ pub struct ProgramGroup<'a> {
     mem_limit: Option<usize>,
     loaded: bool,
     debugfs_mount: DebugfsMountOpts,
+    polling_thread_policy: Option<SchedulingPolicy>,
 }
 
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
@@ -161,6 +252,7 @@ pub struct ProgramVersion<'a> {
     hash_maps: HashMap<String, BpfHashMap>,
     has_perf_maps: bool,
     polling_delay: u64,
+    polling_thread_policy: Option<SchedulingPolicy>,
 }
 
 impl<'a> Clone for ProgramVersion<'a> {
@@ -177,6 +269,7 @@ impl<'a> Clone for ProgramVersion<'a> {
                 .map(|fd| unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 3) })
                 .collect(),
             polling_delay: self.polling_delay,
+            polling_thread_policy: self.polling_thread_policy,
         }
     }
 }
@@ -545,6 +638,7 @@ impl<'a> ProgramGroup<'a> {
             mem_limit: None,
             debugfs_mount: DebugfsMountOpts::MountDisabled,
             loaded: false,
+            polling_thread_policy: None,
         }
     }
 
@@ -560,6 +654,15 @@ impl<'a> ProgramGroup<'a> {
     /// [DebugfsMountOpts](enum@DebugfsMountOpts) enum determines where `debugfs` gets mounted to.
     pub fn auto_mount_debugfs(mut self, mount_options: DebugfsMountOpts) -> Self {
         self.debugfs_mount = mount_options;
+        self
+    }
+
+    /// Sets the thread priority for the thread that polls perfmaps for events coming from eBPF
+    /// to userspace. The priority number specified should be valid for the scheduling policy you
+    /// provide (documented in the enum). This may be useful if you find you're missing messages
+    /// that you expect to be present, or are dropping more messages than seems reasonable.
+    pub fn polling_thread_priority(mut self, scheduling_policy: SchedulingPolicy) -> Self {
+        self.polling_thread_policy = Some(scheduling_policy);
         self
     }
 
@@ -620,6 +723,7 @@ impl<'a> ProgramGroup<'a> {
         let mut errors = vec![];
         for mut program_version in program_versions {
             program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
+            program_version.set_polling_policy(self.polling_thread_policy);
 
             match program_version.load_program_version(
                 program_blueprint.clone(),
@@ -802,6 +906,7 @@ impl ProgramVersion<'_> {
             hash_maps: HashMap::new(),
             has_perf_maps: false,
             polling_delay: 100,
+            polling_thread_policy: None,
         }
     }
 
@@ -817,16 +922,23 @@ impl ProgramVersion<'_> {
         }
     }
 
+    fn set_polling_policy(&mut self, policy: Option<SchedulingPolicy>) {
+        self.polling_thread_policy = policy;
+    }
+
     fn event_poller(
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
     ) -> Result<(), OxidebpfError> {
         let polling_delay = Duration::from_millis(self.polling_delay);
+        let polling_policy = self
+            .polling_thread_policy
+            .unwrap_or(SchedulingPolicy::Other(0));
 
         let result = std::thread::Builder::new()
             .name("PerfMapPoller".to_string())
-            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay));
+            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay, polling_policy));
 
         match result {
             Ok(_) => Ok(()),
@@ -1175,7 +1287,47 @@ fn perf_map_poller(
     perfmaps: Vec<PerfMap>,
     tx: Sender<PerfChannelMessage>,
     polling_delay: Duration,
+    polling_policy: SchedulingPolicy,
 ) {
+    let native_id = match polling_policy {
+        SchedulingPolicy::Deadline(_) => {
+            // SAFETY: this syscall is always successful
+            unsafe { libc::syscall(libc::SYS_gettid) as libc::pthread_t }
+        }
+        _ => thread_priority::thread_native_id(),
+    };
+    let priority = polling_policy.into();
+    let policy = polling_policy.into();
+
+    // This call throws errors if the passed in priority and policies don't match, so we need
+    // to ensure that it's what's expected (1 to 99 inclusive for realtime, 0 for all others).
+    if let Err(e) = thread_priority::set_thread_priority_and_policy(native_id, priority, policy) {
+        error!(
+            LOGGER.0,
+            "perf_map_poller(); could not set thread priority, continuing at inherited: {:?}", e
+        );
+    };
+
+    // Once we've set our scheduling policy and priority, we'll want to set the niceness value
+    // (if relevant).
+    match polling_policy {
+        SchedulingPolicy::Other(polling_priority) | SchedulingPolicy::Batch(polling_priority) => {
+            // SAFETY: continuing at the default is not fatal, casting i8 to i32 is safe, clamp
+            unsafe {
+                let polling_priority = polling_priority.clamp(-20, 19);
+                if libc::nice(polling_priority as i32) < 0 {
+                    let errno = nix::errno::Errno::from_i32(nix::errno::errno());
+                    error!(
+                        LOGGER.0,
+                        "perf_map_poller(); could not set niceness, continuing at 0: {:?}", errno
+                    );
+                }
+            };
+        }
+        // we don't need to set a niceness value for anything else
+        _ => {}
+    }
+
     let mut poll = match Poll::new() {
         Ok(p) => p,
         Err(e) => {
@@ -1210,8 +1362,8 @@ fn perf_map_poller(
     let mut events = Events::with_capacity(1024);
 
     // for tracking dropped event statistics inside the loop
-    let mut dropped = 0;
-    let mut processed = 0;
+    let mut dropped = 0_i32;
+    let mut processed = 0_i32;
 
     'outer: loop {
         match poll.poll(&mut events, Some(Duration::from_millis(100))) {
@@ -1255,8 +1407,8 @@ fn perf_map_poller(
         for event in perf_events.into_iter() {
             let message = match event.2 {
                 None => continue,
-                Some(PerfEvent::Lost(_)) => {
-                    dropped += 1;
+                Some(PerfEvent::Lost(l)) => {
+                    dropped = dropped.wrapping_add(l.count as i32);
                     if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
                         let d = dropped;
                         dropped = 0;
@@ -1273,7 +1425,7 @@ fn perf_map_poller(
                 Err(_) => break 'outer,
             };
 
-            processed += 1;
+            processed = processed.wrapping_add(1);
         }
         thread::sleep(polling_delay);
     }
