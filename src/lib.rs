@@ -1395,19 +1395,18 @@ fn perf_map_poller(
         // now that the perfmap fd's are registered, we can signal to the main thread that
         // event polling is ready.
         let (lock, cvar) = &*polling_signal;
-        let mut polling_is_ready = match lock.lock() {
-            Ok(s) => s,
-            Err(e) => {
-                crit!(
-                    LOGGER.0,
-                    "perf_map_poller(); error grabbing cond mutex: {:?}",
-                    e
-                );
-                return;
+        match lock.lock() {
+            Ok(mut polling_is_ready) => {
+                *polling_is_ready = true;
+                cvar.notify_one();
             }
-        };
-        *polling_is_ready = true;
-        cvar.notify_one();
+            Err(e) => {
+                info!(
+                    LOGGER.0,
+                    "perf_map_poller(); error grabbing cond mutex: {:?}", e
+                );
+            }
+        }
     }
 
     let mut events = Events::with_capacity(1024);
