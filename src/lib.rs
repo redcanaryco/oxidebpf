@@ -44,6 +44,7 @@ use std::{
     format,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::Duration,
 };
@@ -936,17 +937,47 @@ impl ProgramVersion<'_> {
             .polling_thread_policy
             .unwrap_or(SchedulingPolicy::Other(0));
 
-        let result = std::thread::Builder::new()
-            .name("PerfMapPoller".to_string())
-            .spawn(move || perf_map_poller(perfmaps, tx, polling_delay, polling_policy));
+        // the PerfMapPoller thread will use this to signal when
+        // it is ready to receive events.
+        let perf_poller_signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let perf_poller_signal_clone = perf_poller_signal.clone();
 
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => {
+        let _ = std::thread::Builder::new()
+            .name("PerfMapPoller".to_string())
+            .spawn(move || {
+                perf_map_poller(
+                    perfmaps,
+                    tx,
+                    polling_delay,
+                    polling_policy,
+                    perf_poller_signal_clone,
+                )
+            })
+            .map_err(|e| {
                 crit!(LOGGER.0, "event_poller(); error in thread polling: {:?}", e);
-                Err(OxidebpfError::ThreadPollingError)
-            }
+                OxidebpfError::ThreadPollingError
+            })?;
+
+        // Wait until PerfMapPoller is ready.
+        let max_wait = Duration::from_secs(1);
+        let (lock, cvar) = &*perf_poller_signal;
+        let wait_result = cvar
+            .wait_timeout_while(
+                lock.lock().map_err(|_| OxidebpfError::LockError)?,
+                max_wait,
+                |&mut pending| !pending,
+            )
+            .map_err(|_| OxidebpfError::LockError)?
+            .1;
+
+        if wait_result.timed_out() {
+            info!(
+                LOGGER.0,
+                "event_poller(); PerfMapPoller is not ready to receive events"
+            );
         }
+
+        Ok(())
     }
 
     fn load_program_version(
@@ -1288,6 +1319,7 @@ fn perf_map_poller(
     tx: Sender<PerfChannelMessage>,
     polling_delay: Duration,
     polling_policy: SchedulingPolicy,
+    polling_signal: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let native_id = match polling_policy {
         SchedulingPolicy::Deadline(_) => {
@@ -1357,6 +1389,24 @@ fn perf_map_poller(
         }
 
         tokens.insert(token, p);
+    }
+
+    {
+        // now that the perfmap fd's are registered, we can signal to the main thread that
+        // event polling is ready.
+        let (lock, cvar) = &*polling_signal;
+        match lock.lock() {
+            Ok(mut polling_is_ready) => {
+                *polling_is_ready = true;
+                cvar.notify_one();
+            }
+            Err(e) => {
+                info!(
+                    LOGGER.0,
+                    "perf_map_poller(); error grabbing cond mutex: {:?}", e
+                );
+            }
+        }
     }
 
     let mut events = Events::with_capacity(1024);

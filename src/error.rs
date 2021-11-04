@@ -48,6 +48,7 @@ pub enum OxidebpfError {
     MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
     RetryError(String),
+    LockError,
 }
 
 impl Display for OxidebpfError {
