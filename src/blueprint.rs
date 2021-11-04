@@ -490,6 +490,7 @@ fn parse_and_verify_elf(data: &[u8]) -> Result<Elf, OxidebpfError> {
 
     Ok(elf)
 }
+
 fn kernel_major_minor_str_to_u32(release: &str) -> u32 {
     let release = release.to_string();
     // The release information comes in the format "major.minor.patch-extra".

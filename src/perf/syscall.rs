@@ -333,9 +333,11 @@ fn perf_event_with_attach_point(
         sample_union: PerfSample { sample_period: 1 },
         wakeup_union: PerfWakeup { wakeup_events: 1 },
         bp_addr_union: PerfBpAddr {
-            config1: ap_cstring.as_ptr() as u64,
+            kprobe_func: ap_cstring.as_ptr() as u64,
         },
-        bp_len_union: PerfBpLen { config2: offset },
+        bp_len_union: PerfBpLen {
+            probe_offset: offset,
+        },
         config: return_bit,
         p_type,
         ..Default::default()
