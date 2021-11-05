@@ -1,8 +1,13 @@
 ARCH ?= x86_64
+# in the docker image, CC may be set to cc but we need clang
+ifdef CC
 CC = clang-6.0
-LLC = llc-6.0
-OPT = opt-6.0
-LLVM_DIS = llvm-dis-6.0
+else
+CC ?= clang-6.0
+endif
+LLC ?= llc-6.0
+OPT ?= opt-6.0
+LLVM_DIS ?= llvm-dis-6.0
 
 SOURCES ?= test_program.c
 
@@ -16,6 +21,7 @@ CFLAGS += \
 	-Wno-address-of-packed-member \
 	-Wno-compare-distinct-pointer-types \
 	-Wno-gnu-variable-sized-type-not-at-end \
+	-Wno-macro-redefined \
 	-Wno-sometimes-uninitialized \
 	-Wno-tautological-compare \
 	-fno-stack-protector \
@@ -37,10 +43,13 @@ TARGET = -target x86_64
 else
 $(error Unknown architecture $(ARCH))
 endif
+$(info CC: $(CC))
+$(info KERNEL_HEADER_VERSION: $(KERNEL_HEADER_VERSION))
 
 CFLAGS += -D__TARGET_ARCH_$(KERNEL_ARCH_NAME)
 
 KERNEL_HEADERS_ROOT ?= /usr/src/linux-headers-$(KERNEL_HEADER_VERSION)
+$(info KERNEL_HEADERS_ROOT: $(KERNEL_HEADERS_ROOT))
 
 INCLUDES = -I src/ \
 	-I $(KERNEL_HEADERS_ROOT)/arch/$(KERNEL_ARCH_NAME)/include \

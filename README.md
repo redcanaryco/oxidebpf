@@ -104,7 +104,7 @@ distribution.
 
 ## Testing
 
-1. Run `docker-compose run --rm test-builder` from the `test/` directory to build the BPF test application.
+1. Run `docker-compose run --rm test-builder` from the `test/` directory to build the BPF test application. For additional options for RHEL builds, see `test/README.md`.
 2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run 
    the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in 
    vagrant bootstrap by default).
