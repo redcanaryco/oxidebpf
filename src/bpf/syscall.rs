@@ -1,17 +1,22 @@
 #[cfg(feature = "log_buf")]
 use lazy_static::lazy_static;
+use retry::delay::NoDelay;
+use retry::{retry_with_index, OperationResult};
+use slog::info;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
+use Errno::EAGAIN;
 
 use libc::{c_uint, syscall, SYS_bpf};
-use nix::errno::errno;
+use nix::errno::{errno, Errno};
 
 use crate::bpf::constant::bpf_cmd::{
     BPF_MAP_CREATE, BPF_MAP_LOOKUP_ELEM, BPF_MAP_UPDATE_ELEM, BPF_PROG_LOAD,
 };
 use crate::bpf::{BpfAttr, BpfCode, BpfProgLoad, KeyVal, MapConfig, MapElem, SizedBpfAttr};
 use crate::error::*;
+use crate::LOGGER;
 
 pub type BpfMapType = u32;
 
@@ -44,11 +49,41 @@ unsafe fn sys_bpf(cmd: u32, arg_bpf_attr: SizedBpfAttr) -> Result<usize, Oxidebp
     let size = arg_bpf_attr.size;
     let ptr: *const BpfAttr = &arg_bpf_attr.bpf_attr;
 
-    let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
-    if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+    let mut e = 0;
+
+    // ebpf can fail with EAGAIN for a variety of reasons, just retry it.
+    let result = retry_with_index(NoDelay.take(5), |idx| {
+        let ret = syscall((SYS_bpf as i32).into(), cmd, ptr, size);
+
+        if ret < 0 {
+            e = errno();
+            info!(
+                LOGGER.0,
+                "sys_bpf(); cmd: {}; errno: {}; arg_bpf_attr: {:?}", cmd, e, arg_bpf_attr
+            );
+            if Errno::from_i32(e) == EAGAIN && idx < 5 {
+                OperationResult::Retry("EAGAIN")
+            } else {
+                OperationResult::Err("Unrecoverable error retrying BPF load")
+            }
+        } else {
+            OperationResult::Ok(ret as usize)
+        }
+    });
+
+    match result {
+        Ok(size) => Ok(size),
+        Err(err) => {
+            if e == 0 {
+                Err(err.into())
+            } else {
+                Err(OxidebpfError::LinuxError(
+                    format!("sys_bpf({}, {:#?})", cmd, arg_bpf_attr),
+                    Errno::from_i32(e),
+                ))
+            }
+        }
     }
-    Ok(ret as usize)
 }
 
 /// Loads a BPF program of the given type from a given `Vec<BpfInsn>`.
@@ -67,8 +102,6 @@ pub(crate) fn bpf_prog_load(
 
     #[cfg(feature = "log_buf")]
     let log_buf = vec![0u8; *LOG_BUF_SIZE_BYTE];
-    #[cfg(feature = "log_buf")]
-    let log_buf = log_buf.as_slice();
     let bpf_prog_load = BpfProgLoad {
         prog_type,
         insn_cnt: insn_cnt as u32,
@@ -91,15 +124,26 @@ pub(crate) fn bpf_prog_load(
         match sys_bpf(BPF_PROG_LOAD, bpf_attr) {
             Ok(fd) => Ok(fd as RawFd),
             Err(e) => {
+                info!(
+                    LOGGER.0,
+                    "bpf_prog_load(); error with sys_bpf; bpf_attr: {:?}", bpf_attr
+                );
                 #[cfg(feature = "log_buf")]
                 {
-                    Err(OxidebpfError::BpfProgLoadError((
-                        Box::new(e),
-                        String::from_utf8(Vec::from(log_buf))
-                            .unwrap_or_else(|_| String::from(""))
-                            .trim_matches('\0')
-                            .to_string(),
-                    )))
+                    let log_string = String::from_utf8(log_buf)
+                        .unwrap_or_else(|_| String::from(""))
+                        .trim_matches('\0')
+                        .to_string();
+                    let last_chars: String = log_string
+                        .chars()
+                        .rev()
+                        .take(100)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
+                    info!(LOGGER.0, "bpf_prog_load(); log_buf: {}", last_chars);
+                    Err(OxidebpfError::BpfProgLoadError((Box::new(e), log_string)))
                 }
                 #[cfg(not(feature = "log_buf"))]
                 {
@@ -323,7 +367,7 @@ pub(crate) mod tests {
             );
             if ret < 0 {
                 let errno = errno();
-                let errmsg = nix::errno::Errno::from_i32(errno);
+                let errmsg = Errno::from_i32(errno);
                 panic!("could not create new mount namespace: {:?}", errmsg);
             }
             // read mount ns

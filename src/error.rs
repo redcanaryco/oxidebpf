@@ -6,6 +6,7 @@ use std::fmt::Display;
 pub enum OxidebpfError {
     BadPerfSample,
     NoPerfData,
+    DebugFsNotMounted,
     EbpfPollerError(String),
     CStrConversionError,
     ThreadPollingError,
@@ -15,14 +16,22 @@ pub enum OxidebpfError {
     UnsupportedProgramType,
     ProgramNotLoaded,
     InvalidElf,
-    InvalidProgramObject,
+    InvalidProgramLength,
+    InvalidInstructionLength,
+    KernelVersionNotFound,
+    MissingRelocationSection(u32),
     InvalidMapObject,
-    LinuxError(Errno),
+    /// If Errno is EPERM when receiving this error, check that the calling process
+    /// has appropriate capabilities (CAP_SYS_ADMIN, CAP_NET_ADMIN, and CAP_BPF are
+    /// typically required) and that the user's memlock limit is high enough to load
+    /// your programs. If the memlock limit is too low, this library exposes a
+    /// `set_memlock_limit(new_limit)` function which can raise it for you.
+    LinuxError(String, Errno),
     PerfEventDoesNotExist,
     PerfIoctlError(nix::Error),
     CStringConversionError(NulError),
     MapNotLoaded,
-    ProgramNotFound,
+    ProgramNotFound(String),
     MapNotFound(String),
     NoProgramVersionLoaded(Vec<OxidebpfError>),
     FileIOError,
@@ -38,6 +47,8 @@ pub enum OxidebpfError {
     MapValueSizeMismatch,
     MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
+    RetryError(String),
+    LockError,
     NetlinkError(String),
 }
 
@@ -71,5 +82,23 @@ impl Display for OxidebpfError {
 impl From<Vec<OxidebpfError>> for OxidebpfError {
     fn from(e: Vec<OxidebpfError>) -> Self {
         Self::MultipleErrors(e)
+    }
+}
+
+impl From<retry::Error<OxidebpfError>> for OxidebpfError {
+    fn from(e: retry::Error<OxidebpfError>) -> Self {
+        match e {
+            retry::Error::Operation { error, .. } => error,
+            retry::Error::Internal(i) => OxidebpfError::RetryError(i),
+        }
+    }
+}
+
+impl From<retry::Error<&str>> for OxidebpfError {
+    fn from(e: retry::Error<&str>) -> Self {
+        match e {
+            retry::Error::Operation { error, .. } => OxidebpfError::RetryError(error.to_string()),
+            retry::Error::Internal(i) => OxidebpfError::RetryError(i),
+        }
     }
 }

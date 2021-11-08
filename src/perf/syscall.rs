@@ -10,6 +10,7 @@ use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 
+use crate::debugfs::get_debugfs_mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
 
@@ -22,6 +23,8 @@ use crate::perf::constant::{
 
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 use crate::ProgramType;
+use crate::LOGGER;
+use slog::info;
 use std::ffi::CString;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
@@ -68,11 +71,23 @@ fn enter_pid_mnt_ns(pid: pid_t, my_mount: RawFd) -> Result<usize, OxidebpfError>
     setns(new_mnt.into_raw_fd(), CLONE_NEWNS)
 }
 
+// SAFETY: original fd is held in the perf_event_open_debugfs function
+// and is not passed or duplicated.
 fn restore_mnt_ns(original_mnt_ns_fd: RawFd) -> Result<(), OxidebpfError> {
     setns(original_mnt_ns_fd, CLONE_NEWNS)?;
     unsafe {
         if libc::close(original_mnt_ns_fd as c_int) < 0 {
-            Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())))
+            let e = errno();
+            info!(
+                LOGGER.0,
+                "restore_mnt_ns(); could not close original mount namespace fd; fd: {}; errno: {}",
+                original_mnt_ns_fd,
+                e
+            );
+            Err(OxidebpfError::LinuxError(
+                format!("restore mount namspace => close({})", original_mnt_ns_fd),
+                nix::errno::from_i32(e),
+            ))
         } else {
             Ok(())
         }
@@ -90,15 +105,28 @@ pub(crate) fn perf_event_open_debugfs(
         ProgramType::Kretprobe => "kprobe",
         ProgramType::Uprobe => "uprobe",
         ProgramType::Uretprobe => "uprobe",
-        _ => return Err(OxidebpfError::UnsupportedEventType),
+        t => {
+            info!(
+                LOGGER.0,
+                "perf_event_open_debugfs(); (prefix), unsupported event type: {:?}", t
+            );
+            return Err(OxidebpfError::UnsupportedEventType);
+        }
     };
 
-    let event_path = format!("/sys/kernel/debug/tracing/{}_events", prefix);
+    let debugfs_path = get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+    let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
     let mut event_file = std::fs::OpenOptions::new()
         .write(true)
         .append(true)
-        .open(event_path)
-        .map_err(|_e| OxidebpfError::FileIOError)?;
+        .open(&event_path)
+        .map_err(|_e| {
+            info!(
+                LOGGER.0,
+                "failed to open debugfs tracing path: '{}'", event_path
+            );
+            OxidebpfError::DebugFsNotMounted
+        })?;
 
     let mut uuid = uuid::Uuid::new_v4().to_string();
     uuid.truncate(8);
@@ -132,7 +160,13 @@ pub(crate) fn perf_event_open_debugfs(
                 event_alias, func_name_or_path, offset
             )
         }
-        _ => return Err(OxidebpfError::UnsupportedEventType),
+        t => {
+            info!(
+                LOGGER.0,
+                "perf_event_open_debugfs(); (name), unsupported event type: {:?}", t
+            );
+            return Err(OxidebpfError::UnsupportedEventType);
+        }
     };
 
     event_file
@@ -143,6 +177,10 @@ pub(crate) fn perf_event_open_debugfs(
         ProgramType::Uprobe | ProgramType::Uretprobe => {
             if my_fd < 0 {
                 // This should be impossible to reach
+                info!(
+                    LOGGER.0,
+                    "perf_event_open_debugfs(); bad fd, should never happen; fd: {}", my_fd
+                );
                 return Err(OxidebpfError::UncaughtMountNsError);
             }
             restore_mnt_ns(my_fd)?;
@@ -158,11 +196,12 @@ pub(crate) fn perf_event_open(
     attr: &PerfEventAttr,
     pid: pid_t,
     cpu: i32,
-    group_fd: RawFd,
+    group_fd: RawFd, // SAFETY: this is only ever called with `group_id = -1`
     flags: c_ulong,
 ) -> Result<RawFd, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     if !((*PERF_PATH).as_path().exists()) {
+        info!(LOGGER.0, "perf_event_open(); PERF_PATH does not exist");
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
     let ptr: *const PerfEventAttr = attr;
@@ -178,7 +217,35 @@ pub(crate) fn perf_event_open(
         )
     };
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER.0,
+            "perf_event_open(); error while calling SYS_perf_event_open; errno: {}", e
+        );
+
+        // check if the kernel is too paranoid
+        let perf_paranoid_setting =
+            std::fs::read_to_string((*PERF_PATH).as_path()).unwrap_or_else(|e| e.to_string());
+        info!(
+            LOGGER.0,
+            "Perf paranoid settings: {}", perf_paranoid_setting
+        );
+
+        let (hdr, caps) = crate::get_capabilities()?;
+        info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdr, caps);
+
+        info!(
+            LOGGER.0,
+            "perf_event_open([{:#?}], {}, {}, {}, {})", attr, pid, cpu, group_fd, flags
+        );
+
+        return Err(OxidebpfError::LinuxError(
+            format!(
+                "perf_event_open([{:#?}], {}, {}, {}, {})",
+                attr, pid, cpu, group_fd, flags
+            ),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as RawFd)
 }
@@ -212,7 +279,7 @@ fn perf_attach_tracepoint_with_debugfs(
     prog_fd: RawFd,
     event_path: String,
     cpu: i32,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let p_type = std::fs::read_to_string((*PMU_TTYPE_FILE).as_path())
         .map_err(|_| OxidebpfError::FileIOError)?
         .trim()
@@ -221,10 +288,11 @@ fn perf_attach_tracepoint_with_debugfs(
         .map_err(|_| OxidebpfError::NumberParserError)?;
 
     let config = std::fs::read_to_string(format!(
-        "/sys/kernel/debug/tracing/events/{}/id",
+        "{}/tracing/events/{}/id",
+        get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
         event_path
     ))
-    .map_err(|_| OxidebpfError::FileIOError)?
+    .map_err(|_| OxidebpfError::DebugFsNotMounted)?
     .trim()
     .to_string()
     .parse::<u64>()
@@ -240,7 +308,7 @@ fn perf_attach_tracepoint_with_debugfs(
 
     let pfd = perf_event_open(&perf_event_attr, -1, cpu, -1, PERF_FLAG_FD_CLOEXEC)?;
     perf_attach_tracepoint(prog_fd, pfd)?;
-    Ok(event_path)
+    Ok((event_path, pfd))
 }
 
 fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, OxidebpfError> {
@@ -248,6 +316,8 @@ fn perf_attach_tracepoint(prog_fd: RawFd, perf_fd: RawFd) -> Result<i32, Oxidebp
     perf_event_ioc_enable(perf_fd)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 fn perf_event_with_attach_point(
     attach_point: &str,
     return_bit: u64,
@@ -279,6 +349,8 @@ fn perf_event_with_attach_point(
     )
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_uprobe_debugfs(
     fd: RawFd,
     attach_point: &str,
@@ -286,7 +358,7 @@ pub(crate) fn attach_uprobe_debugfs(
     offset: Option<u64>,
     cpu: i32,
     pid: pid_t,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let event_path = perf_event_open_debugfs(
         pid,
         if is_return {
@@ -300,6 +372,8 @@ pub(crate) fn attach_uprobe_debugfs(
     perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_uprobe(
     fd: RawFd,
     attach_point: &str,
@@ -322,6 +396,7 @@ pub(crate) fn attach_uprobe(
             return_bit |= 1 << bit;
         }
     } else {
+        info!(LOGGER.0, "attach_uprobe(); bad config");
         return Err(OxidebpfError::FileIOError);
     }
 
@@ -340,16 +415,19 @@ pub(crate) fn attach_uprobe(
         cpu,
         Some(pid),
     )?;
-    perf_attach_tracepoint(fd, pfd)
+    perf_attach_tracepoint(fd, pfd)?;
+    Ok(pfd)
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_kprobe_debugfs(
     fd: RawFd,
     attach_point: &str,
     is_return: bool,
     offset: Option<u64>,
     cpu: i32,
-) -> Result<String, OxidebpfError> {
+) -> Result<(String, RawFd), OxidebpfError> {
     let event_path = perf_event_open_debugfs(
         -1,
         if is_return {
@@ -361,9 +439,29 @@ pub(crate) fn attach_kprobe_debugfs(
         attach_point,
     )?;
 
-    perf_attach_tracepoint_with_debugfs(fd, event_path, cpu)
+    match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu) {
+        Err(OxidebpfError::FileIOError) => {
+            if is_return {
+                // depending on the kernel version, we may need to have either `kprobe`
+                // or `kretprobe` as the path
+                let new_path = event_path.replace("kretprobe", "kprobe");
+                perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
+            } else {
+                info!(
+                    LOGGER.0,
+                    "attach_kprobe_debugfs(); perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry - event_path: {}", 
+                    event_path,
+                );
+                Err(OxidebpfError::FileIOError)
+            }
+        }
+        Ok(v) => Ok(v),
+        Err(e) => Err(e),
+    }
 }
 
+// SAFETY: the fd returned here is passed up through Program to ProgramVersion,
+// which manages the fd lifecycle.
 pub(crate) fn attach_kprobe(
     fd: RawFd,
     attach_point: &str,
@@ -385,6 +483,15 @@ pub(crate) fn attach_kprobe(
             return_bit |= 1 << bit;
         }
     } else {
+        info!(
+            LOGGER.0,
+            "attach_kprobe(); error bad config, fd: {}, attach_point: {}, is_return: {}, offset: {:?}, cpu: {}",
+            fd,
+            attach_point,
+            is_return,
+            offset,
+            cpu
+        );
         return Err(OxidebpfError::FileIOError);
     }
 
@@ -403,7 +510,8 @@ pub(crate) fn attach_kprobe(
         cpu,
         None,
     )?;
-    perf_attach_tracepoint(fd, pfd)
+    perf_attach_tracepoint(fd, pfd)?;
+    Ok(pfd)
 }
 
 /// Calls the `setns` syscall on the given `fd` with the given `nstype`.
@@ -411,7 +519,18 @@ pub(crate) fn setns(fd: RawFd, nstype: i32) -> Result<usize, OxidebpfError> {
     #![allow(clippy::useless_conversion)] // fails to compile otherwise
     let ret = unsafe { syscall((SYS_setns as i32).into(), fd, nstype) };
     if ret < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(errno())));
+        let e = errno();
+        info!(
+            LOGGER.0,
+            "setns(); error, could not call SYS_setns for fd: {} and nstype: {}; errno: {}",
+            fd,
+            nstype,
+            e
+        );
+        return Err(OxidebpfError::LinuxError(
+            format!("setns({}, {})", fd, nstype),
+            nix::errno::from_i32(e),
+        ));
     }
     Ok(ret as usize)
 }
@@ -503,7 +622,7 @@ mod tests {
                         perf_event_open_debugfs(-1, ProgramType::Kprobe, 0, "do_mount").unwrap();
                     // perf_event_ioc_set_bpf is called in here already
                     let s = perf_attach_tracepoint_with_debugfs(prog_fd, event_path, 0).unwrap();
-                    Ok((Some(s), None))
+                    Ok((Some(s.0), None))
                 }
             };
         match fd_or_name {
