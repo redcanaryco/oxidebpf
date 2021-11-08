@@ -1,4 +1,4 @@
-use crate::xdp::constant::ifla_xdp::{IFLA_XDP_FD, IFLA_XDP_FLAGS};
+use crate::xdp::constant::ifla_xdp::IFLA_XDP_FD;
 use crate::xdp::constant::netlink::{NLA_HDRLEN, NLMSG_HDRLEN};
 use crate::xdp::constant::{XdpFlag, REQUEST_BUFFER_START};
 use crate::xdp::{
@@ -13,7 +13,7 @@ use std::os::raw::{c_uint, c_ushort};
 use std::os::unix::io::RawFd;
 use std::slice;
 
-fn bpf_set_link_xdp(fd: RawFd, interface_index: i32, flags: u32) -> Result<(), OxidebpfError> {
+fn bpf_set_link_xdp(fd: RawFd, interface_index: i32, _flags: u32) -> Result<(), OxidebpfError> {
     let mut req = NetlinkRequest {
         nh: NetlinkMessageHeader {
             nlmsg_len: (NLMSG_HDRLEN + std::mem::size_of::<IfInfoMessage>()) as c_uint,
@@ -78,9 +78,10 @@ fn bpf_set_link_xdp(fd: RawFd, interface_index: i32, flags: u32) -> Result<(), O
     // send it to the socket
     let socket = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
     if socket < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(
-            nix::errno::errno(),
-        )));
+        return Err(OxidebpfError::LinuxError(
+            "Could not open netlink socket.".to_string(),
+            nix::errno::from_i32(nix::errno::errno()),
+        ));
     }
 
     let mut sa = unsafe { MaybeUninit::<SockAddrNetlink>::zeroed().assume_init() };
@@ -93,9 +94,10 @@ fn bpf_set_link_xdp(fd: RawFd, interface_index: i32, flags: u32) -> Result<(), O
         )
     } < 0
     {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(
-            nix::errno::errno(),
-        )));
+        return Err(OxidebpfError::LinuxError(
+            "could not bind netlink socket".to_string(),
+            nix::errno::from_i32(nix::errno::errno()),
+        ));
     };
 
     let sent = unsafe {
@@ -107,18 +109,20 @@ fn bpf_set_link_xdp(fd: RawFd, interface_index: i32, flags: u32) -> Result<(), O
         )
     };
     if sent < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(
-            nix::errno::errno(),
-        )));
+        return Err(OxidebpfError::LinuxError(
+            "could not send to netlink socket".to_string(),
+            nix::errno::from_i32(nix::errno::errno()),
+        ));
     }
 
     let mut buf = vec![0u8; 4096];
     // netlink recv
     let len = unsafe { libc::recv(socket, buf.as_mut_ptr() as *mut _, 4096, 0) };
     if len < 0 {
-        return Err(OxidebpfError::LinuxError(nix::errno::from_i32(
-            nix::errno::errno(),
-        )));
+        return Err(OxidebpfError::LinuxError(
+            "could not receive reply from netlink socket".to_string(),
+            nix::errno::from_i32(nix::errno::errno()),
+        ));
     }
 
     println!("{:02x?}", buf);
@@ -140,7 +144,10 @@ pub(crate) fn attach_xdp(
     unsafe {
         let interface_index = libc::if_nametoindex(interface_name.as_ptr()) as i32;
         if interface_index == 0 {
-            return Err(OxidebpfError::LinuxError(Errno::from_i32(errno())));
+            return Err(OxidebpfError::LinuxError(
+                "could net get interface index".to_string(),
+                Errno::from_i32(errno()),
+            ));
         }
         bpf_set_link_xdp(fd, interface_index, flags as u32)
     }
