@@ -1,10 +1,6 @@
 ARCH ?= x86_64
 # in the docker image, CC may be set to cc but we need clang
-ifdef CC
-CC = clang-6.0
-else
 CC ?= clang-6.0
-endif
 LLC ?= llc-6.0
 OPT ?= opt-6.0
 LLVM_DIS ?= llvm-dis-6.0
