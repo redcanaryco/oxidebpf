@@ -1,5 +1,4 @@
 ARCH ?= x86_64
-# in the docker image, CC may be set to cc but we need clang
 CC ?= clang-6.0
 LLC ?= llc-6.0
 OPT ?= opt-6.0
