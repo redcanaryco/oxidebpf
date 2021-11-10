@@ -6,4 +6,4 @@ RUN apt-get install -y llvm-6.0 clang-6.0 libclang-6.0-dev \
     make binutils curl coreutils
 
 WORKDIR /src
-CMD make clean all
+CMD make clean all --no-builtin-variables
