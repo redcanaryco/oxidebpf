@@ -49,6 +49,10 @@ pub enum OxidebpfError {
     ProgramGroupAlreadyLoaded,
     RetryError(String),
     LockError,
+    /// This error is returned when trying to attach a kretprobe with debugfs.
+    /// There's a chance we need to change the path name and retry, which is what
+    /// this error indicates.
+    KretprobeNamingError,
 }
 
 impl Display for OxidebpfError {

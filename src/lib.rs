@@ -452,6 +452,7 @@ impl<'a> Program<'a> {
                         }
                     }
                     Err(e) => {
+                        info!(LOGGER.0, "Program::attach_kprobe(); original error: {:?}", e);
                         self.mount_debugfs_if_missing();
                         match attach_kprobe_debugfs(self.fd, attach_point, is_return, None, 0) {
                             Ok((path, fd)) => {
