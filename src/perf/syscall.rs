@@ -116,6 +116,10 @@ pub(crate) fn perf_event_open_debugfs(
 
     let debugfs_path = get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
     let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
+    info!(
+        LOGGER.0,
+        "perf_event_open_debugfs(); event_path: {}", event_path
+    );
     let mut event_file = std::fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -292,7 +296,13 @@ fn perf_attach_tracepoint_with_debugfs(
         get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
         event_path
     ))
-    .map_err(|_| OxidebpfError::DebugFsNotMounted)?
+    .map_err(|_| {
+        if event_path.contains("kretprobe") {
+            OxidebpfError::KretprobeNamingError
+        } else {
+            OxidebpfError::FileIOError
+        }
+    })?
     .trim()
     .to_string()
     .parse::<u64>()
@@ -439,12 +449,22 @@ pub(crate) fn attach_kprobe_debugfs(
         attach_point,
     )?;
 
+    info!(
+        LOGGER.0,
+        "attach_kprobe_debugfs(); event_path: {}; is_return: {}", event_path, is_return
+    );
+
     match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu) {
-        Err(OxidebpfError::FileIOError) => {
+        Err(OxidebpfError::KretprobeNamingError) => {
+            info!(
+                LOGGER.0,
+                "attach_kprobe_debugfs(); FileIOError - checking if retprobe"
+            );
             if is_return {
                 // depending on the kernel version, we may need to have either `kprobe`
                 // or `kretprobe` as the path
                 let new_path = event_path.replace("kretprobe", "kprobe");
+                info!(LOGGER.0, "attach_kprobe_debugfs(); new_path: {}", new_path);
                 perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
             } else {
                 info!(
@@ -456,7 +476,10 @@ pub(crate) fn attach_kprobe_debugfs(
             }
         }
         Ok(v) => Ok(v),
-        Err(e) => Err(e),
+        Err(e) => {
+            info!(LOGGER.0, "attach_kprobe_debugfs(); Other Error: {:?}", e);
+            Err(e)
+        }
     }
 }
 
