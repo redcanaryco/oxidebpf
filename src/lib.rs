@@ -164,8 +164,6 @@ pub enum SchedulingPolicy {
     /// reaching some maximum time quantum limit, and puts it at the back of the queue. The provided
     /// priority should be the same as FIFO (0 to 99, inclusive).
     RR(u8),
-    /// NOTE: NOT CURRENTLY SUPPORTED, WILL DEFAULT TO RoundRobin
-    ///
     /// The deadline policy attempts to finish periodic jobs by a certain deadline. It takes
     /// three numbers: the job's expected runtime, the job's deadline time, and
     /// the job's period, all in nanoseconds. See the following diagram from the `sched`
@@ -182,9 +180,9 @@ pub enum SchedulingPolicy {
     ///       |<-------------- Period ------------------->|
     /// ```
     ///
-    /// The provided priority number will be interpreted as the estimated runtime, and the deadline
-    /// and period will be set to match (the kernel enforces runtime <= deadline <= period).
-    Deadline(u64),
+    /// The provided priority number will be interpreted as the estimated runtime, the deadline,
+    /// and the period (the kernel enforces runtime <= deadline <= period).
+    Deadline(u64, u64, u64),
 }
 
 impl From<SchedulingPolicy> for thread_priority::ThreadSchedulePolicy {
@@ -205,7 +203,7 @@ impl From<SchedulingPolicy> for thread_priority::ThreadSchedulePolicy {
             SchedulingPolicy::RR(_) => thread_priority::ThreadSchedulePolicy::Realtime(
                 thread_priority::RealtimeThreadSchedulePolicy::RoundRobin,
             ),
-            SchedulingPolicy::Deadline(_) => thread_priority::ThreadSchedulePolicy::Realtime(
+            SchedulingPolicy::Deadline(_, _, _) => thread_priority::ThreadSchedulePolicy::Realtime(
                 thread_priority::RealtimeThreadSchedulePolicy::Deadline,
             ),
         }
@@ -222,9 +220,8 @@ impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
                 // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
                 thread_priority::ThreadPriority::Specific(polling_priority.clamp(1, 99) as u32)
             }
-            // not supported by thread_priority library
-            SchedulingPolicy::Deadline(polling_priority) => {
-                thread_priority::ThreadPriority::Specific(polling_priority as u32)
+            SchedulingPolicy::Deadline(r, d, p) => {
+                thread_priority::ThreadPriority::Deadline(r, d, p)
             }
         }
     }
@@ -1323,7 +1320,7 @@ fn perf_map_poller(
     polling_signal: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let native_id = match polling_policy {
-        SchedulingPolicy::Deadline(_) => {
+        SchedulingPolicy::Deadline(_, _, _) => {
             // SAFETY: this syscall is always successful
             unsafe { libc::syscall(libc::SYS_gettid) as libc::pthread_t }
         }
@@ -1333,7 +1330,8 @@ fn perf_map_poller(
     let policy = polling_policy.into();
 
     // This call throws errors if the passed in priority and policies don't match, so we need
-    // to ensure that it's what's expected (1 to 99 inclusive for realtime, 0 for all others).
+    // to ensure that it's what's expected (1 to 99 inclusive for realtime, set of 3 nanosecond
+    // counts for realtime deadline, 0 for all others).
     if let Err(e) = thread_priority::set_thread_priority_and_policy(native_id, priority, policy) {
         error!(
             LOGGER.0,
