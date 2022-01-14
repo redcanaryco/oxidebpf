@@ -53,11 +53,11 @@ maps and programs.
 4.  Create a `ProgramVersion` with your programs. You may create
 multiple `ProgramVersion`s, representing different sets of
 programs. For example, programs intended to run on different kernel versions.
-5.  Create a `ProgramGroup` with a channel capacity (or `None`).
-6.  Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and 
-tell it to start loading. It will attempt each `ProgramVersion` in order until 
+5.  Create a `ProgramGroup`.
+6.  Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and
+tell it to start loading. It will attempt each `ProgramVersion` in order until
 one successfully loads on the current kernel. If it cannot load any program
-version, it will return an error composed of the underlying errors for each 
+version, it will return an error composed of the underlying errors for each
 `ProgramVersion`.
 
 ```rust
@@ -67,7 +67,7 @@ let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 let program_blueprint =
     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
         .expect("Could not open test object file");
-let mut program_group = ProgramGroup::new().element_size(32);
+let mut program_group = ProgramGroup::new();
 
 program_group.load(
     program_blueprint,
@@ -79,6 +79,7 @@ program_group.load(
         .syscall(true),
         Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
+    || todo!(),
 ).expect("Could not load programs");
 
 ```
@@ -105,8 +106,8 @@ distribution.
 ## Testing
 
 1. Run `docker-compose run --rm test-builder` from the `test/` directory to build the BPF test application. For additional options for RHEL builds, see `test/README.md`.
-2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run 
-   the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in 
+2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run
+   the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in
    vagrant bootstrap by default).
 
 Note: some tests will require root privileges to pass. Other tests require a single-threaded context

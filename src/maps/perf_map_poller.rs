@@ -57,10 +57,8 @@ impl PerfMapPoller {
         mut self,
         tx: Sender<PerfChannelMessage>,
         polling_delay: Duration,
-        capacity: usize,
     ) -> Result<(), std::io::Error> {
-        // TODO: should we try to drain num_cpus * tokens * capacity
-        let mut events = Events::with_capacity(capacity);
+        let mut events = Events::with_capacity(self.tokens.len());
 
         loop {
             match self.poll_once(&mut events, &tx) {

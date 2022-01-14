@@ -328,6 +328,8 @@ impl PerfMap {
             info!(LOGGER.0, "PerfMap::new_group(); bad page count (0)");
             return Err(OxidebpfError::BadPageCount);
         }
+
+        let page_count = lte_power_of_two(page_count);
         let mmap_size = page_size * (page_count + 1);
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
@@ -936,6 +938,18 @@ impl Drop for PerfMap {
 impl Drop for ArrayMap {
     fn drop(&mut self) {
         self.base.loaded = false;
+    }
+}
+
+// returns a power of two that is equal or less than n
+fn lte_power_of_two(n: usize) -> usize {
+    if n.is_power_of_two() {
+        return n;
+    }
+
+    match n.checked_next_power_of_two() {
+        None => 1 << (usize::BITS - 1),
+        Some(x) => x >> 1,
     }
 }
 
