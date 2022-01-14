@@ -37,7 +37,7 @@ use perf::{
     syscall::{attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs},
     PerfEventAttr, PerfSample, PerfWakeup,
 };
-use perf_map_poller::perf_map_poller;
+use perf_map_poller::PerfMapPoller;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -52,7 +52,7 @@ use std::{
 use crossbeam_channel::{bounded, Receiver, Sender};
 use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
-use slog::{crit, info, o, Logger};
+use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
 lazy_static! {
@@ -1293,6 +1293,77 @@ fn drop_debugfs_kprobes(debugfs_mount: &str) {
                 return;
             }
         }
+    }
+}
+
+pub fn perf_map_poller(
+    perfmaps: Vec<PerfMap>,
+    tx: Sender<PerfChannelMessage>,
+    polling_delay: Duration,
+    polling_policy: SchedulingPolicy,
+    polling_signal: Arc<(Mutex<bool>, Condvar)>,
+) {
+    prioritize_thread(polling_policy);
+
+    let poller = match PerfMapPoller::new(perfmaps.into_iter(), polling_signal) {
+        Ok(poller) => poller,
+        Err(e) => {
+            crit!(LOGGER.0, "perf_map_poller(); {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = poller.poll(tx, polling_delay, 1024) {
+        crit!(
+            LOGGER.0,
+            "perf_map_poller(); unrecoverable polling error: {}",
+            e
+        );
+    }
+}
+
+/// Sets thread priority according to the given policy and then sets a
+/// niceness value when relevant. Errors are logged but otherwise
+/// ignored.
+fn prioritize_thread(polling_policy: SchedulingPolicy) {
+    let native_id = match polling_policy {
+        SchedulingPolicy::Deadline(_, _, _) => {
+            // SAFETY: this syscall is always successful
+            unsafe { libc::syscall(libc::SYS_gettid) as libc::pthread_t }
+        }
+        _ => thread_priority::thread_native_id(),
+    };
+    let priority = polling_policy.into();
+    let policy = polling_policy.into();
+
+    // This call throws errors if the passed in priority and policies don't match, so we need
+    // to ensure that it's what's expected (1 to 99 inclusive for realtime, set of 3 nanosecond
+    // counts for realtime deadline, 0 for all others).
+    if let Err(e) = thread_priority::set_thread_priority_and_policy(native_id, priority, policy) {
+        error!(
+            LOGGER.0,
+            "perf_map_poller(); could not set thread priority, continuing at inherited: {:?}", e
+        );
+    };
+
+    // Once we've set our scheduling policy and priority, we'll want to set the niceness value
+    // (if relevant).
+    match polling_policy {
+        SchedulingPolicy::Other(polling_priority) | SchedulingPolicy::Batch(polling_priority) => {
+            // SAFETY: continuing at the default is not fatal, casting i8 to i32 is safe, clamp
+            unsafe {
+                let polling_priority = polling_priority.clamp(-20, 19);
+                if libc::nice(polling_priority as i32) < 0 {
+                    let errno = nix::errno::Errno::from_i32(nix::errno::errno());
+                    error!(
+                        LOGGER.0,
+                        "perf_map_poller(); could not set niceness, continuing at 0: {:?}", errno
+                    );
+                }
+            };
+        }
+        // we don't need to set a niceness value for anything else
+        _ => {}
     }
 }
 
