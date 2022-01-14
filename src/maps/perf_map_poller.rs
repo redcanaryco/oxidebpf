@@ -105,8 +105,8 @@ impl PerfMapPoller {
         let mut dropped = 0;
         for event in perf_events {
             match event.2 {
-                PerfEvent::Lost(l) => {
-                    dropped += l.count;
+                PerfEvent::Lost(count) => {
+                    dropped += count;
                     // it's okay if the channel is full try again
                     // later so we aren't blocking on sending droppped
                     // messages

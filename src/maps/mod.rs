@@ -114,12 +114,12 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     process_cpu_string(cpu_string)
 }
 
-pub(crate) enum PerfEvent<'a> {
+pub(crate) enum PerfEvent {
     Sample(PerfEventSample),
-    Lost(&'a PerfEventLostSamples),
+    Lost(u64),
 }
 
-impl Debug for PerfEvent<'_> {
+impl Debug for PerfEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -129,7 +129,7 @@ impl Debug for PerfEvent<'_> {
                     format!("SAMPLE: {}", s.size)
                 }
                 PerfEvent::Lost(l) => {
-                    format!("LOST: {}", l.count)
+                    format!("LOST: {}", l)
                 }
             }
         )
@@ -391,7 +391,7 @@ impl PerfMap {
         Ok(loaded_perfmaps)
     }
 
-    pub(crate) fn read(&self) -> Result<Option<PerfEvent<'_>>, OxidebpfError> {
+    pub(crate) fn read(&self) -> Result<Option<PerfEvent>, OxidebpfError> {
         let header = self.base_ptr.load(Ordering::SeqCst);
         let raw_size = (self.page_count * self.page_size) as u64;
         let base: *const u8;
@@ -467,9 +467,10 @@ impl PerfMap {
                     let sample = PerfEventSample { header, size, data };
                     Ok(Some(PerfEvent::Sample(sample)))
                 }
-                perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::Lost(
-                    &*(buf.as_ptr() as *const PerfEventLostSamples),
-                ))),
+                perf_event_type::PERF_RECORD_LOST => {
+                    let lost = &*(buf.as_ptr() as *const PerfEventLostSamples);
+                    Ok(Some(PerfEvent::Lost(lost.count)))
+                }
                 _ => Ok(None),
             }
         }
@@ -479,7 +480,7 @@ impl PerfMap {
     ///
     /// Stops reading either on a real error (and propagates it) or on
     /// a OxidebpfError::NoPerfData and returns `None`.
-    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent<'_>, OxidebpfError>> {
+    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
         PerfEventIterator {
             map: self,
             is_done: false,
@@ -493,7 +494,7 @@ struct PerfEventIterator<'a> {
 }
 
 impl<'a> Iterator for PerfEventIterator<'a> {
-    type Item = Result<PerfEvent<'a>, OxidebpfError>;
+    type Item = Result<PerfEvent, OxidebpfError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {
