@@ -1,3 +1,5 @@
+pub(crate) mod perf_map_poller;
+
 use std::convert::TryInto;
 use std::iter::FusedIterator;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};

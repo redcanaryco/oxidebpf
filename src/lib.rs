@@ -18,7 +18,6 @@ mod debugfs;
 mod error;
 mod maps;
 mod perf;
-mod perf_map_poller;
 
 pub use blueprint::{ProgramBlueprint, SectionType};
 pub use error::OxidebpfError;
@@ -31,13 +30,13 @@ use bpf::{
     BpfAttr, MapConfig, SizedBpfAttr,
 };
 use debugfs::{get_debugfs_mount_point, mount_debugfs_if_missing};
+use maps::perf_map_poller::PerfMapPoller;
 use maps::{PerCpu, PerfMap, ProgMap};
 use perf::{
     constant::{perf_event_sample_format, perf_sw_ids, perf_type_id},
     syscall::{attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs},
     PerfEventAttr, PerfSample, PerfWakeup,
 };
-use perf_map_poller::PerfMapPoller;
 
 use std::{
     collections::{HashMap, HashSet},
