@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fmt::{self, Formatter},
     sync::{Arc, Condvar, Mutex},
     thread,
     time::Duration,
@@ -11,6 +10,7 @@ use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
 use slog::crit;
 
+use crate::error::{InitError, RunError};
 use crate::{
     maps::{PerCpu, PerfEvent, PerfMap},
     PerfChannelMessage, LOGGER,
@@ -128,25 +128,4 @@ impl PerfMapPoller {
 
         Ok(())
     }
-}
-
-pub enum InitError {
-    Creation(std::io::Error),
-    Registration(std::io::Error),
-    ReadySignal(String),
-}
-
-impl fmt::Display for InitError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            InitError::Creation(e) => write!(f, "error creating poller: {}", e),
-            InitError::Registration(e) => write!(f, "error registering poller: {}", e),
-            InitError::ReadySignal(e) => write!(f, "error grabbing cond mutex: {}", e),
-        }
-    }
-}
-
-enum RunError {
-    Poll(std::io::Error),
-    Disconnected,
 }
