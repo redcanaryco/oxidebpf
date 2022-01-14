@@ -237,7 +237,8 @@ impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
 pub struct ProgramGroup<'a> {
-    event_buffer_size: usize,
+    buffer_capacity: usize,
+    element_size: usize,
     channel: Channel,
     loaded_version: Option<ProgramVersion<'a>>,
     mem_limit: Option<usize>,
@@ -605,15 +606,21 @@ impl<'a> Program<'a> {
 }
 
 impl<'a> ProgramGroup<'a> {
-    /// Create a program group that will manage multiple [`ProgramVersion`](struct@ProgramVersion)s.
+    /// Create a program group that will manage multiple
+    /// [`ProgramVersion`](struct@ProgramVersion)s.
     ///
-    /// This creates a bounded channel of the given (optional) size for receiving messages
-    /// from any perfmaps that may be loaded by `Program`s in given `ProgramVersion`.
-    /// Together with [`load()`](fn.load.html), this is the primary public interface of the
-    /// oxidebpf library. You feed your `ProgramGroup` a collection of `ProgramVersion`s,
-    /// each with their own set of `Program`s. Note that you must provide your `ProgramGroup`
-    /// with a [`ProgramBlueprint`](struct@ProgramBlueprint). The blueprint contains the parsed
-    /// object file with all the eBPF programs and maps you may load.
+    /// This creates a bounded channel of the given (optional) size
+    /// for receiving messages from any perfmaps that may be loaded by
+    /// `Program`s in given `ProgramVersion`. The size of each element
+    /// is required to properly size the internal user perf buffer.
+    /// Together with [`load()`](fn.load.html), this is the primary
+    /// public interface of the oxidebpf library. You feed your
+    /// `ProgramGroup` a collection of `ProgramVersion`s, each with
+    /// their own set of `Program`s. Note that you must provide your
+    /// `ProgramGroup` with a
+    /// [`ProgramBlueprint`](struct@ProgramBlueprint). The blueprint
+    /// contains the parsed object file with all the eBPF programs and
+    /// maps you may load.
     ///
     /// # Example
     ///
@@ -629,16 +636,17 @@ impl<'a> ProgramGroup<'a> {
     ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
     ///         .expect("Could not open test object file");
     ///
-    /// ProgramGroup::new(None);
+    /// ProgramGroup::new(None, 32);
     /// ```
-    pub fn new(event_buffer_size: Option<usize>) -> ProgramGroup<'a> {
-        let event_buffer_size = event_buffer_size.unwrap_or(1024);
+    pub fn new(buffer_capacity: Option<usize>, element_size: usize) -> ProgramGroup<'a> {
+        let buffer_capacity = buffer_capacity.unwrap_or(1024);
         let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
-            bounded(event_buffer_size);
-        let channel = Channel { tx, rx };
+            bounded(buffer_capacity);
+
         ProgramGroup {
-            event_buffer_size: event_buffer_size,
-            channel,
+            buffer_capacity,
+            element_size,
+            channel: Channel { tx, rx },
             loaded_version: None,
             mem_limit: None,
             debugfs_mount: DebugfsMountOpts::MountDisabled,
@@ -699,6 +707,7 @@ impl<'a> ProgramGroup<'a> {
     ///         .expect("Could not open test object file");
     /// let mut program_group = ProgramGroup::new(
     ///     None,
+    ///     32,
     /// );
     ///
     /// program_group.load(
@@ -733,7 +742,8 @@ impl<'a> ProgramGroup<'a> {
             match program_version.load_program_version(
                 program_blueprint.clone(),
                 self.channel.clone(),
-                self.event_buffer_size,
+                self.buffer_capacity,
+                self.element_size,
             ) {
                 Ok(()) => {
                     self.loaded_version = Some(program_version);
@@ -935,6 +945,7 @@ impl ProgramVersion<'_> {
         &self,
         perfmaps: Vec<PerfMap>,
         tx: Sender<PerfChannelMessage>,
+        capacity: usize,
     ) -> Result<(), OxidebpfError> {
         let polling_delay = Duration::from_millis(self.polling_delay);
         let polling_policy = self
@@ -955,6 +966,7 @@ impl ProgramVersion<'_> {
                     polling_delay,
                     polling_policy,
                     perf_poller_signal_clone,
+                    capacity,
                 )
             })
             .map_err(|e| {
@@ -988,7 +1000,8 @@ impl ProgramVersion<'_> {
         &mut self,
         mut program_blueprint: ProgramBlueprint,
         channel: Channel,
-        event_buffer_size: usize,
+        buffer_capacity: usize,
+        element_size: usize,
     ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs
@@ -1053,8 +1066,11 @@ impl ProgramVersion<'_> {
                                 wakeup_union: PerfWakeup { wakeup_events: 1 },
                                 ..Default::default()
                             };
-                            let perfmap =
-                                PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
+                            let perfmap = PerfMap::new_group(
+                                &map.name,
+                                event_attr,
+                                buffer_capacity * element_size,
+                            )?;
 
                             perfmap
                                 .iter()
@@ -1222,7 +1238,7 @@ impl ProgramVersion<'_> {
         // start event poller and pass back channel, if one exists
         if !perfmaps.is_empty() {
             self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx)?;
+            self.event_poller(perfmaps, channel.tx, buffer_capacity)?;
         }
         Ok(())
     }
@@ -1302,6 +1318,7 @@ pub fn perf_map_poller(
     polling_delay: Duration,
     polling_policy: SchedulingPolicy,
     polling_signal: Arc<(Mutex<bool>, Condvar)>,
+    capacity: usize,
 ) {
     prioritize_thread(polling_policy);
 
@@ -1313,7 +1330,7 @@ pub fn perf_map_poller(
         }
     };
 
-    if let Err(e) = poller.poll(tx, polling_delay, 1024) {
+    if let Err(e) = poller.poll(tx, polling_delay, capacity) {
         crit!(
             LOGGER.0,
             "perf_map_poller(); unrecoverable polling error: {}",
@@ -1402,7 +1419,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None, 32);
 
         program_group
             .load(
@@ -1423,7 +1440,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None).mem_limit(1234567);
+        let mut program_group = ProgramGroup::new(None, 32).mem_limit(1234567);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group
@@ -1457,7 +1474,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None, 32);
 
         // Load the bpf program
         program_group
@@ -1515,7 +1532,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None, 32);
 
         // Load the bpf program
         program_group
@@ -1564,7 +1581,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new(None, 32);
 
         // Load the bpf program
         program_group
