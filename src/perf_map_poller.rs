@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Sender, TrySendError};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::errno::Errno;
 use slog::crit;
@@ -59,6 +59,7 @@ impl PerfMapPoller {
         polling_delay: Duration,
         capacity: usize,
     ) -> Result<(), std::io::Error> {
+        // TODO: should we try to drain num_cpus * tokens * capacity
         let mut events = Events::with_capacity(capacity);
 
         loop {
@@ -101,17 +102,28 @@ impl PerfMapPoller {
                 }
             });
 
+        let mut dropped = 0;
         for event in perf_events {
-            let message = match event.2 {
-                PerfEvent::Lost(l) => PerfChannelMessage::Dropped(l.count),
-                PerfEvent::Sample(e) => PerfChannelMessage::Event {
-                    map_name: event.0,
-                    cpuid: event.1,
-                    data: e.data,
-                },
+            match event.2 {
+                PerfEvent::Lost(l) => {
+                    dropped += l.count;
+                    // it's okay if the channel is full try again
+                    // later so we aren't blocking on sending droppped
+                    // messages
+                    match tx.try_send(PerfChannelMessage::Dropped(dropped)) {
+                        Ok(_) => dropped = 0,
+                        Err(TrySendError::Disconnected(_)) => return Err(RunError::Disconnected),
+                        Err(TrySendError::Full(_)) => {}
+                    }
+                }
+                PerfEvent::Sample(e) => tx
+                    .send(PerfChannelMessage::Event {
+                        map_name: event.0,
+                        cpuid: event.1,
+                        data: e.data,
+                    })
+                    .map_err(|_| RunError::Disconnected)?,
             };
-
-            tx.send(message).map_err(|_| RunError::Disconnected)?;
         }
 
         Ok(())
