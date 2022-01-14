@@ -72,6 +72,9 @@ const ARCH_SYSCALL_PREFIX: &str = "__arm64_";
 #[cfg(target_arch = "x86_64")]
 const ARCH_SYSCALL_PREFIX: &str = "__x64_";
 
+const DEFAULT_BUFFER_CAPACITY: usize = 1024;
+const DEFAULT_ELEMENT_SIZE: usize = 1;
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct CapUserHeader {
@@ -237,9 +240,9 @@ impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
 /// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
 /// in order until one successfully loads, or none do.
 pub struct ProgramGroup<'a> {
-    buffer_capacity: usize,
-    element_size: usize,
-    channel: Channel,
+    buffer_capacity: Option<usize>,
+    element_size: Option<usize>,
+    channel: Option<Channel>,
     loaded_version: Option<ProgramVersion<'a>>,
     mem_limit: Option<usize>,
     loaded: bool,
@@ -636,23 +639,51 @@ impl<'a> ProgramGroup<'a> {
     ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
     ///         .expect("Could not open test object file");
     ///
-    /// ProgramGroup::new(None, 32);
+    /// ProgramGroup::new().element_size(32);
     /// ```
-    pub fn new(buffer_capacity: Option<usize>, element_size: usize) -> ProgramGroup<'a> {
-        let buffer_capacity = buffer_capacity.unwrap_or(1024);
-        let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
-            bounded(buffer_capacity);
-
+    pub fn new() -> ProgramGroup<'a> {
         ProgramGroup {
-            buffer_capacity,
-            element_size,
-            channel: Channel { tx, rx },
+            buffer_capacity: None,
+            element_size: None,
+            channel: None,
             loaded_version: None,
             mem_limit: None,
             debugfs_mount: DebugfsMountOpts::MountDisabled,
             loaded: false,
             polling_thread_policy: None,
         }
+    }
+
+    /// Set the number of events the crossbeam channel can hold and the buffer capacity for
+    /// the perfmap channel (if any). The buffer capacity is determined by multiplying this
+    /// capacity with the element size, if specified. If you set this, you probably also want
+    /// to set `element_size` with [element_size](fn.element_size.html). If unset, the
+    /// `element_size` will default to 1 byte, which is almost definitely not what you want.
+    pub fn buffer_capacity(mut self, buffer_capacity: usize) -> Self {
+        let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
+            bounded(buffer_capacity);
+        self.buffer_capacity = Some(buffer_capacity);
+        self.channel = Some(Channel { tx, rx });
+        // default element size to DEFAULT_ELEMENT_SIZE
+        if let None = self.element_size {
+            self.element_size = Some(DEFAULT_ELEMENT_SIZE);
+        }
+        self
+    }
+
+    /// Set the size of the elements that will be returned across the crossbeam channel,
+    /// in bytes. If you set this, you may want to experiment with different
+    /// [buffer_capacity](fn.buffer_capacity.html) sizes depending on desired throughput
+    /// and performance. If you do not specify a `buffer_capacity`, it will default
+    /// to 1024 elements.
+    pub fn element_size(mut self, element_size: usize) -> Self {
+        self.element_size = Some(element_size);
+
+        // default capacity to DEFAULT_BUFFER_CAPACITY
+        if let None = self.buffer_capacity {
+            self.buffer_capacity = Some(DEFAULT_BUFFER_CAPACITY);
+        }
+        self
     }
 
     /// Manually set the memlock ulimit for this `ProgramGroup`. The limit will be applied
@@ -705,10 +736,7 @@ impl<'a> ProgramGroup<'a> {
     /// let program_blueprint =
     ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
     ///         .expect("Could not open test object file");
-    /// let mut program_group = ProgramGroup::new(
-    ///     None,
-    ///     32,
-    /// );
+    /// let mut program_group = ProgramGroup::new().element_size(32);
     ///
     /// program_group.load(
     ///     program_blueprint,
@@ -741,7 +769,15 @@ impl<'a> ProgramGroup<'a> {
 
             match program_version.load_program_version(
                 program_blueprint.clone(),
-                self.channel.clone(),
+                match self.channel.clone() {
+                    // We don't know at this point if we will need the channel, regardless of
+                    // whether or not the user specified it. We have two options: let loading fail,
+                    // or attempt to create a channel here. Since creating a channel without a
+                    // user-specified size can lead to non-obvious and hard-to-debug problems,
+                    // we are erring on the side of having loading fail.
+                    None => None,
+                    Some(channel) => Some(channel),
+                },
                 self.buffer_capacity,
                 self.element_size,
             ) {
@@ -779,14 +815,17 @@ impl<'a> ProgramGroup<'a> {
     ///
     /// This will become available when perfmaps are successfully loaded by any
     /// `ProgramVersion`.
-    pub fn get_receiver(&self) -> Option<Receiver<PerfChannelMessage>> {
+    pub fn get_receiver(&self) -> Result<Option<Receiver<PerfChannelMessage>>, OxidebpfError> {
         match &self.loaded_version {
-            None => None,
+            None => Ok(None),
             Some(lv) => {
                 if lv.has_perf_maps {
-                    Some(self.channel.clone().rx)
+                    match self.channel.clone() {
+                        Some(channel) => Ok(Some(channel.rx)),
+                        None => return Err(OxidebpfError::ChannelCapacityNotSpecified),
+                    }
                 } else {
-                    None
+                    Ok(None)
                 }
             }
         }
@@ -999,9 +1038,9 @@ impl ProgramVersion<'_> {
     fn load_program_version(
         &mut self,
         mut program_blueprint: ProgramBlueprint,
-        channel: Channel,
-        buffer_capacity: usize,
-        element_size: usize,
+        channel: Option<Channel>,
+        buffer_capacity: Option<usize>,
+        element_size: Option<usize>,
     ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs
@@ -1069,7 +1108,8 @@ impl ProgramVersion<'_> {
                             let perfmap = PerfMap::new_group(
                                 &map.name,
                                 event_attr,
-                                buffer_capacity * element_size,
+                                buffer_capacity.unwrap_or(DEFAULT_BUFFER_CAPACITY)
+                                    * element_size.unwrap_or(DEFAULT_ELEMENT_SIZE),
                             )?;
 
                             perfmap
@@ -1235,10 +1275,20 @@ impl ProgramVersion<'_> {
             }
         }
 
-        // start event poller and pass back channel, if one exists
+        // start perfmap event poller, if one exists
         if !perfmaps.is_empty() {
+            // if the user didn't specify a buffer capacity, channel will be None here
+            // and we want to error out
+            let channel = match channel {
+                Some(c) => c,
+                None => return Err(OxidebpfError::ChannelCapacityNotSpecified),
+            };
             self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx, buffer_capacity)?;
+            self.event_poller(
+                perfmaps,
+                channel.tx,
+                buffer_capacity.unwrap_or(DEFAULT_BUFFER_CAPACITY),
+            )?;
         }
         Ok(())
     }
@@ -1419,7 +1469,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None, 32);
+        let mut program_group = ProgramGroup::new().element_size(32);
 
         program_group
             .load(
@@ -1440,7 +1490,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None, 32).mem_limit(1234567);
+        let mut program_group = ProgramGroup::new().element_size(32).mem_limit(1234567);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group
@@ -1474,7 +1524,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None, 32);
+        let mut program_group = ProgramGroup::new().element_size(32);
 
         // Load the bpf program
         program_group
@@ -1488,7 +1538,10 @@ mod program_tests {
             )
             .expect("Could not load programs");
         let rx = program_group.get_receiver();
-        assert!(rx.is_none());
+        assert!(rx.is_ok());
+        if let Ok(rx) = rx {
+            assert!(rx.is_none());
+        }
 
         // Get a particular array map and try and read a value from it
         match program_group.get_array_maps() {
@@ -1532,7 +1585,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None, 32);
+        let mut program_group = ProgramGroup::new().element_size(32);
 
         // Load the bpf program
         program_group
@@ -1581,7 +1634,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None, 32);
+        let mut program_group = ProgramGroup::new().element_size(32);
 
         // Load the bpf program
         program_group
@@ -1595,7 +1648,10 @@ mod program_tests {
             )
             .expect("Could not load programs");
         let rx = program_group.get_receiver();
-        assert!(rx.is_none());
+        assert!(rx.is_ok());
+        if let Ok(rx) = rx {
+            assert!(rx.is_none());
+        }
 
         // Get a particular array map and try and read a value from it
         match program_group.get_hash_maps() {

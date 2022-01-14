@@ -4,6 +4,9 @@ use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
+    /// If you encounter this error, you need to set a `buffer_capacity` with the
+    /// `buffer_capacity(usize)` builder function when creating your `ProgramGroup`.
+    ChannelCapacityNotSpecified,
     BadPerfSample,
     NoPerfData,
     DebugFsNotMounted,
