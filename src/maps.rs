@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::iter::FusedIterator;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
@@ -388,7 +389,7 @@ impl PerfMap {
         Ok(loaded_perfmaps)
     }
 
-    pub(crate) fn read<'a>(&self) -> Result<Option<PerfEvent<'a>>, OxidebpfError> {
+    pub(crate) fn read(&self) -> Result<Option<PerfEvent<'_>>, OxidebpfError> {
         let header = self.base_ptr.load(Ordering::SeqCst);
         let raw_size = (self.page_count * self.page_size) as u64;
         let base: *const u8;
@@ -464,14 +465,57 @@ impl PerfMap {
                     let sample = PerfEventSample { header, size, data };
                     Ok(Some(PerfEvent::Sample(sample)))
                 }
-                perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(
+                perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::Lost(
                     &*(buf.as_ptr() as *const PerfEventLostSamples),
                 ))),
                 _ => Ok(None),
             }
         }
     }
+
+    /// Reads all available events
+    ///
+    /// Stops reading either on a real error (and propagates it) or on
+    /// a OxidebpfError::NoPerfData and returns `None`.
+    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent<'_>, OxidebpfError>> {
+        PerfEventIterator {
+            map: self,
+            is_done: false,
+        }
+    }
 }
+
+struct PerfEventIterator<'a> {
+    map: &'a PerfMap,
+    is_done: bool,
+}
+
+impl<'a> Iterator for PerfEventIterator<'a> {
+    type Item = Result<PerfEvent<'a>, OxidebpfError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_done {
+            return None;
+        }
+
+        match self.map.read() {
+            Ok(Some(event)) => Some(Ok(event)),
+            Ok(None) => self.next(),
+            Err(OxidebpfError::NoPerfData) => {
+                // we're done reading
+                self.is_done = true;
+                None
+            }
+            Err(e) => {
+                self.is_done = true;
+                Some(Err(e))
+            }
+        }
+    }
+}
+
+// after the first `None` we always return `None`
+impl<'a> FusedIterator for PerfEventIterator<'a> {}
 
 impl PerCpu for PerfMap {
     fn cpuid(&self) -> i32 {

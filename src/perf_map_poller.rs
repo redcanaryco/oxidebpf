@@ -13,7 +13,7 @@ use slog::crit;
 
 use crate::{
     maps::{PerCpu, PerfEvent, PerfMap},
-    OxidebpfError, PerfChannelMessage, LOGGER,
+    PerfChannelMessage, LOGGER,
 };
 
 pub struct PerfMapPoller {
@@ -82,36 +82,29 @@ impl PerfMapPoller {
             }
         }
 
-        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = vec![];
-
-        events
+        let perf_events = events
             .iter()
             .filter_map(|e| self.tokens.get(&e.token()))
-            .for_each(|perfmap| loop {
-                match perfmap.read() {
-                    Ok(perf_event) => {
-                        perf_events.push((
-                            perfmap.name.to_string(),
-                            perfmap.cpuid() as i32,
-                            perf_event,
-                        ));
-                    }
-                    Err(OxidebpfError::NoPerfData) => {
-                        // we're done reading
-                        return;
-                    }
-                    Err(e) => {
-                        crit!(LOGGER.0, "perf_map_poller(); perfmap read error: {:?}", e);
-                        return;
-                    }
+            .flat_map(|perfmap| {
+                let name = &perfmap.name;
+                let cpuid = perfmap.cpuid() as i32;
+
+                perfmap
+                    .read_all()
+                    .map(move |e| e.map(|e| (name.clone(), cpuid, e)))
+            })
+            .filter_map(|e| match e {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    crit!(LOGGER.0, "perf_map_poller(); perfmap read error: {:?}", e);
+                    None
                 }
             });
 
-        for event in perf_events.into_iter() {
+        for event in perf_events {
             let message = match event.2 {
-                None => continue,
-                Some(PerfEvent::Lost(l)) => PerfChannelMessage::Dropped(l.count),
-                Some(PerfEvent::Sample(e)) => PerfChannelMessage::Event {
+                PerfEvent::Lost(l) => PerfChannelMessage::Dropped(l.count),
+                PerfEvent::Sample(e) => PerfChannelMessage::Event {
                     map_name: event.0,
                     cpuid: event.1,
                     data: e.data,
