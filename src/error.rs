@@ -1,7 +1,6 @@
 use nix::errno::Errno;
 use std::ffi::NulError;
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum OxidebpfError {
@@ -108,25 +107,4 @@ impl From<retry::Error<&str>> for OxidebpfError {
             retry::Error::Internal(i) => OxidebpfError::RetryError(i),
         }
     }
-}
-
-pub enum InitError {
-    Creation(std::io::Error),
-    Registration(std::io::Error),
-    ReadySignal(String),
-}
-
-impl fmt::Display for InitError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            InitError::Creation(e) => write!(f, "error creating poller: {}", e),
-            InitError::Registration(e) => write!(f, "error registering poller: {}", e),
-            InitError::ReadySignal(e) => write!(f, "error grabbing cond mutex: {}", e),
-        }
-    }
-}
-
-pub enum RunError {
-    Poll(std::io::Error),
-    Disconnected,
 }
