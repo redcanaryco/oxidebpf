@@ -67,7 +67,7 @@ let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 let program_blueprint =
     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
         .expect("Could not open test object file");
-let mut program_group = ProgramGroup::new(None);
+let mut program_group = ProgramGroup::new().element_size(32);
 
 program_group.load(
     program_blueprint,
@@ -113,4 +113,3 @@ Note: some tests will require root privileges to pass. Other tests require a sin
 to pass. To test consistently, try running: `sudo -E /path/to/your/.cargo/bin/cargo test -- --test-threads=1`.
 For convenience, you can alias this as `alias scargo="sudo -E $HOME/.cargo/bin/cargo"` and run tests with
 `scargo test -- --test-threads=`.
-
