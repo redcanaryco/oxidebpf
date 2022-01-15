@@ -68,6 +68,7 @@ let program_blueprint =
     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
         .expect("Could not open test object file");
 let mut program_group = ProgramGroup::new();
+let (tx, rx) = crossbeam_channel::bounded(1024);
 
 program_group.load(
     program_blueprint,
@@ -79,8 +80,10 @@ program_group.load(
         .syscall(true),
         Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
-    || todo!(),
+    || (tx, 4096),
 ).expect("Could not load programs");
+
+// read from rx any events from a perfmap in the loaded program version
 
 ```
 
