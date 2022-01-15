@@ -46,15 +46,16 @@ for debugging and testing. It allows you to trace BPF calls during tests by runn
 
 Here's some quick steps to get you started right away.
 
-1.  Add `oxidebpf` to your `Cargo.toml`
-2.  Use the `ProgramBlueprint` to load your compiled eBPF object file with
+1. Add `oxidebpf` to your `Cargo.toml`, if you wish to use perfmaps you should 
+also add `crossbeam-channel`.
+2. Use the `ProgramBlueprint` to load your compiled eBPF object file with
 maps and programs.
-3.  Create a `Program` for each program you intend to load, with options set.
-4.  Create a `ProgramVersion` with your programs. You may create
+3. Create a `Program` for each program you intend to load, with options set.
+4. Create a `ProgramVersion` with your programs. You may create
 multiple `ProgramVersion`s, representing different sets of
 programs. For example, programs intended to run on different kernel versions.
-5.  Create a `ProgramGroup`.
-6.  Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and
+5. Create a `ProgramGroup`.
+6. Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and
 tell it to start loading. It will attempt each `ProgramVersion` in order until
 one successfully loads on the current kernel. If it cannot load any program
 version, it will return an error composed of the underlying errors for each
