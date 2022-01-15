@@ -18,10 +18,12 @@ mod debugfs;
 mod error;
 mod maps;
 mod perf;
+mod program_group;
 
 pub use blueprint::{ProgramBlueprint, SectionType};
 pub use error::OxidebpfError;
 pub use maps::{ArrayMap, BpfHashMap, RWMap};
+pub use program_group::ProgramGroup;
 
 use blueprint::ProgramObject;
 use bpf::{
@@ -30,8 +32,8 @@ use bpf::{
     BpfAttr, MapConfig, SizedBpfAttr,
 };
 use debugfs::{get_debugfs_mount_point, mount_debugfs_if_missing};
-
-use maps::{PerCpu, PerfEvent, PerfMap, ProgMap};
+use maps::perf_map_poller::PerfMapPoller;
+use maps::{PerCpu, PerfMap, ProgMap};
 use perf::{
     constant::{perf_event_sample_format, perf_sw_ids, perf_type_id},
     syscall::{attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs},
@@ -45,15 +47,12 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::io::RawFd,
     sync::{Arc, Condvar, Mutex},
-    thread,
     time::Duration,
 };
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
-use mio::{unix::SourceFd, Events, Interest, Poll, Token};
-use nix::errno::Errno;
 use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 
@@ -89,17 +88,25 @@ pub struct CapUserData {
     inheritable: u32,
 }
 
-/// Message format for messages sent back across the channel. It includes
-/// the map name, cpu id, and message data.
+/// Message format for messages sent back across the channel
+///
+/// Messages could either be dropped in case of messages lost, usually
+/// caused by a a filled up perf buffer, or an event with source and
+/// data
 #[derive(Debug)]
-pub struct PerfChannelMessage(
-    /// The name of the map this message is from.
-    pub String,
-    /// The cpuid of the CPU this message is from.
-    pub i32,
-    /// The data in the message.
-    pub Vec<u8>,
-);
+pub enum PerfChannelMessage {
+    /// A count of how many messages were lost
+    Dropped(u64),
+    /// A received message with information about its source
+    Event {
+        /// The name of the map this message is from.
+        map_name: String,
+        /// The cpuid of the CPU this message is from.
+        cpuid: i32,
+        /// The data in the message.
+        data: Vec<u8>,
+    },
+}
 
 #[derive(Clone)]
 struct Channel {
@@ -227,19 +234,6 @@ impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
     }
 }
 
-/// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
-/// wishes to load from a blueprint. The loader will attempt each `ProgramVersion`
-/// in order until one successfully loads, or none do.
-pub struct ProgramGroup<'a> {
-    event_buffer_size: usize,
-    channel: Channel,
-    loaded_version: Option<ProgramVersion<'a>>,
-    mem_limit: Option<usize>,
-    loaded: bool,
-    debugfs_mount: DebugfsMountOpts,
-    polling_thread_policy: Option<SchedulingPolicy>,
-}
-
 /// A group of eBPF [`Program`](struct@Program)s that a user wishes to load.
 #[derive(Default)]
 pub struct ProgramVersion<'a> {
@@ -248,7 +242,6 @@ pub struct ProgramVersion<'a> {
     ev_names: HashSet<String>,
     array_maps: HashMap<String, ArrayMap>,
     hash_maps: HashMap<String, BpfHashMap>,
-    has_perf_maps: bool,
     polling_delay: u64,
     polling_thread_policy: Option<SchedulingPolicy>,
 }
@@ -260,7 +253,6 @@ impl<'a> Clone for ProgramVersion<'a> {
             ev_names: self.ev_names.clone(),
             array_maps: self.array_maps.clone(),
             hash_maps: self.hash_maps.clone(),
-            has_perf_maps: self.has_perf_maps,
             fds: self
                 .fds
                 .iter()
@@ -598,195 +590,6 @@ impl<'a> Program<'a> {
     }
 }
 
-impl<'a> ProgramGroup<'a> {
-    /// Create a program group that will manage multiple [`ProgramVersion`](struct@ProgramVersion)s.
-    ///
-    /// This creates a bounded channel of the given (optional) size for receiving messages
-    /// from any perfmaps that may be loaded by `Program`s in given `ProgramVersion`.
-    /// Together with [`load()`](fn.load.html), this is the primary public interface of the
-    /// oxidebpf library. You feed your `ProgramGroup` a collection of `ProgramVersion`s,
-    /// each with their own set of `Program`s. Note that you must provide your `ProgramGroup`
-    /// with a [`ProgramBlueprint`](struct@ProgramBlueprint). The blueprint contains the parsed
-    /// object file with all the eBPF programs and maps you may load.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use oxidebpf::ProgramBlueprint;
-    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
-    /// use std::path::PathBuf;
-    ///
-    /// let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    ///             .join("test")
-    ///             .join(format!("test_program_{}", std::env::consts::ARCH));
-    /// let program_blueprint =
-    ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
-    ///         .expect("Could not open test object file");
-    ///
-    /// ProgramGroup::new(None);
-    /// ```
-    pub fn new(event_buffer_size: Option<usize>) -> ProgramGroup<'a> {
-        let event_buffer_size = event_buffer_size.unwrap_or(1024);
-        let (tx, rx): (Sender<PerfChannelMessage>, Receiver<PerfChannelMessage>) =
-            bounded(event_buffer_size);
-        let channel = Channel { tx, rx };
-        ProgramGroup {
-            event_buffer_size,
-            channel,
-            loaded_version: None,
-            mem_limit: None,
-            debugfs_mount: DebugfsMountOpts::MountDisabled,
-            loaded: false,
-            polling_thread_policy: None,
-        }
-    }
-
-    /// Manually set the memlock ulimit for this `ProgramGroup`. The limit will be applied
-    /// when calling `load()`.
-    pub fn mem_limit(mut self, limit: usize) -> Self {
-        self.mem_limit = Some(limit);
-        self
-    }
-
-    /// Controls whether `debugfs` is mounted before attaching {k,u}probes. This operation only
-    /// occurs if `perf_event_open` is not supported and debugfs is not mounted. The
-    /// [DebugfsMountOpts](enum@DebugfsMountOpts) enum determines where `debugfs` gets mounted to.
-    pub fn auto_mount_debugfs(mut self, mount_options: DebugfsMountOpts) -> Self {
-        self.debugfs_mount = mount_options;
-        self
-    }
-
-    /// Sets the thread priority for the thread that polls perfmaps for events coming from eBPF
-    /// to userspace. The priority number specified should be valid for the scheduling policy you
-    /// provide (documented in the enum). This may be useful if you find you're missing messages
-    /// that you expect to be present, or are dropping more messages than seems reasonable.
-    pub fn polling_thread_priority(mut self, scheduling_policy: SchedulingPolicy) -> Self {
-        self.polling_thread_policy = Some(scheduling_policy);
-        self
-    }
-
-    /// Attempt to load [`ProgramVersion`](struct@ProgramVersion)s until one
-    /// successfully loads.
-    ///
-    /// This function attempts to load each `ProgramVersion` in the order given until
-    /// one successfully loads. When one loads, if that version had a perfmap channel,
-    /// a [`PerfChannelMessage`](struct@PerfChannelMessage) receiver crossbeam channel
-    /// is available after loading by calling `get_receiver()` on the `ProgramGroup`.
-    /// If none load, a `NoProgramVersionLoaded` error is returned, along with all the
-    /// internal errors generated during attempted loading.
-    ///
-    /// NOTE: Once you call `load()`, it cannot be called again without re-creating
-    /// the `ProgramGroup`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use oxidebpf::ProgramBlueprint;
-    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
-    /// use std::path::PathBuf;
-    ///
-    /// let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    ///             .join("test")
-    ///             .join(format!("test_program_{}", std::env::consts::ARCH));
-    /// let program_blueprint =
-    ///     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
-    ///         .expect("Could not open test object file");
-    /// let mut program_group = ProgramGroup::new(
-    ///     None,
-    /// );
-    ///
-    /// program_group.load(
-    ///     program_blueprint,
-    ///     vec![ProgramVersion::new(vec![Program::new(
-    ///         "test_program",
-    ///         &["do_mount"],
-    ///     ).syscall(true)])],
-    /// ).expect("Could not load programs");
-    /// ```
-    pub fn load(
-        &mut self,
-        program_blueprint: ProgramBlueprint,
-        program_versions: Vec<ProgramVersion<'a>>,
-    ) -> Result<(), OxidebpfError> {
-        if self.loaded {
-            info!(
-                LOGGER.0,
-                "ProgramGroup::load(); error: attempting to load a program group that was already loaded"
-            );
-            return Err(OxidebpfError::ProgramGroupAlreadyLoaded);
-        }
-
-        if let Some(limit) = self.mem_limit {
-            set_memlock_limit(limit)?;
-        }
-        let mut errors = vec![];
-        for mut program_version in program_versions {
-            program_version.set_debugfs_mount_point(self.debugfs_mount.clone());
-            program_version.set_polling_policy(self.polling_thread_policy);
-
-            match program_version.load_program_version(
-                program_blueprint.clone(),
-                self.channel.clone(),
-                self.event_buffer_size,
-            ) {
-                Ok(()) => {
-                    self.loaded_version = Some(program_version);
-                    break;
-                }
-                Err(e) => {
-                    errors.push(e);
-                }
-            };
-        }
-
-        match &self.loaded_version {
-            None => {
-                info!(
-                    LOGGER.0,
-                    "ProgramGroup::load(); error: no program version was able to load for {:?}, errors: {:?}",
-                    match std::env::current_exe() {
-                        Ok(p) => p,
-                        Err(_) => std::path::PathBuf::from("unknown"),
-                    },
-                    errors
-                );
-                Err(OxidebpfError::NoProgramVersionLoaded(errors))
-            }
-            Some(_) => {
-                self.loaded = true;
-                Ok(())
-            }
-        }
-    }
-
-    /// Returns the receiver channel for this `ProgramGroup`, if it exists.
-    ///
-    /// This will become available when perfmaps are successfully loaded by any
-    /// `ProgramVersion`.
-    pub fn get_receiver(&self) -> Option<Receiver<PerfChannelMessage>> {
-        match &self.loaded_version {
-            None => None,
-            Some(lv) => {
-                if lv.has_perf_maps {
-                    Some(self.channel.clone().rx)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    /// Get a reference to the array maps in the [`Program`](struct@ProgramGroup)s.
-    pub fn get_array_maps(&self) -> Option<&HashMap<String, ArrayMap>> {
-        self.loaded_version.as_ref().map(|ver| &ver.array_maps)
-    }
-
-    /// Get a reference to the hash maps in the ['Program'](struct@ProgramGroup)s.
-    pub fn get_hash_maps(&self) -> Option<&HashMap<String, BpfHashMap>> {
-        self.loaded_version.as_ref().map(|ver| &ver.hash_maps)
-    }
-}
-
 pub fn set_memlock_limit(limit: usize) -> Result<(), OxidebpfError> {
     unsafe {
         let rlim = libc::rlimit {
@@ -903,7 +706,6 @@ impl ProgramVersion<'_> {
             ev_names: HashSet::new(),
             array_maps: HashMap::new(),
             hash_maps: HashMap::new(),
-            has_perf_maps: false,
             polling_delay: 100,
             polling_thread_policy: None,
         }
@@ -981,8 +783,7 @@ impl ProgramVersion<'_> {
     fn load_program_version(
         &mut self,
         mut program_blueprint: ProgramBlueprint,
-        channel: Channel,
-        event_buffer_size: usize,
+        mut perfmap_opts_fn: impl FnMut() -> (Sender<PerfChannelMessage>, usize),
     ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs
@@ -1007,6 +808,8 @@ impl ProgramVersion<'_> {
         // load maps and save fds and apply relocations
         let mut loaded_maps = HashSet::new();
         let mut tailcall_tables = HashMap::new();
+
+        let mut perfmap_opts = None;
 
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
@@ -1047,8 +850,18 @@ impl ProgramVersion<'_> {
                                 wakeup_union: PerfWakeup { wakeup_events: 1 },
                                 ..Default::default()
                             };
-                            let perfmap =
-                                PerfMap::new_group(&map.name, event_attr, event_buffer_size)?;
+
+                            let buffer_size = match perfmap_opts {
+                                Some((_, buffer_size)) => buffer_size,
+                                None => {
+                                    let opts = perfmap_opts_fn();
+                                    let size = opts.1;
+                                    perfmap_opts = Some(opts);
+                                    size
+                                }
+                            };
+
+                            let perfmap = PerfMap::new_group(&map.name, event_attr, buffer_size)?;
 
                             perfmap
                                 .iter()
@@ -1213,11 +1026,11 @@ impl ProgramVersion<'_> {
             }
         }
 
-        // start event poller and pass back channel, if one exists
-        if !perfmaps.is_empty() {
-            self.has_perf_maps = true;
-            self.event_poller(perfmaps, channel.tx)?;
+        // start perfmap event poller, if one exists
+        if let Some((tx, _)) = perfmap_opts {
+            self.event_poller(perfmaps, tx)?;
         }
+
         Ok(())
     }
 }
@@ -1290,35 +1103,36 @@ fn drop_debugfs_kprobes(debugfs_mount: &str) {
     }
 }
 
-impl<'a> Drop for ProgramVersion<'a> {
-    fn drop(&mut self) {
-        // Detach everything, close remaining attachpoints
-        // SAFETY: these fds must be wholly owned by `ProgramVersion`.
-        for fd in self.fds.iter() {
-            unsafe {
-                libc::close(*fd as c_int);
-            }
-        }
-
-        // We are intentionally enumerating and closing _all_ debugfs created
-        // probes here, on the off chance that one gets missed somehow. Otherwise,
-        // we might end up stuck with a bunch of unused probes clogging the namespace.
-        // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
-        // with customer user probes or probes from other frameworks.
-        if let Some(debugfs_mount) = get_debugfs_mount_point().as_deref() {
-            drop_debugfs_uprobes(debugfs_mount);
-            drop_debugfs_kprobes(debugfs_mount);
-        }
-    }
-}
-
-fn perf_map_poller(
+pub fn perf_map_poller(
     perfmaps: Vec<PerfMap>,
     tx: Sender<PerfChannelMessage>,
     polling_delay: Duration,
     polling_policy: SchedulingPolicy,
     polling_signal: Arc<(Mutex<bool>, Condvar)>,
 ) {
+    prioritize_thread(polling_policy);
+
+    let poller = match PerfMapPoller::new(perfmaps.into_iter(), polling_signal) {
+        Ok(poller) => poller,
+        Err(e) => {
+            crit!(LOGGER.0, "perf_map_poller(); {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = poller.poll(tx, polling_delay) {
+        crit!(
+            LOGGER.0,
+            "perf_map_poller(); unrecoverable polling error: {}",
+            e
+        );
+    }
+}
+
+/// Sets thread priority according to the given policy and then sets a
+/// niceness value when relevant. Errors are logged but otherwise
+/// ignored.
+fn prioritize_thread(polling_policy: SchedulingPolicy) {
     let native_id = match polling_policy {
         SchedulingPolicy::Deadline(_, _, _) => {
             // SAFETY: this syscall is always successful
@@ -1358,125 +1172,27 @@ fn perf_map_poller(
         // we don't need to set a niceness value for anything else
         _ => {}
     }
+}
 
-    let mut poll = match Poll::new() {
-        Ok(p) => p,
-        Err(e) => {
-            crit!(
-                LOGGER.0,
-                "perf_map_poller(); error creating poller: {:?}",
-                e
-            );
-            return;
-        }
-    };
-
-    let mut tokens: HashMap<Token, PerfMap> = HashMap::new();
-    for p in perfmaps {
-        let token = Token(p.ev_fd as usize);
-
-        if let Err(e) = poll
-            .registry()
-            .register(&mut SourceFd(&p.ev_fd), token, Interest::READABLE)
-        {
-            crit!(
-                LOGGER.0,
-                "perf_map_poller(); error registering poller: {:?}",
-                e
-            );
-            return;
-        }
-
-        tokens.insert(token, p);
-    }
-
-    {
-        // now that the perfmap fd's are registered, we can signal to the main thread that
-        // event polling is ready.
-        let (lock, cvar) = &*polling_signal;
-        match lock.lock() {
-            Ok(mut polling_is_ready) => {
-                *polling_is_ready = true;
-                cvar.notify_one();
-            }
-            Err(e) => {
-                info!(
-                    LOGGER.0,
-                    "perf_map_poller(); error grabbing cond mutex: {:?}", e
-                );
+impl<'a> Drop for ProgramVersion<'a> {
+    fn drop(&mut self) {
+        // Detach everything, close remaining attachpoints
+        // SAFETY: these fds must be wholly owned by `ProgramVersion`.
+        for fd in self.fds.iter() {
+            unsafe {
+                libc::close(*fd as c_int);
             }
         }
-    }
 
-    let mut events = Events::with_capacity(1024);
-
-    // for tracking dropped event statistics inside the loop
-    let mut dropped = 0_i32;
-    let mut processed = 0_i32;
-
-    'outer: loop {
-        match poll.poll(&mut events, Some(Duration::from_millis(100))) {
-            Ok(_) => {}
-            Err(e) => match nix::errno::Errno::from_i32(nix::errno::errno()) {
-                Errno::EINTR => continue,
-                _ => {
-                    crit!(
-                        LOGGER.0,
-                        "perf_map_poller(); unrecoverable polling error: {:?}",
-                        e
-                    );
-                    return;
-                }
-            },
+        // We are intentionally enumerating and closing _all_ debugfs created
+        // probes here, on the off chance that one gets missed somehow. Otherwise,
+        // we might end up stuck with a bunch of unused probes clogging the namespace.
+        // If it has oxidebpf_ it's probably one of ours. This avoids conflicting
+        // with customer user probes or probes from other frameworks.
+        if let Some(debugfs_mount) = get_debugfs_mount_point().as_deref() {
+            drop_debugfs_uprobes(debugfs_mount);
+            drop_debugfs_kprobes(debugfs_mount);
         }
-        let mut perf_events: Vec<(String, i32, Option<PerfEvent>)> = Vec::new();
-        events
-            .iter()
-            .filter(|event| event.is_readable())
-            .filter_map(|e| tokens.get(&e.token()))
-            .for_each(|perfmap| loop {
-                match perfmap.read() {
-                    Ok(perf_event) => {
-                        perf_events.push((
-                            perfmap.name.to_string(),
-                            perfmap.cpuid() as i32,
-                            perf_event,
-                        ));
-                    }
-                    Err(OxidebpfError::NoPerfData) => {
-                        // we're done reading
-                        return;
-                    }
-                    Err(e) => {
-                        crit!(LOGGER.0, "perf_map_poller(); perfmap read error: {:?}", e);
-                        return;
-                    }
-                }
-            });
-        for event in perf_events.into_iter() {
-            let message = match event.2 {
-                None => continue,
-                Some(PerfEvent::Lost(l)) => {
-                    dropped = dropped.wrapping_add(l.count as i32);
-                    if (dropped >= 1000 || processed >= 10000) && dropped > 0 {
-                        let d = dropped;
-                        dropped = 0;
-                        processed = 0;
-                        PerfChannelMessage("DROPPED".to_owned(), d, vec![])
-                    } else {
-                        continue;
-                    }
-                }
-                Some(PerfEvent::Sample(e)) => PerfChannelMessage(event.0, event.1, e.data),
-            };
-            match tx.send(message) {
-                Ok(_) => {}
-                Err(_) => break 'outer,
-            };
-
-            processed = processed.wrapping_add(1);
-        }
-        thread::sleep(polling_delay);
     }
 }
 
@@ -1493,7 +1209,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new();
 
         program_group
             .load(
@@ -1502,6 +1218,7 @@ mod program_tests {
                     Program::new("test_program_map_update", &["do_mount"]).syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
                 ])],
+                || unreachable!(),
             )
             .expect("Could not load programs");
     }
@@ -1514,7 +1231,7 @@ mod program_tests {
         let program_blueprint =
             ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
                 .expect("Could not open test object file");
-        let mut program_group = ProgramGroup::new(None).mem_limit(1234567);
+        let mut program_group = ProgramGroup::new().mem_limit(1234567);
 
         let original_limit = get_memlock_limit().expect("could not get original limit");
         program_group
@@ -1524,6 +1241,7 @@ mod program_tests {
                     Program::new("test_program_map_update", &["do_mount"]).syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
                 ])],
+                || unreachable!(),
             )
             .expect("Could not load programs");
 
@@ -1548,9 +1266,8 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new();
 
-        // Load the bpf program
         program_group
             .load(
                 program_blueprint,
@@ -1559,10 +1276,9 @@ mod program_tests {
                         .syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
                 ])],
+                || unreachable!(), // the test will fail if it tries to load a perfmap
             )
             .expect("Could not load programs");
-        let rx = program_group.get_receiver();
-        assert!(rx.is_none());
 
         // Get a particular array map and try and read a value from it
         match program_group.get_array_maps() {
@@ -1606,7 +1322,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new();
 
         // Load the bpf program
         program_group
@@ -1617,6 +1333,7 @@ mod program_tests {
                     Program::new("test_program_tailcall_update_map", &[])
                         .tail_call_map_index("__test_tailcall_map", 0),
                 ])],
+                || unreachable!(),
             )
             .expect("Could not load programs");
 
@@ -1655,7 +1372,7 @@ mod program_tests {
                 .expect("Could not open test object file");
 
         // Create a program group that will try and attach the test program to hook points in the kernel
-        let mut program_group = ProgramGroup::new(None);
+        let mut program_group = ProgramGroup::new();
 
         // Load the bpf program
         program_group
@@ -1666,10 +1383,9 @@ mod program_tests {
                         .syscall(true),
                     Program::new("test_program", &["do_mount"]).syscall(true),
                 ])],
+                || unreachable!(), // the test will fail if it tries to load a perfmap
             )
             .expect("Could not load programs");
-        let rx = program_group.get_receiver();
-        assert!(rx.is_none());
 
         // Get a particular array map and try and read a value from it
         match program_group.get_hash_maps() {

@@ -1,14 +1,21 @@
 [package]
 name = "oxidebpf"
+description = "A pure-Rust library for managing eBPF programs."
+homepage = "https://github.com/redcanaryco/oxidebpf"
+repository = "https://github.com/redcanaryco/oxidebpf"
+readme = "README.md"
 version = "0.1.0"
 license = "BSD-3-Clause"
+keywords = ["eBPF", "BPF", "linux"]
+categories = ["config", "data-structures", "os::linux-apis", "parsing"]
 authors = [
     "Carl Petty <carl.petty@redcanary.com>",
     "Brandon Jackson <brandon.jackson@redcanary.com>",
     "Rafael Ortiz <rafael.ortiz@redcanary.com>",
     "Dave Bogle <dave.bogle@redcanary.com>",
+    "Andrés Medina <andres.medina@redcanary.com>",
 ]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

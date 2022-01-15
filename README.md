@@ -46,18 +46,19 @@ for debugging and testing. It allows you to trace BPF calls during tests by runn
 
 Here's some quick steps to get you started right away.
 
-1.  Add `oxidebpf` to your `Cargo.toml`
-2.  Use the `ProgramBlueprint` to load your compiled eBPF object file with
+1. Add `oxidebpf` to your `Cargo.toml`, if you wish to use perfmaps you should 
+also add `crossbeam-channel`.
+2. Use the `ProgramBlueprint` to load your compiled eBPF object file with
 maps and programs.
-3.  Create a `Program` for each program you intend to load, with options set.
-4.  Create a `ProgramVersion` with your programs. You may create
+3. Create a `Program` for each program you intend to load, with options set.
+4. Create a `ProgramVersion` with your programs. You may create
 multiple `ProgramVersion`s, representing different sets of
 programs. For example, programs intended to run on different kernel versions.
-5.  Create a `ProgramGroup` with a channel capacity (or `None`).
-6.  Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and 
-tell it to start loading. It will attempt each `ProgramVersion` in order until 
+5. Create a `ProgramGroup`.
+6. Give the `ProgramGroup` your `ProgramVersions` and `ProgramBlueprint`, and
+tell it to start loading. It will attempt each `ProgramVersion` in order until
 one successfully loads on the current kernel. If it cannot load any program
-version, it will return an error composed of the underlying errors for each 
+version, it will return an error composed of the underlying errors for each
 `ProgramVersion`.
 
 ```rust
@@ -67,7 +68,8 @@ let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 let program_blueprint =
     ProgramBlueprint::new(&std::fs::read(program).expect("Could not open file"), None)
         .expect("Could not open test object file");
-let mut program_group = ProgramGroup::new(None);
+let mut program_group = ProgramGroup::new();
+let (tx, rx) = crossbeam_channel::bounded(1024);
 
 program_group.load(
     program_blueprint,
@@ -79,7 +81,10 @@ program_group.load(
         .syscall(true),
         Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
+    || (tx, 4096),
 ).expect("Could not load programs");
+
+// read from rx any events from a perfmap in the loaded program version
 
 ```
 
@@ -105,12 +110,11 @@ distribution.
 ## Testing
 
 1. Run `docker-compose run --rm test-builder` from the `test/` directory to build the BPF test application. For additional options for RHEL builds, see `test/README.md`.
-2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run 
-   the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in 
+2. Run tests with `cargo test`. To trace BPF syscalls as they occur, run
+   the tests with `cargo with "strace -fe bpf" -- test` (depends on `cargo-with`, included in
    vagrant bootstrap by default).
 
 Note: some tests will require root privileges to pass. Other tests require a single-threaded context
 to pass. To test consistently, try running: `sudo -E /path/to/your/.cargo/bin/cargo test -- --test-threads=1`.
 For convenience, you can alias this as `alias scargo="sudo -E $HOME/.cargo/bin/cargo"` and run tests with
 `scargo test -- --test-threads=`.
-

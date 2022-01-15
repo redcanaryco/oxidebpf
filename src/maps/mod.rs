@@ -1,4 +1,7 @@
+pub(crate) mod perf_map_poller;
+
 use std::convert::TryInto;
+use std::iter::FusedIterator;
 use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
 use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
@@ -111,12 +114,12 @@ pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
     process_cpu_string(cpu_string)
 }
 
-pub(crate) enum PerfEvent<'a> {
+pub(crate) enum PerfEvent {
     Sample(PerfEventSample),
-    Lost(&'a PerfEventLostSamples),
+    Lost(u64),
 }
 
-impl Debug for PerfEvent<'_> {
+impl Debug for PerfEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -126,7 +129,7 @@ impl Debug for PerfEvent<'_> {
                     format!("SAMPLE: {}", s.size)
                 }
                 PerfEvent::Lost(l) => {
-                    format!("LOST: {}", l.count)
+                    format!("LOST: {}", l)
                 }
             }
         )
@@ -325,6 +328,8 @@ impl PerfMap {
             info!(LOGGER.0, "PerfMap::new_group(); bad page count (0)");
             return Err(OxidebpfError::BadPageCount);
         }
+
+        let page_count = lte_power_of_two(page_count);
         let mmap_size = page_size * (page_count + 1);
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
@@ -388,7 +393,7 @@ impl PerfMap {
         Ok(loaded_perfmaps)
     }
 
-    pub(crate) fn read<'a>(&self) -> Result<Option<PerfEvent<'a>>, OxidebpfError> {
+    pub(crate) fn read(&self) -> Result<Option<PerfEvent>, OxidebpfError> {
         let header = self.base_ptr.load(Ordering::SeqCst);
         let raw_size = (self.page_count * self.page_size) as u64;
         let base: *const u8;
@@ -464,14 +469,58 @@ impl PerfMap {
                     let sample = PerfEventSample { header, size, data };
                     Ok(Some(PerfEvent::Sample(sample)))
                 }
-                perf_event_type::PERF_RECORD_LOST => Ok(Some(PerfEvent::<'a>::Lost(
-                    &*(buf.as_ptr() as *const PerfEventLostSamples),
-                ))),
+                perf_event_type::PERF_RECORD_LOST => {
+                    let lost = &*(buf.as_ptr() as *const PerfEventLostSamples);
+                    Ok(Some(PerfEvent::Lost(lost.count)))
+                }
                 _ => Ok(None),
             }
         }
     }
+
+    /// Reads all available events
+    ///
+    /// Stops reading either on a real error (and propagates it) or on
+    /// a OxidebpfError::NoPerfData and returns `None`.
+    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
+        PerfEventIterator {
+            map: self,
+            is_done: false,
+        }
+    }
 }
+
+struct PerfEventIterator<'a> {
+    map: &'a PerfMap,
+    is_done: bool,
+}
+
+impl<'a> Iterator for PerfEventIterator<'a> {
+    type Item = Result<PerfEvent, OxidebpfError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_done {
+            return None;
+        }
+
+        match self.map.read() {
+            Ok(Some(event)) => Some(Ok(event)),
+            Ok(None) => self.next(),
+            Err(OxidebpfError::NoPerfData) => {
+                // we're done reading
+                self.is_done = true;
+                None
+            }
+            Err(e) => {
+                self.is_done = true;
+                Some(Err(e))
+            }
+        }
+    }
+}
+
+// after the first `None` we always return `None`
+impl<'a> FusedIterator for PerfEventIterator<'a> {}
 
 impl PerCpu for PerfMap {
     fn cpuid(&self) -> i32 {
@@ -889,6 +938,18 @@ impl Drop for PerfMap {
 impl Drop for ArrayMap {
     fn drop(&mut self) {
         self.base.loaded = false;
+    }
+}
+
+// returns a power of two that is equal or less than n
+fn lte_power_of_two(n: usize) -> usize {
+    if n.is_power_of_two() {
+        return n;
+    }
+
+    match n.checked_next_power_of_two() {
+        None => 1 << (usize::BITS - 1),
+        Some(x) => x >> 1,
     }
 }
 

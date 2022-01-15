@@ -3,14 +3,12 @@ use std::ffi::NulError;
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Clone)]
+#[non_exhaustive]
 pub enum OxidebpfError {
     BadPerfSample,
     NoPerfData,
     DebugFsNotMounted,
-    EbpfPollerError(String),
-    CStrConversionError,
     ThreadPollingError,
-    UuidError,
     NumberParserError,
     SelfTrace,
     UnsupportedProgramType,
@@ -43,7 +41,6 @@ pub enum OxidebpfError {
     MultipleErrors(Vec<OxidebpfError>),
     UncaughtMountNsError,
     BpfProgLoadError((Box<OxidebpfError>, String)),
-    MapKeyNotFound,
     MapValueSizeMismatch,
     MapKeySizeMismatch,
     ProgramGroupAlreadyLoaded,
@@ -81,6 +78,8 @@ impl Display for OxidebpfError {
         }
     }
 }
+
+impl std::error::Error for OxidebpfError {}
 
 impl From<Vec<OxidebpfError>> for OxidebpfError {
     fn from(e: Vec<OxidebpfError>) -> Self {
