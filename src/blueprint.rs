@@ -463,8 +463,21 @@ fn get_kernel_version(data: &[u8], elf: &Elf) -> Result<u32, OxidebpfError> {
         .unwrap_or(MAGIC_VERSION);
 
     Ok(if version == MAGIC_VERSION {
-        info!(LOGGER.0, "Dynamically finding the running kernel version");
-        get_running_kernel_version()?
+        #[cfg(not(feature = "rootless_blueprints"))]
+        {
+            info!(LOGGER.0, "Dynamically finding the running kernel version");
+            get_running_kernel_version()?
+        }
+        #[cfg(feature = "rootless_blueprints")]
+        {
+            info!(
+                LOGGER.0,
+                "Rootless blueprints enabled, defaulting to {}. Programs may not load properly.",
+                MAGIC_VERSION
+            );
+
+            version
+        }
     } else {
         version
     })
