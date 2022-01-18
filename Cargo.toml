@@ -4,7 +4,7 @@ description = "A pure-Rust library for managing eBPF programs."
 homepage = "https://github.com/redcanaryco/oxidebpf"
 repository = "https://github.com/redcanaryco/oxidebpf"
 readme = "README.md"
-version = "0.1.0"
+version = "0.2.0"
 license = "BSD-3-Clause"
 keywords = ["eBPF", "BPF", "linux"]
 categories = ["config", "data-structures", "os::linux-apis", "parsing"]
@@ -16,8 +16,6 @@ authors = [
     "Andrés Medina <andres.medina@redcanary.com>",
 ]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 libc = "0.2.105"
@@ -44,3 +42,4 @@ ctrlc = "3.1"
 
 [features]
 log_buf = []
+rootless_blueprints = []
