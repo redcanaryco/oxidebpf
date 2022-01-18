@@ -444,6 +444,17 @@ pub(crate) struct SizedBpfAttr {
     pub(crate) size: usize,
 }
 
+impl From<MapDefinition> for SizedBpfAttr {
+    fn from(map: MapDefinition) -> Self {
+        Self {
+            bpf_attr: BpfAttr {
+                map_config: map.into(),
+            },
+            size: 20,
+        }
+    }
+}
+
 #[repr(align(8), C)]
 #[derive(Clone, Copy)]
 pub(crate) union BpfAttr {
