@@ -29,7 +29,6 @@ use blueprint::ProgramObject;
 use bpf::{
     constant::bpf_map_type,
     syscall::{self, bpf_map_update_elem},
-    BpfAttr, MapConfig, SizedBpfAttr,
 };
 use debugfs::{get_debugfs_mount_point, mount_debugfs_if_missing};
 use maps::perf_map_poller::PerfMapPoller;
@@ -55,6 +54,8 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
+
+use crate::maps::get_cpus;
 
 lazy_static! {
     /// The slog Logger for the oxidebpf library. You can change the destination
@@ -827,16 +828,15 @@ impl ProgramVersion<'_> {
                     })?;
 
                 if !loaded_maps.contains(&map.name) {
-                    let sized_attr = SizedBpfAttr {
-                        bpf_attr: BpfAttr {
-                            map_config: MapConfig::from(map.definition),
-                        },
-                        size: 20,
-                    };
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
-                            let fd =
-                                unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
+                            if map.definition.max_entries == 0 {
+                                map.definition.max_entries = get_cpus()?.len() as u32;
+                            };
+
+                            let fd = unsafe {
+                                syscall::bpf_map_create_with_sized_attr(map.definition.into())?
+                            };
                             self.fds.insert(fd);
                             map.set_loaded(fd);
                             program_object.fixup_map_relocation(fd, map)?;
@@ -930,8 +930,9 @@ impl ProgramVersion<'_> {
                             };
                         }
                         _ => {
-                            let fd =
-                                unsafe { syscall::bpf_map_create_with_sized_attr(sized_attr)? };
+                            let fd = unsafe {
+                                syscall::bpf_map_create_with_sized_attr(map.definition.into())?
+                            };
                             self.fds.insert(fd);
                             map.set_loaded(fd);
                             program_object.fixup_map_relocation(fd, map)?;
