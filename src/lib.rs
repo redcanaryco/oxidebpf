@@ -19,6 +19,7 @@ mod error;
 mod maps;
 mod perf;
 mod program_group;
+mod cpu_info;
 
 pub use blueprint::{ProgramBlueprint, SectionType};
 pub use error::OxidebpfError;
@@ -54,8 +55,6 @@ use lazy_static::lazy_static;
 use libc::{c_int, pid_t};
 use slog::{crit, error, info, o, Logger};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
-
-use crate::maps::get_cpus;
 
 lazy_static! {
     /// The slog Logger for the oxidebpf library. You can change the destination
@@ -475,7 +474,7 @@ impl<'a> Program<'a> {
         let is_return = self.kind == Some(ProgramType::Uretprobe);
         let pid = self.pid.unwrap_or(-1);
 
-        maps::get_cpus()?
+        cpu_info::online()?
             .into_iter()
             .flat_map(|cpu| {
                 self.attach_points
@@ -831,7 +830,7 @@ impl ProgramVersion<'_> {
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                             if map.definition.max_entries == 0 {
-                                map.definition.max_entries = get_cpus()?.len() as u32;
+                                map.definition.max_entries = cpu_info::possible_count()? as u32;
                             };
 
                             let fd = unsafe {
