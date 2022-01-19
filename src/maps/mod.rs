@@ -22,7 +22,7 @@ use crate::perf::PerfEventAttr;
 use slog::info;
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::{LOGGER, cpu_info};
+use crate::{cpu_info, LOGGER};
 
 #[repr(C)]
 #[derive(Clone, Copy)]

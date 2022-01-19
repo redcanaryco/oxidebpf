@@ -37,16 +37,19 @@ pub fn max_possible_index() -> Result<usize, OxidebpfError> {
 }
 
 fn max_index(cpu_string: &str) -> Result<usize, OxidebpfError> {
-    let last = cpu_string.split(',').last().ok_or(OxidebpfError::CpuOnlineFormatError)?;
+    let last = cpu_string
+        .split(',')
+        .last()
+        .ok_or(OxidebpfError::CpuOnlineFormatError)?;
 
     let last_index = match last.split_once('-') {
         None => last,
-        Some((_, b)) => b
+        Some((_, b)) => b,
     };
 
-    last_index.parse().map_err(|_| {
-        OxidebpfError::CpuOnlineFormatError
-    })
+    last_index
+        .parse()
+        .map_err(|_| OxidebpfError::CpuOnlineFormatError)
 }
 
 fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
