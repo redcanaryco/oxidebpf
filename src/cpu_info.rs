@@ -22,7 +22,7 @@ pub fn online() -> Result<Vec<i32>, OxidebpfError> {
     process_cpu_string(cpu_string)
 }
 
-pub fn possible_count() -> Result<usize, OxidebpfError> {
+pub fn max_possible_index() -> Result<usize, OxidebpfError> {
     let cpu_string = std::fs::read_to_string("/sys/devices/system/cpu/possible").map_err(
         |e| {
             info!(
@@ -33,7 +33,20 @@ pub fn possible_count() -> Result<usize, OxidebpfError> {
         },
     )?;
 
-    todo!()
+    max_index(&cpu_string)
+}
+
+fn max_index(cpu_string: &str) -> Result<usize, OxidebpfError> {
+    let last = cpu_string.split(',').last().ok_or(OxidebpfError::CpuOnlineFormatError)?;
+
+    let last_index = match last.split_once('-') {
+        None => last,
+        Some((_, b)) => b
+    };
+
+    last_index.parse().map_err(|_| {
+        OxidebpfError::CpuOnlineFormatError
+    })
 }
 
 fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
@@ -83,4 +96,40 @@ fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
     }
 
     Ok(cpus)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_range() {
+        let result = max_index("0-127").expect("did not parse cpu_string");
+        assert_eq!(result, 127);
+    }
+
+    #[test]
+    fn single_number() {
+        let result = max_index("4").expect("did not parse cpu_string");
+        assert_eq!(result, 4);
+    }
+
+    #[test]
+    fn combination() {
+        let result = max_index("0,3-5,8").expect("did not parse cpu_string");
+        assert_eq!(result, 8);
+    }
+
+    #[test]
+    fn test_cpu_formatter() {
+        assert_eq!(vec![0], process_cpu_string("0".to_string()).unwrap());
+        assert_eq!(
+            vec![0, 1, 2],
+            process_cpu_string("0-2".to_string()).unwrap()
+        );
+        assert_eq!(
+            vec![0, 3, 4, 5, 8],
+            process_cpu_string("0,3-5,8".to_string()).unwrap()
+        );
+    }
 }
