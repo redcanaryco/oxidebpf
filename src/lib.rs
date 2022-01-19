@@ -830,7 +830,7 @@ impl ProgramVersion<'_> {
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                             if map.definition.max_entries == 0 {
-                                map.definition.max_entries = cpu_info::possible_count()? as u32;
+                                map.definition.max_entries = cpu_info::max_possible_index()? as u32 + 1;
                             };
 
                             let fd = unsafe {

@@ -887,7 +887,6 @@ fn lte_power_of_two(n: usize) -> usize {
 #[cfg(test)]
 mod map_tests {
     use crate::error::OxidebpfError;
-    use crate::maps::process_cpu_string;
     use crate::maps::RWMap;
     use crate::maps::{ArrayMap, BpfHashMap};
     use nix::errno::Errno;
@@ -899,19 +898,6 @@ mod map_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("All time is broken!!");
         seed_time.as_millis() as u64
-    }
-
-    #[test]
-    fn test_cpu_formatter() {
-        assert_eq!(vec![0], process_cpu_string("0".to_string()).unwrap());
-        assert_eq!(
-            vec![0, 1, 2],
-            process_cpu_string("0-2".to_string()).unwrap()
-        );
-        assert_eq!(
-            vec![0, 3, 4, 5, 8],
-            process_cpu_string("0,3-5,8".to_string()).unwrap()
-        );
     }
 
     // Test the normal behavior of the array map type
