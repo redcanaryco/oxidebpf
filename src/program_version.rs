@@ -38,6 +38,26 @@ pub struct ProgramVersion<'a> {
     polling_thread_policy: Option<SchedulingPolicy>,
 }
 
+/// Determines how to set the size of the perf buffer
+///
+/// Perf buffers are internally all sized individually and there is
+/// one per online CPU. This enum gives you the flexibility to decide
+/// if you want to size each CPU to a given size, or if you would like
+/// oxidebpf to calculate the per buffer size for you.
+///
+/// Note that in either case the actual size will be rounded up to the
+/// nearest whole page number, and then rounded down so the number of
+/// pages fit a power of two.
+#[derive(Debug, Clone, Copy)]
+pub enum PerfBufferSize {
+    /// Sizes each buffer to the given maximum.
+    PerCpu(usize),
+    /// Sizes each buffer by dividing the given maximum across the
+    /// online CPUs. For example if the total size is 1MB, and we have
+    /// 4 CPUS, each CPU will get a maximum of 256KB to work with.
+    Total(usize),
+}
+
 impl<'a> Clone for ProgramVersion<'a> {
     fn clone(&self) -> Self {
         Self {
@@ -172,7 +192,7 @@ impl<'a> ProgramVersion<'a> {
     pub(crate) fn load_program_version(
         &mut self,
         mut program_blueprint: ProgramBlueprint,
-        mut perfmap_opts_fn: impl FnMut() -> (Sender<PerfChannelMessage>, usize),
+        mut perfmap_opts_fn: impl FnMut() -> (Sender<PerfChannelMessage>, PerfBufferSize),
     ) -> Result<(), OxidebpfError> {
         let mut matching_blueprints: Vec<ProgramObject> = self
             .programs

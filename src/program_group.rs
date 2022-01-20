@@ -4,8 +4,8 @@ use crossbeam_channel::Sender;
 use slog::info;
 
 use crate::{
-    set_memlock_limit, ArrayMap, BpfHashMap, DebugfsMountOpts, OxidebpfError, PerfChannelMessage,
-    ProgramBlueprint, ProgramVersion, SchedulingPolicy, LOGGER,
+    program_version::PerfBufferSize, set_memlock_limit, ArrayMap, BpfHashMap, DebugfsMountOpts,
+    OxidebpfError, PerfChannelMessage, ProgramBlueprint, ProgramVersion, SchedulingPolicy, LOGGER,
 };
 
 /// A group of eBPF [`ProgramVersion`](struct@ProgramVersion)s that a user
@@ -95,10 +95,11 @@ impl<'a> ProgramGroup<'a> {
     /// If the program version contain any perfmaps,
     /// perfmap_opts_fn(), will be called on each one until a version
     /// suceeds to load. perfmap_opts_fn() returns a channel from
-    /// which to send perf messages, and a size (in bytes) for the per
-    /// cpu perf buffer. When the perfmap is created the buffer will
-    /// take at most the specified number of bytes but it will shrink
-    /// to fit a page size that is a multiple of two.
+    /// which to send perf messages, and a [`PerfBufferSize`] to
+    /// specify how big to make the perf buffer(s). When the perfmap
+    /// is created the buffer will take at most the specified number
+    /// of bytes but it will shrink to fit a page size that is a power
+    /// of two.
     ///
     /// NOTE: Once you call `load()`, it cannot be called again without re-creating
     /// the `ProgramGroup`.
@@ -107,7 +108,7 @@ impl<'a> ProgramGroup<'a> {
     ///
     /// ```
     /// use oxidebpf::ProgramBlueprint;
-    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType};
+    /// use oxidebpf::{ProgramGroup, Program, ProgramVersion, ProgramType, PerfBufferSize};
     /// use std::path::PathBuf;
     ///
     /// let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -126,14 +127,14 @@ impl<'a> ProgramGroup<'a> {
     ///         "test_program",
     ///         &["do_mount"],
     ///     ).syscall(true)])],
-    ///     || (tx.clone(), 1024 * 8),
+    ///     || (tx.clone(), PerfBufferSize::PerCpu(1024 * 8)),
     /// ).expect("Could not load programs");
     /// ```
     pub fn load(
         &mut self,
         program_blueprint: ProgramBlueprint,
         program_versions: Vec<ProgramVersion<'a>>,
-        mut perfmap_opts_fn: impl FnMut() -> (Sender<PerfChannelMessage>, usize),
+        mut perfmap_opts_fn: impl FnMut() -> (Sender<PerfChannelMessage>, PerfBufferSize),
     ) -> Result<(), OxidebpfError> {
         if self.loaded {
             info!(

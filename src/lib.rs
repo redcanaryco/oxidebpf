@@ -26,7 +26,7 @@ pub use blueprint::{ProgramBlueprint, SectionType};
 pub use error::OxidebpfError;
 pub use maps::{ArrayMap, BpfHashMap, RWMap};
 pub use program_group::ProgramGroup;
-pub use program_version::ProgramVersion;
+pub use program_version::{PerfBufferSize, ProgramVersion};
 
 use perf::syscall::{attach_kprobe, attach_kprobe_debugfs, attach_uprobe, attach_uprobe_debugfs};
 
