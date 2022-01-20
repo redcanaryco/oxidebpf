@@ -22,7 +22,7 @@ use crate::perf::PerfEventAttr;
 use slog::info;
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::LOGGER;
+use crate::{cpu_info, LOGGER};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -43,75 +43,6 @@ pub struct PerfEventSample {
     header: PerfEventHeader,
     pub size: u32,
     pub data: Vec<u8>,
-}
-
-pub(crate) fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
-    let mut cpus = vec![];
-
-    for sublist in cpu_string.trim().split(',') {
-        if sublist.contains('-') {
-            let pair: Vec<&str> = sublist.split('-').collect();
-            if pair.len() != 2 {
-                info!(
-                    LOGGER.0,
-                    "process_cpu_string(); cpu online formatting error: {}", cpu_string
-                );
-                return Err(OxidebpfError::CpuOnlineFormatError);
-            }
-
-            // we checked the length above so indexing is OK
-            let from: i32 = pair[0].parse().map_err(|e| {
-                info!(
-                    LOGGER.0,
-                    "process_cpu_string(); cpu online i32 parse error; pair: {:?}; error: {:?}",
-                    pair,
-                    e
-                );
-                OxidebpfError::CpuOnlineFormatError
-            })?;
-            let to: i32 = pair[1].parse().map_err(|e| {
-                info!(
-                    LOGGER.0,
-                    "process_cpu_string(); cpu online i32 parse error; pair: {:?}; error: {:?}",
-                    pair,
-                    e
-                );
-                OxidebpfError::CpuOnlineFormatError
-            })?;
-
-            cpus.extend(from..=to)
-        } else {
-            cpus.push(sublist.trim().parse().map_err(|e| {
-                info!(
-                    LOGGER.0,
-                    "process_cpu_string(); sublist number parsing error; sublist: {:?}; error: {:?}", sublist, e
-                );
-                OxidebpfError::NumberParserError
-            })?);
-        }
-    }
-
-    Ok(cpus)
-}
-
-pub(crate) fn get_cpus() -> Result<Vec<i32>, OxidebpfError> {
-    let cpu_string = String::from_utf8(std::fs::read("/sys/devices/system/cpu/online").map_err(
-        |e| {
-            info!(
-                LOGGER.0,
-                "get_cpus(); could not read /sys/devices/system/cpu/online; error: {:?}", e
-            );
-            OxidebpfError::FileIOError
-        },
-    )?)
-    .map_err(|e| {
-        info!(
-            LOGGER.0,
-            "get_cpus(); utf8 string conversion error while getting cpus; error: {:?}", e
-        );
-        OxidebpfError::Utf8StringConversionError
-    })?;
-    process_cpu_string(cpu_string)
 }
 
 pub(crate) enum PerfEvent {
@@ -333,7 +264,7 @@ impl PerfMap {
         let mmap_size = page_size * (page_count + 1);
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
-        for cpuid in get_cpus()?.iter() {
+        for cpuid in cpu_info::online()?.iter() {
             let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
             let base_ptr: *mut _;
             base_ptr = unsafe {
@@ -956,7 +887,6 @@ fn lte_power_of_two(n: usize) -> usize {
 #[cfg(test)]
 mod map_tests {
     use crate::error::OxidebpfError;
-    use crate::maps::process_cpu_string;
     use crate::maps::RWMap;
     use crate::maps::{ArrayMap, BpfHashMap};
     use nix::errno::Errno;
@@ -968,19 +898,6 @@ mod map_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("All time is broken!!");
         seed_time.as_millis() as u64
-    }
-
-    #[test]
-    fn test_cpu_formatter() {
-        assert_eq!(vec![0], process_cpu_string("0".to_string()).unwrap());
-        assert_eq!(
-            vec![0, 1, 2],
-            process_cpu_string("0-2".to_string()).unwrap()
-        );
-        assert_eq!(
-            vec![0, 3, 4, 5, 8],
-            process_cpu_string("0,3-5,8".to_string()).unwrap()
-        );
     }
 
     // Test the normal behavior of the array map type
