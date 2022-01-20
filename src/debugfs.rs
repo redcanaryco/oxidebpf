@@ -10,7 +10,7 @@ use crate::error::OxidebpfError;
 use crate::LOGGER;
 
 /// Returns the path where `debugfs` is mounted or None if unable to locate.
-pub(crate) fn get_debugfs_mount_point() -> Option<String> {
+pub fn mount_point() -> Option<String> {
     let mount_iter = match MountIter::new() {
         Ok(mount_iter) => mount_iter,
         Err(e) => {
@@ -26,8 +26,8 @@ pub(crate) fn get_debugfs_mount_point() -> Option<String> {
 }
 
 /// Mounts debugfs to the specified location if it hasn't been mounted already.
-pub(crate) fn mount_debugfs_if_missing(mount_location: &str) -> Result<(), OxidebpfError> {
-    if get_debugfs_mount_point().is_some() {
+pub fn mount_if_missing(mount_location: &str) -> Result<(), OxidebpfError> {
+    if mount_point().is_some() {
         return Ok(());
     }
 

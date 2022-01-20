@@ -10,7 +10,7 @@ use libc::{syscall, SYS_perf_event_open, SYS_setns, CLONE_NEWNS};
 use nix::errno::errno;
 use nix::{ioctl_none, ioctl_write_int};
 
-use crate::debugfs::get_debugfs_mount_point;
+use crate::debugfs::mount_point;
 use crate::error::OxidebpfError;
 use crate::perf::constant::perf_flag::PERF_FLAG_FD_CLOEXEC;
 
@@ -114,7 +114,7 @@ pub(crate) fn perf_event_open_debugfs(
         }
     };
 
-    let debugfs_path = get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
+    let debugfs_path = mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
     let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
     info!(
         LOGGER.0,
@@ -293,7 +293,7 @@ fn perf_attach_tracepoint_with_debugfs(
 
     let config = std::fs::read_to_string(format!(
         "{}/tracing/events/{}/id",
-        get_debugfs_mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
+        mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string()),
         event_path
     ))
     .map_err(|_| {
@@ -469,7 +469,7 @@ pub(crate) fn attach_kprobe_debugfs(
             } else {
                 info!(
                     LOGGER.0,
-                    "attach_kprobe_debugfs(); perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry - event_path: {}", 
+                    "attach_kprobe_debugfs(); perf_attach_tracepoint_with_debugfs returned an error and probe is not a retprobe - cannot retry - event_path: {}",
                     event_path,
                 );
                 Err(OxidebpfError::FileIOError)
