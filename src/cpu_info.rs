@@ -30,6 +30,7 @@ pub fn max_possible_index() -> Result<usize, OxidebpfError> {
 
 fn max_index(cpu_string: &str) -> Result<usize, OxidebpfError> {
     let last = cpu_string
+        .trim()
         .split(',')
         .last()
         .ok_or(OxidebpfError::CpuOnlineFormatError)?;
@@ -111,7 +112,7 @@ mod tests {
 
     #[test]
     fn combination() {
-        let result = max_index("0,3-5,8").expect("did not parse cpu_string");
+        let result = max_index("0,3-5,8\n").expect("did not parse cpu_string");
         assert_eq!(result, 8);
     }
 
