@@ -810,6 +810,7 @@ impl ProgramVersion<'_> {
         let mut tailcall_tables = HashMap::new();
 
         let mut perfmap_opts = None;
+        let perfmap_entries = cpu_info::max_possible_index()? as u32 + 1;
 
         for program_object in matching_blueprints.iter_mut() {
             for name in program_object.required_maps().iter() {
@@ -830,8 +831,7 @@ impl ProgramVersion<'_> {
                     match map.definition.map_type {
                         bpf_map_type::BPF_MAP_TYPE_PERF_EVENT_ARRAY => {
                             if map.definition.max_entries == 0 {
-                                map.definition.max_entries =
-                                    cpu_info::max_possible_index()? as u32 + 1;
+                                map.definition.max_entries = perfmap_entries
                             };
 
                             let fd = unsafe {
