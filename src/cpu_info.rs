@@ -3,23 +3,15 @@ use slog::info;
 use crate::{OxidebpfError, LOGGER};
 
 pub fn online() -> Result<Vec<i32>, OxidebpfError> {
-    let cpu_string = String::from_utf8(std::fs::read("/sys/devices/system/cpu/online").map_err(
-        |e| {
-            info!(
-                LOGGER.0,
-                "get_cpus(); could not read /sys/devices/system/cpu/online; error: {:?}", e
-            );
-            OxidebpfError::FileIOError
-        },
-    )?)
-    .map_err(|e| {
+    let cpu_string = std::fs::read_to_string("/sys/devices/system/cpu/online").map_err(|e| {
         info!(
             LOGGER.0,
-            "get_cpus(); utf8 string conversion error while getting cpus; error: {:?}", e
+            "get_cpus(); could not read /sys/devices/system/cpu/online; error: {:?}", e
         );
-        OxidebpfError::Utf8StringConversionError
+        OxidebpfError::FileIOError
     })?;
-    process_cpu_string(cpu_string)
+
+    process_cpu_string(&cpu_string)
 }
 
 pub fn max_possible_index() -> Result<usize, OxidebpfError> {
@@ -52,7 +44,7 @@ fn max_index(cpu_string: &str) -> Result<usize, OxidebpfError> {
         .map_err(|_| OxidebpfError::CpuOnlineFormatError)
 }
 
-fn process_cpu_string(cpu_string: String) -> Result<Vec<i32>, OxidebpfError> {
+fn process_cpu_string(cpu_string: &str) -> Result<Vec<i32>, OxidebpfError> {
     let mut cpus = vec![];
 
     for sublist in cpu_string.trim().split(',') {
@@ -125,14 +117,8 @@ mod tests {
 
     #[test]
     fn test_cpu_formatter() {
-        assert_eq!(vec![0], process_cpu_string("0".to_string()).unwrap());
-        assert_eq!(
-            vec![0, 1, 2],
-            process_cpu_string("0-2".to_string()).unwrap()
-        );
-        assert_eq!(
-            vec![0, 3, 4, 5, 8],
-            process_cpu_string("0,3-5,8".to_string()).unwrap()
-        );
+        assert_eq!(vec![0], process_cpu_string("0").unwrap());
+        assert_eq!(vec![0, 1, 2], process_cpu_string("0-2").unwrap());
+        assert_eq!(vec![0, 3, 4, 5, 8], process_cpu_string("0,3-5,8").unwrap());
     }
 }
