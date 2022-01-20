@@ -46,7 +46,7 @@ for debugging and testing. It allows you to trace BPF calls during tests by runn
 
 Here's some quick steps to get you started right away.
 
-1. Add `oxidebpf` to your `Cargo.toml`, if you wish to use perfmaps you should 
+1. Add `oxidebpf` to your `Cargo.toml`, if you wish to use perfmaps you should
 also add `crossbeam-channel`.
 2. Use the `ProgramBlueprint` to load your compiled eBPF object file with
 maps and programs.
@@ -81,7 +81,7 @@ program_group.load(
         .syscall(true),
         Program::new("test_program", vec!["do_mount"]).syscall(true),
     ])],
-    || (tx, 4096),
+    || (tx, PerfBufferSize::Total(4096))),
 ).expect("Could not load programs");
 
 // read from rx any events from a perfmap in the loaded program version

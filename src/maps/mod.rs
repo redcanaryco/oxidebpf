@@ -19,6 +19,7 @@ use crate::error::OxidebpfError;
 use crate::perf::constant::perf_event_type;
 use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
 use crate::perf::PerfEventAttr;
+use crate::program_version::PerfBufferSize;
 use slog::info;
 use std::fmt::{Debug, Display, Formatter};
 
@@ -224,7 +225,7 @@ impl PerfMap {
     pub fn new_group(
         map_name: &str,
         event_attr: PerfEventAttr,
-        event_buffer_size: usize,
+        event_buffer_size: PerfBufferSize,
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
         let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
             size if size < 0 => {
@@ -254,7 +255,12 @@ impl PerfMap {
                 return Err(OxidebpfError::BadPageSize);
             }
         };
-        let page_count = (event_buffer_size as f64 / page_size as f64).ceil() as usize;
+        let online_cpus = cpu_info::online()?;
+        let buffer_size = match event_buffer_size {
+            PerfBufferSize::PerCpu(size) => size,
+            PerfBufferSize::Total(total) => total / online_cpus.len(),
+        };
+        let page_count = (buffer_size as f64 / page_size as f64).ceil() as usize;
         if page_count == 0 {
             info!(LOGGER.0, "PerfMap::new_group(); bad page count (0)");
             return Err(OxidebpfError::BadPageCount);
@@ -264,8 +270,8 @@ impl PerfMap {
         let mmap_size = page_size * (page_count + 1);
 
         let mut loaded_perfmaps = Vec::<PerfMap>::new();
-        for cpuid in cpu_info::online()?.iter() {
-            let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, *cpuid, -1, 0)?;
+        for cpuid in online_cpus {
+            let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, cpuid, -1, 0)?;
             let base_ptr: *mut _;
             base_ptr = unsafe {
                 libc::mmap(
@@ -316,7 +322,7 @@ impl PerfMap {
                 page_count,
                 page_size,
                 mmap_size,
-                cpuid: *cpuid,
+                cpuid,
                 ev_fd: fd,
                 ev_name: "".to_string(),
             });
