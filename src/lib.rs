@@ -810,6 +810,11 @@ impl ProgramVersion<'_> {
         let mut tailcall_tables = HashMap::new();
 
         let mut perfmap_opts = None;
+
+        #[cfg(any(test, doctest))]
+        let perfmap_entries = 1;
+
+        #[cfg(not(any(test, doctest)))]
         let perfmap_entries = cpu_info::max_possible_index()? as u32 + 1;
 
         for program_object in matching_blueprints.iter_mut() {
