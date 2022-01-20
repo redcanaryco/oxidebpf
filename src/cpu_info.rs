@@ -6,7 +6,7 @@ pub fn online() -> Result<Vec<i32>, OxidebpfError> {
     let cpu_string = std::fs::read_to_string("/sys/devices/system/cpu/online").map_err(|e| {
         info!(
             LOGGER.0,
-            "get_cpus(); could not read /sys/devices/system/cpu/online; error: {:?}", e
+            "cpu_info::online(); could not read /sys/devices/system/cpu/online; error: {:?}", e
         );
         OxidebpfError::FileIOError
     })?;
@@ -19,7 +19,7 @@ pub fn max_possible_index() -> Result<usize, OxidebpfError> {
         |e| {
             info!(
                 LOGGER.0,
-                "get_possible_cpu_count(); could not read /sys/devices/system/cpu/possible; error: {:?}", e
+                "cpu_info::max_possible_index(); could not read /sys/devices/system/cpu/possible; error: {:?}", e
             );
             OxidebpfError::FileIOError
         },
