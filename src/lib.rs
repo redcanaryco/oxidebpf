@@ -200,11 +200,19 @@ impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
     fn from(policy: SchedulingPolicy) -> Self {
         match policy {
             SchedulingPolicy::Other(_) | SchedulingPolicy::Idle | SchedulingPolicy::Batch(_) => {
-                thread_priority::ThreadPriority::Specific(0)
+                thread_priority::ThreadPriority::Crossplatform(
+                    (0_u8)
+                        .try_into()
+                        .expect("bug: hardcoded priority value not accepted by thread_policy"),
+                )
             }
             SchedulingPolicy::FIFO(polling_priority) | SchedulingPolicy::RR(polling_priority) => {
-                // this crate only accepts priorities 1-99 inclusive, so bump up a 0 to 1
-                thread_priority::ThreadPriority::Specific(polling_priority.clamp(1, 99) as u32)
+                thread_priority::ThreadPriority::Crossplatform(
+                    polling_priority
+                        .clamp(0_u8, 99_u8)
+                        .try_into()
+                        .expect("bug: clamped priority value not accepted by thread_policy"),
+                )
             }
             SchedulingPolicy::Deadline(r, d, p) => {
                 thread_priority::ThreadPriority::Deadline(r, d, p)
