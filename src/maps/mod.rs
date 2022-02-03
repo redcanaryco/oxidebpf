@@ -227,34 +227,7 @@ impl PerfMap {
         event_attr: PerfEventAttr,
         event_buffer_size: PerfBufferSize,
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
-        let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
-            size if size < 0 => {
-                let e = errno();
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, size < 0: {}; errno: {}", size, e
-                );
-                return Err(OxidebpfError::LinuxError(
-                    "perf map get PAGE_SIZE".to_string(),
-                    nix::errno::from_i32(e),
-                ));
-            }
-            size if size == 0 => {
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, bad page size (size == 0)"
-                );
-                return Err(OxidebpfError::BadPageSize);
-            }
-            size if size > 0 => size as usize,
-            size => {
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, impossible page size: {}", size
-                );
-                return Err(OxidebpfError::BadPageSize);
-            }
-        };
+        let page_size = page_size()?;
         let online_cpus = cpu_info::online()?;
         let buffer_size = match event_buffer_size {
             PerfBufferSize::PerCpu(size) => size,
@@ -269,65 +242,27 @@ impl PerfMap {
         let page_count = lte_power_of_two(page_count);
         let mmap_size = page_size * (page_count + 1);
 
-        let mut loaded_perfmaps = Vec::<PerfMap>::new();
-        for cpuid in online_cpus {
-            let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, cpuid, -1, 0)?;
-            let base_ptr: *mut _;
-            base_ptr = unsafe {
-                libc::mmap(
-                    null_mut(),
+        online_cpus
+            .into_iter()
+            .map(|cpuid| {
+                let fd: RawFd =
+                    crate::perf::syscall::perf_event_open(&event_attr, -1, cpuid, -1, 0)?;
+                let base_ptr = unsafe { create_raw_perf(fd, mmap_size) }?;
+
+                perf_event_ioc_enable(fd)?;
+
+                Ok(PerfMap {
+                    name: map_name.to_owned(),
+                    base_ptr: AtomicPtr::new(base_ptr),
+                    page_count,
+                    page_size,
                     mmap_size,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    fd,
-                    0,
-                )
-            };
-            if base_ptr == libc::MAP_FAILED {
-                let mmap_errno = nix::errno::from_i32(errno());
-                unsafe {
-                    if libc::close(fd) < 0 {
-                        let e = errno();
-                        info!(
-                            LOGGER.0,
-                            "PerfMap::new_group(); could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}",
-                            mmap_errno,
-                            e
-                        );
-                        return Err(OxidebpfError::MultipleErrors(vec![
-                            OxidebpfError::LinuxError(
-                                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
-                                mmap_errno,
-                            ),
-                            OxidebpfError::LinuxError(
-                                format!("perf_map cleanup => close({})", fd),
-                                nix::errno::from_i32(e),
-                            ),
-                        ]));
-                    }
-                };
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); mmap failed while creating perfmap: {:?}", mmap_errno
-                );
-                return Err(OxidebpfError::LinuxError(
-                    format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
-                    mmap_errno,
-                ));
-            }
-            perf_event_ioc_enable(fd)?;
-            loaded_perfmaps.push(PerfMap {
-                name: map_name.to_string(),
-                base_ptr: AtomicPtr::new(base_ptr as *mut PerfMem),
-                page_count,
-                page_size,
-                mmap_size,
-                cpuid,
-                ev_fd: fd,
-                ev_name: "".to_string(),
-            });
-        }
-        Ok(loaded_perfmaps)
+                    cpuid,
+                    ev_fd: fd,
+                    ev_name: "".to_owned(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn read(&self) -> Result<Option<PerfEvent>, OxidebpfError> {
@@ -342,6 +277,9 @@ impl PerfMap {
         unsafe {
             base = (header as *const u8).add(self.page_size);
             data_head = (*header).data_head;
+            // per the docs: "On SMP-capable platforms, after reading
+            // the data_head value, user space should issue an rmb()"
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
             data_tail = (*header).data_tail;
             start = (data_tail % raw_size) as usize;
             event = base.add(start) as *const PerfEventHeader;
@@ -864,8 +802,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
 impl Drop for PerfMap {
     fn drop(&mut self) {
         // if it doesn't work, we're gonna close it anyway so :shrug:
-        #![allow(unused_must_use)]
-        perf_event_ioc_disable(self.ev_fd);
+        let _ = perf_event_ioc_disable(self.ev_fd);
         unsafe {
             libc::close(self.ev_fd);
         }
@@ -888,6 +825,84 @@ fn lte_power_of_two(n: usize) -> usize {
         None => 1 << (usize::BITS - 1),
         Some(x) => x >> 1,
     }
+}
+
+fn page_size() -> Result<usize, OxidebpfError> {
+    let raw_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
+
+    match raw_size.cmp(&0) {
+        std::cmp::Ordering::Less => {
+            let e = errno();
+            info!(
+                LOGGER.0,
+                "PerfMap::new_group(); perfmap error, size < 0: {}; errno: {}", raw_size, e
+            );
+            Err(OxidebpfError::LinuxError(
+                "perf map get PAGE_SIZE".to_string(),
+                nix::errno::from_i32(e),
+            ))
+        }
+        std::cmp::Ordering::Equal => {
+            info!(
+                LOGGER.0,
+                "PerfMap::new_group(); perfmap error, bad page size (size == 0)"
+            );
+            Err(OxidebpfError::BadPageSize)
+        }
+        std::cmp::Ordering::Greater => Ok(raw_size as usize),
+    }
+}
+
+/// Creates a new PerfMem for the given file descriptor.
+///
+/// On error it will attempt to close the file descriptor and report
+/// if it failed to close it.
+///
+/// # Safety:
+/// The fd has be a valid from a perf_event_open syscall
+unsafe fn create_raw_perf(fd: RawFd, mmap_size: usize) -> Result<*mut PerfMem, OxidebpfError> {
+    let base_ptr = libc::mmap(
+        null_mut(),
+        mmap_size,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        fd,
+        0,
+    );
+
+    if base_ptr == libc::MAP_FAILED {
+        Err(handle_map_failed(fd, mmap_size))
+    } else {
+        Ok(base_ptr as *mut PerfMem)
+    }
+}
+
+unsafe fn handle_map_failed(fd: RawFd, mmap_size: usize) -> OxidebpfError {
+    let mmap_errno = nix::errno::from_i32(errno());
+    if libc::close(fd) < 0 {
+        let e = errno();
+        info!(LOGGER.0, "PerfMap::new_group(); could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}", mmap_errno, e);
+        return OxidebpfError::MultipleErrors(vec![
+            OxidebpfError::LinuxError(
+                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
+                mmap_errno,
+            ),
+            OxidebpfError::LinuxError(
+                format!("perf_map cleanup => close({})", fd),
+                nix::errno::from_i32(e),
+            ),
+        ]);
+    }
+
+    info!(
+        LOGGER.0,
+        "PerfMap::new_group(); mmap failed while creating perfmap: {:?}", mmap_errno
+    );
+
+    OxidebpfError::LinuxError(
+        format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
+        mmap_errno,
+    )
 }
 
 #[cfg(test)]

@@ -203,8 +203,7 @@ pub(crate) fn perf_event_open(
     group_fd: RawFd, // SAFETY: this is only ever called with `group_id = -1`
     flags: c_ulong,
 ) -> Result<RawFd, OxidebpfError> {
-    #![allow(clippy::useless_conversion)] // fails to compile otherwise
-    if !((*PERF_PATH).as_path().exists()) {
+    if !((*PERF_PATH).exists()) {
         info!(LOGGER.0, "perf_event_open(); PERF_PATH does not exist");
         return Err(OxidebpfError::PerfEventDoesNotExist);
     }
@@ -269,14 +268,12 @@ pub(crate) fn perf_event_ioc_set_bpf(perf_fd: RawFd, data: u32) -> Result<i32, O
 
 /// Safe wrapper around `u_perf_event_ioc_enable()`
 pub(crate) fn perf_event_ioc_enable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    #![allow(clippy::redundant_closure)]
-    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
+    unsafe { u_perf_event_ioc_enable(perf_fd).map_err(OxidebpfError::PerfIoctlError) }
 }
 
 /// Safe wrapper around `u_perf_event_ioc_disable()`
 pub(crate) fn perf_event_ioc_disable(perf_fd: RawFd) -> Result<i32, OxidebpfError> {
-    #![allow(clippy::redundant_closure)]
-    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(|e| OxidebpfError::PerfIoctlError(e)) }
+    unsafe { u_perf_event_ioc_disable(perf_fd).map_err(OxidebpfError::PerfIoctlError) }
 }
 
 fn perf_attach_tracepoint_with_debugfs(
