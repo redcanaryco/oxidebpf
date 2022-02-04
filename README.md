@@ -137,7 +137,7 @@ currently reports on:
 
 * `poller.channel.full`: A counter of how many times we tried to send
   a dropped message across the user provided channel for perfmaps but
-  failed to it being full. The map name is reported as a label.
+  failed due to it being full. The map name is reported as a label.
 
 Adding or removing metrics will not be considered a breaking change at
 this point but we may reconsider this decision in the future as we
