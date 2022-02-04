@@ -285,7 +285,7 @@ struct PerfEventIterator<'a> {
     data_tail: u64,
     data_head: u64,
     errored: bool,
-    copy_buf: Vec<u8>, // re-usable buffer to make ring joints be contigous
+    copy_buf: Vec<u8>, // re-usable buffer to make ring joins be contiguous
 
     // calculated at creation
     mmap_size: usize,
@@ -363,8 +363,8 @@ impl<'a> Iterator for PerfEventIterator<'a> {
             // only update the internal tail for now. We will update
             // the actual tail when dropping the iterator. It would be
             // safe to update the tail now though since the data is
-            // coped. We could consider modifying the tail sooner if
-            // we aren't sending events fast enough in the ftuure.
+            // copied. We could consider modifying the tail sooner if
+            // we aren't sending events fast enough in the future.
             self.data_tail += event_size as u64;
 
             if event.is_err() {
@@ -882,7 +882,7 @@ fn page_size() -> Result<usize, OxidebpfError> {
 /// if it failed to close it.
 ///
 /// # Safety:
-/// The fd has be a valid from a perf_event_open syscall
+/// The fd must be valid and come from a perf_event_open syscall
 unsafe fn create_raw_perf(fd: RawFd, mmap_size: usize) -> Result<*mut PerfMem, OxidebpfError> {
     let base_ptr = libc::mmap(
         null_mut(),
