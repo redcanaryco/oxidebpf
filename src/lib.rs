@@ -854,6 +854,7 @@ mod program_tests {
 
 #[cfg(test)]
 mod scheduling_tests {
+    use std::convert::TryInto;
     use thread_priority::ThreadPriority;
 
     use super::*;

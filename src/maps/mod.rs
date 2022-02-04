@@ -299,7 +299,7 @@ struct PerfEventIterator<'a> {
 
     // technically not needed but it gives us the lifetime we need to
     // prevent the iterator outliving the perfmap
-    _map: &'a PerfMap,
+    _marker: std::marker::PhantomData<&'a PerfMap>,
 }
 
 impl<'a> PerfEventIterator<'a> {
@@ -307,25 +307,40 @@ impl<'a> PerfEventIterator<'a> {
         // the first page is just metadata
         let metadata = map.base_ptr.load(Ordering::SeqCst);
 
-        unsafe {
-            // second page onwards is where the data starts
-            let base = (metadata as *const u8).add(map.page_size);
+        // second page onwards is where the data starts
+        let base = unsafe { (metadata as *const u8).add(map.page_size) };
 
-            // per the docs: "On SMP-capable platforms, after reading
-            // the data_head value, user space should issue an rmb()"
-            let data_head = (*metadata).data_head;
-            atomic::fence(std::sync::atomic::Ordering::Acquire);
+        // per the docs: "On SMP-capable platforms, after reading
+        // the data_head value, user space should issue an rmb()"
+        let data_head = unsafe { (*metadata).data_head };
+        atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-            PerfEventIterator {
-                data_tail: (*metadata).data_tail,
-                data_head,
-                errored: false,
-                copy_buf: vec![],
-                mmap_size: map.page_count * map.page_size,
-                base,
-                metadata,
-                _map: map,
-            }
+        let data_tail = unsafe { (*metadata).data_tail };
+
+        let mmap_size = map.page_count * map.page_size;
+
+        #[cfg(feature = "metrics")]
+        {
+            let unread = (data_head - data_tail) % mmap_size as u64;
+
+            let labels = [
+                ("map_name", map.name.clone()),
+                ("cpu", map.cpuid.to_string()),
+            ];
+
+            metrics::gauge!("mmap.total_size", mmap_size as f64, &labels);
+            metrics::histogram!("mmap.unread_size", unread as f64, &labels);
+        }
+
+        PerfEventIterator {
+            data_tail,
+            data_head,
+            errored: false,
+            copy_buf: vec![],
+            mmap_size,
+            base,
+            metadata,
+            _marker: std::marker::PhantomData,
         }
     }
 }
