@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use std::io::Write;
 use std::os::linux::fs::MetadataExt;
 use std::os::raw::{c_int, c_ulong};
