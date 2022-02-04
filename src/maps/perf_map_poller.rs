@@ -101,8 +101,8 @@ impl PerfMapPoller {
             });
 
         let mut dropped = 0;
-        for event in perf_events {
-            match event.2 {
+        for (map_name, cpuid, event) in perf_events {
+            match event {
                 PerfEvent::Lost(count) => {
                     dropped += count;
                     // it's okay if the channel is full try again
@@ -114,11 +114,11 @@ impl PerfMapPoller {
                         Err(TrySendError::Full(_)) => {}
                     }
                 }
-                PerfEvent::Sample(e) => tx
+                PerfEvent::Sample(data) => tx
                     .send(PerfChannelMessage::Event {
-                        map_name: event.0,
-                        cpuid: event.1,
-                        data: e.data,
+                        map_name,
+                        cpuid,
+                        data,
                     })
                     .map_err(|_| RunError::Disconnected)?,
             };
