@@ -297,8 +297,8 @@ struct PerfEventIterator<'a> {
     base: *const u8,
     metadata: *mut PerfMem,
 
-    // technically not needed but it gives us the lifetime we need to
-    // prevent the iterator outliving the perfmap
+    // gives us the lifetime we need to prevent the iterator outliving
+    // the perfmap
     _marker: std::marker::PhantomData<&'a PerfMap>,
 }
 
