@@ -1,29 +1,36 @@
 pub(crate) mod perf_map_poller;
 
-use std::convert::TryInto;
-use std::iter::FusedIterator;
-use std::os::raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort};
-use std::os::unix::io::RawFd;
-use std::ptr::null_mut;
-use std::slice;
-use std::sync::atomic;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::{
+    fmt::{Debug, Display, Formatter},
+    iter::FusedIterator,
+    os::{
+        raw::{c_long, c_uchar, c_uint, c_ulong, c_ushort},
+        unix::io::RawFd,
+    },
+    ptr::null_mut,
+    slice,
+    sync::atomic::{self, AtomicPtr, Ordering},
+};
+
+use crate::{
+    bpf::{
+        constant::bpf_map_type::{self, BPF_MAP_TYPE_PROG_ARRAY},
+        syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem},
+        MapConfig,
+    },
+    cpu_info,
+    error::OxidebpfError,
+    perf::{
+        constant::perf_event_type,
+        syscall::{perf_event_ioc_disable, perf_event_ioc_enable},
+        PerfEventAttr,
+    },
+    program_version::PerfBufferSize,
+    LOGGER,
+};
 
 use nix::errno::errno;
-
-use crate::bpf::constant::bpf_map_type;
-use crate::bpf::constant::bpf_map_type::BPF_MAP_TYPE_PROG_ARRAY;
-use crate::bpf::syscall::{bpf_map_create, bpf_map_lookup_elem, bpf_map_update_elem};
-use crate::bpf::MapConfig;
-use crate::error::OxidebpfError;
-use crate::perf::constant::perf_event_type;
-use crate::perf::syscall::{perf_event_ioc_disable, perf_event_ioc_enable};
-use crate::perf::PerfEventAttr;
-use crate::program_version::PerfBufferSize;
 use slog::info;
-use std::fmt::{Debug, Display, Formatter};
-
-use crate::{cpu_info, LOGGER};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -42,30 +49,18 @@ pub struct PerfEventLostSamples {
 #[repr(C)]
 pub struct PerfEventSample {
     header: PerfEventHeader,
-    pub size: u32,
-    pub data: Vec<u8>,
+    size: u32,
+    // array to data of len `size` stored as as char[1] because Rust's
+    // DST and C's DST are are not FFI compatible. This needs to be a
+    // char[] to avoid padding issues since chars are special in c
+    // padding (in that they do not get pre-padded)
+    data: [std::os::raw::c_char; 1],
 }
 
+#[derive(Debug)]
 pub(crate) enum PerfEvent {
-    Sample(PerfEventSample),
+    Sample(Vec<u8>),
     Lost(u64),
-}
-
-impl Debug for PerfEvent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                PerfEvent::Sample(s) => {
-                    format!("SAMPLE: {}", s.size)
-                }
-                PerfEvent::Lost(l) => {
-                    format!("LOST: {}", l)
-                }
-            }
-        )
-    }
 }
 
 #[repr(align(8), C)]
@@ -227,34 +222,7 @@ impl PerfMap {
         event_attr: PerfEventAttr,
         event_buffer_size: PerfBufferSize,
     ) -> Result<Vec<PerfMap>, OxidebpfError> {
-        let page_size = match unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) } {
-            size if size < 0 => {
-                let e = errno();
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, size < 0: {}; errno: {}", size, e
-                );
-                return Err(OxidebpfError::LinuxError(
-                    "perf map get PAGE_SIZE".to_string(),
-                    nix::errno::from_i32(e),
-                ));
-            }
-            size if size == 0 => {
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, bad page size (size == 0)"
-                );
-                return Err(OxidebpfError::BadPageSize);
-            }
-            size if size > 0 => size as usize,
-            size => {
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); perfmap error, impossible page size: {}", size
-                );
-                return Err(OxidebpfError::BadPageSize);
-            }
-        };
+        let page_size = page_size()?;
         let online_cpus = cpu_info::online()?;
         let buffer_size = match event_buffer_size {
             PerfBufferSize::PerCpu(size) => size,
@@ -269,194 +237,194 @@ impl PerfMap {
         let page_count = lte_power_of_two(page_count);
         let mmap_size = page_size * (page_count + 1);
 
-        let mut loaded_perfmaps = Vec::<PerfMap>::new();
-        for cpuid in online_cpus {
-            let fd: RawFd = crate::perf::syscall::perf_event_open(&event_attr, -1, cpuid, -1, 0)?;
-            let base_ptr: *mut _;
-            base_ptr = unsafe {
-                libc::mmap(
-                    null_mut(),
+        online_cpus
+            .into_iter()
+            .map(|cpuid| {
+                let fd: RawFd =
+                    crate::perf::syscall::perf_event_open(&event_attr, -1, cpuid, -1, 0)?;
+                let base_ptr = unsafe { create_raw_perf(fd, mmap_size) }?;
+
+                perf_event_ioc_enable(fd)?;
+
+                Ok(PerfMap {
+                    name: map_name.to_owned(),
+                    base_ptr: AtomicPtr::new(base_ptr),
+                    page_count,
+                    page_size,
                     mmap_size,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    fd,
-                    0,
-                )
-            };
-            if base_ptr == libc::MAP_FAILED {
-                let mmap_errno = nix::errno::from_i32(errno());
-                unsafe {
-                    if libc::close(fd) < 0 {
-                        let e = errno();
-                        info!(
-                            LOGGER.0,
-                            "PerfMap::new_group(); could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}",
-                            mmap_errno,
-                            e
-                        );
-                        return Err(OxidebpfError::MultipleErrors(vec![
-                            OxidebpfError::LinuxError(
-                                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
-                                mmap_errno,
-                            ),
-                            OxidebpfError::LinuxError(
-                                format!("perf_map cleanup => close({})", fd),
-                                nix::errno::from_i32(e),
-                            ),
-                        ]));
-                    }
-                };
-                info!(
-                    LOGGER.0,
-                    "PerfMap::new_group(); mmap failed while creating perfmap: {:?}", mmap_errno
-                );
-                return Err(OxidebpfError::LinuxError(
-                    format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
-                    mmap_errno,
-                ));
-            }
-            perf_event_ioc_enable(fd)?;
-            loaded_perfmaps.push(PerfMap {
-                name: map_name.to_string(),
-                base_ptr: AtomicPtr::new(base_ptr as *mut PerfMem),
-                page_count,
-                page_size,
-                mmap_size,
-                cpuid,
-                ev_fd: fd,
-                ev_name: "".to_string(),
-            });
-        }
-        Ok(loaded_perfmaps)
-    }
-
-    pub(crate) fn read(&self) -> Result<Option<PerfEvent>, OxidebpfError> {
-        let header = self.base_ptr.load(Ordering::SeqCst);
-        let raw_size = (self.page_count * self.page_size) as u64;
-        let base: *const u8;
-        let data_head: u64;
-        let data_tail: u64;
-        let event: *const PerfEventHeader;
-        let start: usize;
-        let end: usize;
-        unsafe {
-            base = (header as *const u8).add(self.page_size);
-            data_head = (*header).data_head;
-            data_tail = (*header).data_tail;
-            start = (data_tail % raw_size) as usize;
-            event = base.add(start) as *const PerfEventHeader;
-            end = ((data_tail + (*event).size as u64) % raw_size) as usize;
-        }
-        if data_head == data_tail {
-            // common and nonfatal - do not log
-            return Err(OxidebpfError::NoPerfData);
-        }
-
-        let mut buf = Vec::<u8>::new();
-
-        unsafe {
-            if end < start {
-                let len = raw_size as usize - start;
-                let ptr = base.add(start);
-                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
-
-                let len = (*event).size as usize - len;
-                let ptr = base;
-                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
-            } else {
-                let ptr = base.add(start);
-                let len = (*event).size as usize;
-                buf.extend_from_slice(slice::from_raw_parts(ptr, len));
-            }
-
-            atomic::fence(Ordering::SeqCst);
-            (*header).data_tail += (*event).size as u64;
-
-            match (*event).type_ {
-                perf_event_type::PERF_RECORD_SAMPLE => {
-                    use std::mem::size_of;
-
-                    let header = {
-                        let header_bytes: [u8; size_of::<PerfEventHeader>()] = buf
-                            [..size_of::<PerfEventHeader>()]
-                            .try_into()
-                            .map_err(|_| OxidebpfError::BadPerfSample)?; // infallible, do not log
-                        std::ptr::read(header_bytes.as_ptr() as *const _)
-                    };
-
-                    let size = {
-                        let size_bytes: [u8; size_of::<u32>()] = buf[size_of::<PerfEventHeader>()
-                            ..(size_of::<u32>() + size_of::<PerfEventHeader>())]
-                            .try_into()
-                            .map_err(|_| OxidebpfError::BadPerfSample)?; // infallible, do not log
-                        u32::from_ne_bytes(size_bytes)
-                    };
-
-                    let data = {
-                        // drain the header + len fields; the rest is the data
-                        buf.drain(
-                            ..(std::mem::size_of::<PerfEventHeader>() + std::mem::size_of::<u32>()),
-                        )
-                        // might be unnecesary but I like this being explicit
-                        .for_each(|_| {});
-
-                        buf
-                    };
-
-                    let sample = PerfEventSample { header, size, data };
-                    Ok(Some(PerfEvent::Sample(sample)))
-                }
-                perf_event_type::PERF_RECORD_LOST => {
-                    let lost = &*(buf.as_ptr() as *const PerfEventLostSamples);
-                    Ok(Some(PerfEvent::Lost(lost.count)))
-                }
-                _ => Ok(None),
-            }
-        }
+                    cpuid,
+                    ev_fd: fd,
+                    ev_name: "".to_owned(),
+                })
+            })
+            .collect()
     }
 
     /// Reads all available events
     ///
-    /// Stops reading either on a real error (and propagates it) or on
-    /// a OxidebpfError::NoPerfData and returns `None`.
-    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
-        PerfEventIterator {
-            map: self,
-            is_done: false,
-        }
+    /// Stops reading if it encounters an unexpected perf event.
+    ///
+    /// When the returned iterator is dropped it internally marks the
+    /// data as "read" so the ebpf program can re-use that
+    /// data. Because of this we should process the iterator fast as
+    /// to free space for more events.
+    ///
+    /// # Safety
+    ///
+    /// This is only safe if a single iterator is running per perfmap.
+    /// This function is marked as `&self` for easiness of use and
+    /// because it is internal only but it probably should be `&mut
+    /// self`. When the iterator is dropped it internally changes data
+    /// in the mmap that the kernel manages (data_tail to be precise)
+    /// to tell it what is the last bit we read so we shouldn't have
+    /// multiple mutations at the same time.
+    pub(crate) unsafe fn read_all(
+        &self,
+    ) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
+        PerfEventIterator::new(self)
     }
 }
 
 struct PerfEventIterator<'a> {
-    map: &'a PerfMap,
-    is_done: bool,
+    // modified by iterator
+    data_tail: u64,
+    data_head: u64,
+    errored: bool,
+    copy_buf: Vec<u8>, // re-usable buffer to make ring joins be contiguous
+
+    // calculated at creation
+    mmap_size: usize,
+    base: *const u8,
+    metadata: *mut PerfMem,
+
+    // technically not needed but it gives us the lifetime we need to
+    // prevent the iterator outliving the perfmap
+    _map: &'a PerfMap,
+}
+
+impl<'a> PerfEventIterator<'a> {
+    fn new(map: &'a PerfMap) -> Self {
+        // the first page is just metadata
+        let metadata = map.base_ptr.load(Ordering::SeqCst);
+
+        unsafe {
+            // second page onwards is where the data starts
+            let base = (metadata as *const u8).add(map.page_size);
+
+            // per the docs: "On SMP-capable platforms, after reading
+            // the data_head value, user space should issue an rmb()"
+            let data_head = (*metadata).data_head;
+            atomic::fence(std::sync::atomic::Ordering::Acquire);
+
+            PerfEventIterator {
+                data_tail: (*metadata).data_tail,
+                data_head,
+                errored: false,
+                copy_buf: vec![],
+                mmap_size: map.page_count * map.page_size,
+                base,
+                metadata,
+                _map: map,
+            }
+        }
+    }
 }
 
 impl<'a> Iterator for PerfEventIterator<'a> {
     type Item = Result<PerfEvent, OxidebpfError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.is_done {
+        if self.data_head == self.data_tail || self.errored {
             return None;
         }
 
-        match self.map.read() {
-            Ok(Some(event)) => Some(Ok(event)),
-            Ok(None) => self.next(),
-            Err(OxidebpfError::NoPerfData) => {
-                // we're done reading
-                self.is_done = true;
-                None
+        let start_offset = (self.data_tail % self.mmap_size as u64) as usize;
+
+        unsafe {
+            let mut header = self.base.add(start_offset) as *const PerfEventHeader;
+            let event_size = (*header).size as usize;
+            let capacity_remaining = self.mmap_size - start_offset;
+
+            if capacity_remaining < event_size {
+                // clear old data and reserve just enough for our event
+                self.copy_buf.clear();
+                self.copy_buf.reserve_exact(event_size);
+
+                // copy last remaining end bits of ring buffer
+                self.copy_buf.extend_from_slice(slice::from_raw_parts(
+                    header as *const u8,
+                    capacity_remaining,
+                ));
+
+                // wrap around start to copy first initial bits
+                self.copy_buf.extend_from_slice(slice::from_raw_parts(
+                    self.base,
+                    event_size - capacity_remaining,
+                ));
+
+                header = self.copy_buf.as_ptr() as *const PerfEventHeader;
             }
-            Err(e) => {
-                self.is_done = true;
-                Some(Err(e))
+
+            let event = read_event(header);
+
+            // only update the internal tail for now. We will update
+            // the actual tail when dropping the iterator. It would be
+            // safe to update the tail now though since the data is
+            // copied. We could consider modifying the tail sooner if
+            // we aren't sending events fast enough in the future.
+            self.data_tail += event_size as u64;
+
+            if event.is_err() {
+                // stop iteration on errors but still propagate that
+                // first error
+                self.errored = true;
             }
+
+            Some(event)
         }
     }
 }
 
-// after the first `None` we always return `None`
+/// Reads either a sample or a lost event. Errors for anything else
+///
+/// Safety: it has to come from a valid PerfEventHeader and have
+/// memory past the end of the header for the actual data of the event
+unsafe fn read_event(event: *const PerfEventHeader) -> Result<PerfEvent, OxidebpfError> {
+    match (*event).type_ {
+        perf_event_type::PERF_RECORD_SAMPLE => {
+            let sample = event as *const PerfEventSample;
+            let size = (*sample).size;
+            // data is saved as a char[1] but it is really a char[]
+            // (dynamic) in the stack. Rust doesn't like thin pointers
+            // to DSTs so we need to carefully get the pointer to the
+            // array so we can then make a Rust slice out of it.
+            let data = std::ptr::addr_of!((*sample).data) as *const u8;
+
+            // copies the data over which is not stricly necessary but
+            // avoids playing safety chess with std::mem::forget since
+            // we do not want to accidentally drop the data owned by
+            // the perf buffer
+            let data = std::slice::from_raw_parts(data, size as usize).to_vec();
+
+            Ok(PerfEvent::Sample(data))
+        }
+        perf_event_type::PERF_RECORD_LOST => {
+            let sample = event as *const PerfEventLostSamples;
+            Ok(PerfEvent::Lost((*sample).count))
+        }
+        unknown => Err(OxidebpfError::UnknownPerfEvent(unknown)),
+    }
+}
+
+impl Drop for PerfEventIterator<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            (*self.metadata).data_tail = self.data_tail;
+        }
+    }
+}
+
 impl<'a> FusedIterator for PerfEventIterator<'a> {}
 
 impl PerCpu for PerfMap {
@@ -864,8 +832,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
 impl Drop for PerfMap {
     fn drop(&mut self) {
         // if it doesn't work, we're gonna close it anyway so :shrug:
-        #![allow(unused_must_use)]
-        perf_event_ioc_disable(self.ev_fd);
+        let _ = perf_event_ioc_disable(self.ev_fd);
         unsafe {
             libc::close(self.ev_fd);
         }
@@ -888,6 +855,84 @@ fn lte_power_of_two(n: usize) -> usize {
         None => 1 << (usize::BITS - 1),
         Some(x) => x >> 1,
     }
+}
+
+fn page_size() -> Result<usize, OxidebpfError> {
+    let raw_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
+
+    match raw_size.cmp(&0) {
+        std::cmp::Ordering::Less => {
+            let e = errno();
+            info!(
+                LOGGER.0,
+                "PerfMap::new_group(); perfmap error, size < 0: {}; errno: {}", raw_size, e
+            );
+            Err(OxidebpfError::LinuxError(
+                "perf map get PAGE_SIZE".to_string(),
+                nix::errno::from_i32(e),
+            ))
+        }
+        std::cmp::Ordering::Equal => {
+            info!(
+                LOGGER.0,
+                "PerfMap::new_group(); perfmap error, bad page size (size == 0)"
+            );
+            Err(OxidebpfError::BadPageSize)
+        }
+        std::cmp::Ordering::Greater => Ok(raw_size as usize),
+    }
+}
+
+/// Creates a new PerfMem for the given file descriptor.
+///
+/// On error it will attempt to close the file descriptor and report
+/// if it failed to close it.
+///
+/// # Safety:
+/// The fd must be valid and come from a perf_event_open syscall
+unsafe fn create_raw_perf(fd: RawFd, mmap_size: usize) -> Result<*mut PerfMem, OxidebpfError> {
+    let base_ptr = libc::mmap(
+        null_mut(),
+        mmap_size,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        fd,
+        0,
+    );
+
+    if base_ptr == libc::MAP_FAILED {
+        Err(handle_map_failed(fd, mmap_size))
+    } else {
+        Ok(base_ptr as *mut PerfMem)
+    }
+}
+
+unsafe fn handle_map_failed(fd: RawFd, mmap_size: usize) -> OxidebpfError {
+    let mmap_errno = nix::errno::from_i32(errno());
+    if libc::close(fd) < 0 {
+        let e = errno();
+        info!(LOGGER.0, "PerfMap::new_group(); could not close mmap fd, multiple errors; mmap_errno: {}; errno: {}", mmap_errno, e);
+        return OxidebpfError::MultipleErrors(vec![
+            OxidebpfError::LinuxError(
+                format!("perf_map => mmap(fd={},size={})", fd, mmap_size),
+                mmap_errno,
+            ),
+            OxidebpfError::LinuxError(
+                format!("perf_map cleanup => close({})", fd),
+                nix::errno::from_i32(e),
+            ),
+        ]);
+    }
+
+    info!(
+        LOGGER.0,
+        "PerfMap::new_group(); mmap failed while creating perfmap: {:?}", mmap_errno
+    );
+
+    OxidebpfError::LinuxError(
+        format!("per_event_open => mmap(fd={},size={})", fd, mmap_size),
+        mmap_errno,
+    )
 }
 
 #[cfg(test)]

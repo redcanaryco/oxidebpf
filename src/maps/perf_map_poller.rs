@@ -88,9 +88,15 @@ impl PerfMapPoller {
                 let name = &perfmap.name;
                 let cpuid = perfmap.cpuid() as i32;
 
-                perfmap
-                    .read_all()
-                    .map(move |e| e.map(|e| (name.clone(), cpuid, e)))
+                // SAFETY: events should be 0 or 1 per token->buffer
+                // meaning that no perfbuffer is running read_all more
+                // than once hence meeting the safety requirements of
+                // `read_all`
+                unsafe {
+                    perfmap
+                        .read_all()
+                        .map(move |e| e.map(|e| (name.clone(), cpuid, e)))
+                }
             })
             .filter_map(|e| match e {
                 Ok(e) => Some(e),
@@ -101,8 +107,8 @@ impl PerfMapPoller {
             });
 
         let mut dropped = 0;
-        for event in perf_events {
-            match event.2 {
+        for (map_name, cpuid, event) in perf_events {
+            match event {
                 PerfEvent::Lost(count) => {
                     dropped += count;
                     // it's okay if the channel is full try again
@@ -114,11 +120,11 @@ impl PerfMapPoller {
                         Err(TrySendError::Full(_)) => {}
                     }
                 }
-                PerfEvent::Sample(e) => tx
+                PerfEvent::Sample(data) => tx
                     .send(PerfChannelMessage::Event {
-                        map_name: event.0,
-                        cpuid: event.1,
-                        data: e.data,
+                        map_name,
+                        cpuid,
+                        data,
                     })
                     .map_err(|_| RunError::Disconnected)?,
             };

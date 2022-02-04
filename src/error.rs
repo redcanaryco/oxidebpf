@@ -50,6 +50,7 @@ pub enum OxidebpfError {
     /// There's a chance we need to change the path name and retry, which is what
     /// this error indicates.
     KretprobeNamingError,
+    UnknownPerfEvent(u32),
 }
 
 impl Display for OxidebpfError {
