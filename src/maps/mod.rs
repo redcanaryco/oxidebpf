@@ -321,15 +321,16 @@ impl<'a> PerfEventIterator<'a> {
 
         #[cfg(feature = "metrics")]
         {
-            let unread = (data_head - data_tail) % mmap_size as u64;
+            let unread = ((data_head - data_tail) % mmap_size as u64);
+            let slack = mmap_size as usize - unread as usize;
+            let slack_kb = slack as f64 / 1024_f64;
 
             let labels = [
                 ("map_name", map.name.clone()),
                 ("cpu", map.cpuid.to_string()),
             ];
 
-            metrics::gauge!("mmap.total_size", mmap_size as f64, &labels);
-            metrics::histogram!("mmap.unread_size", unread as f64, &labels);
+            metrics::histogram!("mmap.buffer_slack_kb", slack_kb as f64, &labels);
         }
 
         PerfEventIterator {

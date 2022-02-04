@@ -128,13 +128,12 @@ enabled it will use the [metrics] crate to propagate internal metrics
 related to the ebpf maps. These are the `metrics` that `oxidebpf`
 currently reports on:
 
-* `mmap.total_size`: A gauge on how much data memory is reserved in an
-mmap used for perf events. The map name and cpu are reported as labels.
-
-* `mmap.unread_size`: A histogram on how much memory was unread when
-  starting the read from the performance mmap. This is emitted on
-  every poll of the performance maps. The map name and cpu are
-  reported as labels.
+* `mmap.buffer_slack_kb`: A histogram on how much memory (in KB) are
+  unused. This is emitted right after polling the perf map file
+  descriptors but before reading from them. This is only emitted by
+  perfmaps that woke up during the epoll, if a perfmap never gets data
+  then it will not be reported by this metric. The map name and cpu
+  are reported as labels.
 
 Adding or removing metrics will not be considered a breaking change at
 this point but we may reconsider this decision in the future as we
