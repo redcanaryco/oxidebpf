@@ -88,9 +88,15 @@ impl PerfMapPoller {
                 let name = &perfmap.name;
                 let cpuid = perfmap.cpuid() as i32;
 
-                perfmap
-                    .read_all()
-                    .map(move |e| e.map(|e| (name.clone(), cpuid, e)))
+                // SAFETY: events should be 0 or 1 per token->buffer
+                // meaning that no perfbuffer is running read_all more
+                // than once hence meeting the safety requirements of
+                // `read_all`
+                unsafe {
+                    perfmap
+                        .read_all()
+                        .map(move |e| e.map(|e| (name.clone(), cpuid, e)))
+                }
             })
             .filter_map(|e| match e {
                 Ok(e) => Some(e),

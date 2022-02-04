@@ -269,14 +269,19 @@ impl PerfMap {
     /// data. Because of this we should process the iterator fast as
     /// to free space for more events.
     ///
-    /// This function should actually be &mut self since it is
-    /// mutating data in the mmap (the tail to be exact) but that
-    /// makes it harder to use and it not used outside this
-    /// crate. Handle with care. Creating two iterators at the same
-    /// for one perfmap would create issues. TODO: change it to &mut
-    /// self or mark it as unsafe?
-    pub(crate) fn read_all(&self) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
-        unsafe { PerfEventIterator::new(self) }
+    /// # Safety
+    ///
+    /// This is only safe if a single iterator is running per perfmap.
+    /// This function is marked as `&self` for easiness of use and
+    /// because it is internal only but it probably should be `&mut
+    /// self`. When the iterator is dropped it internally changes data
+    /// in the mmap that the kernel manages (data_tail to be precise)
+    /// to tell it what is the last bit we read so we shouldn't have
+    /// multiple mutations at the same time.
+    pub(crate) unsafe fn read_all(
+        &self,
+    ) -> impl Iterator<Item = Result<PerfEvent, OxidebpfError>> + '_ {
+        PerfEventIterator::new(self)
     }
 }
 
@@ -298,27 +303,29 @@ struct PerfEventIterator<'a> {
 }
 
 impl<'a> PerfEventIterator<'a> {
-    unsafe fn new(map: &'a PerfMap) -> Self {
+    fn new(map: &'a PerfMap) -> Self {
         // the first page is just metadata
         let metadata = map.base_ptr.load(Ordering::SeqCst);
 
-        // second page onwards is where the data starts
-        let base = (metadata as *const u8).add(map.page_size);
+        unsafe {
+            // second page onwards is where the data starts
+            let base = (metadata as *const u8).add(map.page_size);
 
-        // per the docs: "On SMP-capable platforms, after reading
-        // the data_head value, user space should issue an rmb()"
-        let data_head = (*metadata).data_head;
-        atomic::fence(std::sync::atomic::Ordering::Acquire);
+            // per the docs: "On SMP-capable platforms, after reading
+            // the data_head value, user space should issue an rmb()"
+            let data_head = (*metadata).data_head;
+            atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        PerfEventIterator {
-            data_tail: (*metadata).data_tail,
-            data_head,
-            errored: false,
-            copy_buf: vec![],
-            mmap_size: map.page_count * map.page_size,
-            base,
-            metadata,
-            _map: map,
+            PerfEventIterator {
+                data_tail: (*metadata).data_tail,
+                data_head,
+                errored: false,
+                copy_buf: vec![],
+                mmap_size: map.page_count * map.page_size,
+                base,
+                metadata,
+                _map: map,
+            }
         }
     }
 }
