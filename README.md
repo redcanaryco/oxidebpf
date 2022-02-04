@@ -118,3 +118,26 @@ Note: some tests will require root privileges to pass. Other tests require a sin
 to pass. To test consistently, try running: `sudo -E /path/to/your/.cargo/bin/cargo test -- --test-threads=1`.
 For convenience, you can alias this as `alias scargo="sudo -E $HOME/.cargo/bin/cargo"` and run tests with
 `scargo test -- --test-threads=`.
+
+# Features
+
+## Metrics
+
+`oxidebpf` has a (disabled by default) feature called `metrics`. When
+enabled it will use the [metrics] crate to propagate internal metrics
+related to the ebpf maps. These are the `metrics` that `oxidebpf`
+currently reports on:
+
+* `mmap.total_size`: A gauge on how much data memory is reserved in an
+mmap used for perf events. The map name and cpu are reported as labels.
+
+* `mmap.unread_size`: A histogram on how much memory was unread when
+  starting the read from the performance mmap. This is emitted on
+  every poll of the performance maps. The map name and cpu are
+  reported as labels.
+
+Adding or removing metrics will not be considered a breaking change at
+this point but we may reconsider this decision in the future as we
+stabilize what metrics seem the most useful
+
+[metrics]: https://docs.rs/metrics/latest/metrics/
