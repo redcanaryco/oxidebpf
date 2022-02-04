@@ -118,3 +118,29 @@ Note: some tests will require root privileges to pass. Other tests require a sin
 to pass. To test consistently, try running: `sudo -E /path/to/your/.cargo/bin/cargo test -- --test-threads=1`.
 For convenience, you can alias this as `alias scargo="sudo -E $HOME/.cargo/bin/cargo"` and run tests with
 `scargo test -- --test-threads=`.
+
+# Features
+
+## Metrics
+
+`oxidebpf` has a (disabled by default) feature called `metrics`. When
+enabled it will use the [metrics] crate to propagate internal metrics
+related to the ebpf maps. These are the `metrics` that `oxidebpf`
+currently reports on:
+
+* `mmap.buffer_slack_kb`: A histogram on how much memory (in KB) are
+  unused. This is emitted right after polling the perf map file
+  descriptors but before reading from them. This is only emitted by
+  perfmaps that woke up during the epoll, if a perfmap never gets data
+  then it will not be reported by this metric. The map name and cpu
+  are reported as labels.
+
+* `poller.channel.full`: A counter of how many times we tried to send
+  a dropped message across the user provided channel for perfmaps but
+  failed due to it being full. The map name is reported as a label.
+
+Adding or removing metrics will not be considered a breaking change at
+this point but we may reconsider this decision in the future as we
+stabilize what metrics seem the most useful
+
+[metrics]: https://docs.rs/metrics/latest/metrics/

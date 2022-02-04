@@ -4,7 +4,7 @@ description = "A pure-Rust library for managing eBPF programs."
 homepage = "https://github.com/redcanaryco/oxidebpf"
 repository = "https://github.com/redcanaryco/oxidebpf"
 readme = "README.md"
-version = "0.2.0"
+version = "0.2.1"
 license = "BSD-3-Clause"
 keywords = ["eBPF", "BPF", "linux"]
 categories = ["config", "data-structures", "os::linux-apis", "parsing"]
@@ -17,6 +17,13 @@ authors = [
     "Vince Bundage <vince.bundage@redcanary.com>"
 ]
 edition = "2021"
+
+[build-dependencies]
+# ideally we would only have this dependency when the metrics feature
+# is enabled but Rust makes it hard to combine "package"" dependencies
+# like that. We'll remove this once `metrics` updates to enabling the
+# full features already
+syn = { version = "1.0", features = ["full"] }
 
 [dependencies]
 libc = "0.2.105"
@@ -32,6 +39,7 @@ proc-mounts = "0.2.4"
 slog = "2.7.0"
 slog-atomic = "3.1.0"
 thread-priority = "0.7.0"
+metrics = { version = "0.18.0", optional = true }
 
 [dev-dependencies]
 memmap = "0.7.0"

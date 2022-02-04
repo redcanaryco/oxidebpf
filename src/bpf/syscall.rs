@@ -257,7 +257,6 @@ pub(crate) fn bpf_map_create(
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) mod tests {
-    use std::convert::TryInto;
     use std::ffi::c_void;
     use std::os::raw::{c_int, c_uint};
     use std::os::unix::io::{FromRawFd, RawFd};

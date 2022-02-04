@@ -117,6 +117,11 @@ impl PerfMapPoller {
                     match tx.try_send(PerfChannelMessage::Dropped(dropped)) {
                         Ok(_) => dropped = 0,
                         Err(TrySendError::Disconnected(_)) => return Err(RunError::Disconnected),
+                        #[cfg(feature = "metrics")]
+                        Err(TrySendError::Full(_)) => {
+                            metrics::increment_counter!("poller.channel.full", "map_name" => map_name)
+                        }
+                        #[cfg(not(feature = "metrics"))]
                         Err(TrySendError::Full(_)) => {}
                     }
                 }
