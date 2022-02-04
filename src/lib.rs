@@ -196,23 +196,25 @@ impl From<SchedulingPolicy> for thread_priority::ThreadSchedulePolicy {
     }
 }
 
+// Processes scheduled under one of the real-time policies
+// (SCHED_FIFO, SCHED_RR) have a sched_priority value in the range 1
+// (low) to 99 (high).  For threads scheduled under one of the normal
+// scheduling policies (SCHED_OTHER, SCHED_IDLE, SCHED_BATCH),
+// sched_priority is not used in scheduling decisions (it must be
+// specified as 0).
+// <https://man7.org/linux/man-pages/man7/sched.7.html>
 impl From<SchedulingPolicy> for thread_priority::ThreadPriority {
     fn from(policy: SchedulingPolicy) -> Self {
         match policy {
             SchedulingPolicy::Other(_) | SchedulingPolicy::Idle | SchedulingPolicy::Batch(_) => {
-                thread_priority::ThreadPriority::Crossplatform(
-                    (0_u8)
-                        .try_into()
-                        .expect("bug: hardcoded priority value not accepted by thread_policy"),
-                )
+                thread_priority::ThreadPriority::from_posix(thread_priority::ScheduleParams {
+                    sched_priority: 0,
+                })
             }
             SchedulingPolicy::FIFO(polling_priority) | SchedulingPolicy::RR(polling_priority) => {
-                thread_priority::ThreadPriority::Crossplatform(
-                    polling_priority
-                        .clamp(0_u8, 99_u8)
-                        .try_into()
-                        .expect("bug: clamped priority value not accepted by thread_policy"),
-                )
+                thread_priority::ThreadPriority::from_posix(thread_priority::ScheduleParams {
+                    sched_priority: polling_priority.clamp(1_u8, 99_u8) as i32,
+                })
             }
             SchedulingPolicy::Deadline(r, d, p) => {
                 thread_priority::ThreadPriority::Deadline(r, d, p)
@@ -847,6 +849,67 @@ mod program_tests {
                 panic!("Failed to get maps when they should have been present");
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use thread_priority::ThreadPriority;
+
+    use super::*;
+
+    #[test]
+    fn idle_no_priority() {
+        let policy = SchedulingPolicy::Idle;
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Crossplatform(0_u8.try_into().unwrap());
+
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn other_no_priority() {
+        let policy = SchedulingPolicy::Other(10);
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Crossplatform(0_u8.try_into().unwrap());
+
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn batch_no_priority() {
+        let policy = SchedulingPolicy::Batch(39);
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Crossplatform(0_u8.try_into().unwrap());
+
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn fifo_clamped_priority() {
+        let policy = SchedulingPolicy::FIFO(0);
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Crossplatform(1_u8.try_into().unwrap());
+
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn sched_clamped_priority() {
+        let policy = SchedulingPolicy::RR(100);
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Crossplatform(99_u8.try_into().unwrap());
+
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn deadline_priority() {
+        let policy = SchedulingPolicy::Deadline(1, 2, 3);
+        let converted: ThreadPriority = policy.into();
+        let expected = ThreadPriority::Deadline(1, 2, 3);
+
+        assert_eq!(converted, expected);
     }
 }
 
