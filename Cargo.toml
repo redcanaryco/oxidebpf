@@ -18,13 +18,6 @@ authors = [
 ]
 edition = "2021"
 
-[build-dependencies]
-# ideally we would only have this dependency when the metrics feature
-# is enabled but Rust makes it hard to combine "package"" dependencies
-# like that. We'll remove this once `metrics` updates to enabling the
-# full features already
-syn = { version = "1.0", features = ["full"] }
-
 [dependencies]
 libc = "0.2.105"
 goblin = "0.4.3"
