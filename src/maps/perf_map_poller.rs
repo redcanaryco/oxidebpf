@@ -119,7 +119,7 @@ impl PerfMapPoller {
                         Err(TrySendError::Disconnected(_)) => return Err(RunError::Disconnected),
                         #[cfg(feature = "metrics")]
                         Err(TrySendError::Full(_)) => {
-                            metrics::increment_counter!("poller.channel.full", "map_name" => map_name)
+                            metrics::increment_counter!("perfmap.channel.full", "map_name" => map_name)
                         }
                         #[cfg(not(feature = "metrics"))]
                         Err(TrySendError::Full(_)) => {}
