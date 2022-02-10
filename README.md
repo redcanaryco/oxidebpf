@@ -128,14 +128,27 @@ enabled it will use the [metrics] crate to propagate internal metrics
 related to the ebpf maps. These are the `metrics` that `oxidebpf`
 currently reports on:
 
-* `mmap.buffer_slack_kb`: A histogram on how much memory (in KB) are
-  unused. This is emitted right after polling the perf map file
-  descriptors but before reading from them. This is only emitted by
-  perfmaps that woke up during the epoll, if a perfmap never gets data
-  then it will not be reported by this metric. The map name and cpu
-  are reported as labels.
+* `perfmap.unread_size_pct`: A histogram of how much of the perfmap
+  buffer has not been read. This is emitted right after polling the
+  perf map file descriptors but before reading from them. This is only
+  emitted by perfmaps that woke up during the epoll, if a perfmap
+  never gets data then it will not report by this metric. The map name
+  and cpu are reported as labels. A `describe_histogram!` is also
+  emitted for this metric to tell reporters that this is a percentage
+  unit. This can be used to set up histogram buckets.
 
-* `poller.channel.full`: A counter of how many times we tried to send
+* `perfmap.buffer_size_kb`: A gauge of how much memory (in KB) is
+  being allocated for the data portion of the perfmap buffer. Note
+  that an extra page is always allocated for metadata. This is emitted
+  immediately prior to the creation of the map. The map name is
+  reported as a label.
+
+* `perfmap.num_buffers`: A gauge of how many buffers are being
+  allocated for a perfmap. This is also the number of online cpus that
+  oxidebpf detected. This is emitted immediately prior to the creation
+  of the perf map. The map name is reported as a label.
+
+* `perfmap.channel.full`: A counter of how many times we tried to send
   a dropped message across the user provided channel for perfmaps but
   failed due to it being full. The map name is reported as a label.
 

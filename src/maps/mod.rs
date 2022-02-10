@@ -115,9 +115,8 @@ struct PerfMem {
 pub struct PerfMap {
     pub(crate) name: String,
     base_ptr: AtomicPtr<PerfMem>,
-    page_count: usize,
+    buffer_size: usize,
     page_size: usize,
-    mmap_size: usize,
     cpuid: i32,
     pub(crate) ev_fd: RawFd,
     ev_name: String,
@@ -235,7 +234,23 @@ impl PerfMap {
         }
 
         let page_count = lte_power_of_two(page_count);
-        let mmap_size = page_size * (page_count + 1);
+        let buffer_size = page_count * page_size;
+        // allocate an extra page for metadata
+        let mmap_size = buffer_size + page_size;
+
+        #[cfg(feature = "metrics")]
+        {
+            metrics::describe_histogram!("perfmap.buffer_unread_pct", metrics::Unit::Percent, "");
+            let labels = [("map_name", map_name.to_owned())];
+
+            metrics::gauge!(
+                "perfmap.buffer_size_kb",
+                buffer_size as f64 / 1024_f64,
+                &labels
+            );
+
+            metrics::gauge!("perfmap.num_buffers", online_cpus.len() as f64, &labels);
+        }
 
         online_cpus
             .into_iter()
@@ -249,9 +264,8 @@ impl PerfMap {
                 Ok(PerfMap {
                     name: map_name.to_owned(),
                     base_ptr: AtomicPtr::new(base_ptr),
-                    page_count,
+                    buffer_size,
                     page_size,
-                    mmap_size,
                     cpuid,
                     ev_fd: fd,
                     ev_name: "".to_owned(),
@@ -293,7 +307,7 @@ struct PerfEventIterator<'a> {
     copy_buf: Vec<u8>, // re-usable buffer to make ring joins be contiguous
 
     // calculated at creation
-    mmap_size: usize,
+    buffer_size: usize,
     base: *const u8,
     metadata: *mut PerfMem,
 
@@ -317,20 +331,18 @@ impl<'a> PerfEventIterator<'a> {
 
         let data_tail = unsafe { (*metadata).data_tail };
 
-        let mmap_size = map.page_count * map.page_size;
+        let buffer_size = map.buffer_size;
 
         #[cfg(feature = "metrics")]
         {
-            let unread = (data_head - data_tail) % mmap_size as u64;
-            let slack = mmap_size as usize - unread as usize;
-            let slack_kb = slack as f64 / 1024_f64;
-
             let labels = [
                 ("map_name", map.name.clone()),
                 ("cpu", map.cpuid.to_string()),
             ];
 
-            metrics::histogram!("mmap.buffer_slack_kb", slack_kb as f64, &labels);
+            let used = (data_head - data_tail) % mmap_size as u64;
+            let pct_used = used as f64 / (mmap_size as f64 / 100_f64);
+            metrics::histogram!("perfmap.buffer_unread_pct", pct_used, &labels);
         }
 
         PerfEventIterator {
@@ -338,7 +350,7 @@ impl<'a> PerfEventIterator<'a> {
             data_head,
             errored: false,
             copy_buf: vec![],
-            mmap_size,
+            buffer_size,
             base,
             metadata,
             _marker: std::marker::PhantomData,
@@ -354,12 +366,12 @@ impl<'a> Iterator for PerfEventIterator<'a> {
             return None;
         }
 
-        let start_offset = (self.data_tail % self.mmap_size as u64) as usize;
+        let start_offset = (self.data_tail % self.buffer_size as u64) as usize;
 
         unsafe {
             let mut header = self.base.add(start_offset) as *const PerfEventHeader;
             let event_size = (*header).size as usize;
-            let capacity_remaining = self.mmap_size - start_offset;
+            let capacity_remaining = self.buffer_size - start_offset;
 
             if capacity_remaining < event_size {
                 // clear old data and reserve just enough for our event
