@@ -58,7 +58,7 @@ jobs:
       - run:
           name: cargo test
           command: |
-            sudo -E $HOME/.cargo/bin/cargo test --all-features --test-threads=1
+            sudo -E $HOME/.cargo/bin/cargo test --all-features -- --test-threads=1
 
 workflows:
   version: 2
