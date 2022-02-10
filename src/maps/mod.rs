@@ -340,8 +340,8 @@ impl<'a> PerfEventIterator<'a> {
                 ("cpu", map.cpuid.to_string()),
             ];
 
-            let used = (data_head - data_tail) % mmap_size as u64;
-            let pct_used = used as f64 / (mmap_size as f64 / 100_f64);
+            let used = (data_head - data_tail) % buffer_size as u64;
+            let pct_used = used as f64 / (buffer_size as f64 / 100_f64);
             metrics::histogram!("perfmap.buffer_unread_pct", pct_used, &labels);
         }
 
