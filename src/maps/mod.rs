@@ -307,7 +307,7 @@ struct PerfEventIterator<'a> {
     copy_buf: Vec<u8>, // re-usable buffer to make ring joins be contiguous
 
     // calculated at creation
-    mmap_size: usize,
+    buffer_size: usize,
     base: *const u8,
     metadata: *mut PerfMem,
 
@@ -331,7 +331,7 @@ impl<'a> PerfEventIterator<'a> {
 
         let data_tail = unsafe { (*metadata).data_tail };
 
-        let mmap_size = map.buffer_size;
+        let buffer_size = map.buffer_size;
 
         #[cfg(feature = "metrics")]
         {
@@ -350,7 +350,7 @@ impl<'a> PerfEventIterator<'a> {
             data_head,
             errored: false,
             copy_buf: vec![],
-            mmap_size,
+            buffer_size,
             base,
             metadata,
             _marker: std::marker::PhantomData,
@@ -366,12 +366,12 @@ impl<'a> Iterator for PerfEventIterator<'a> {
             return None;
         }
 
-        let start_offset = (self.data_tail % self.mmap_size as u64) as usize;
+        let start_offset = (self.data_tail % self.buffer_size as u64) as usize;
 
         unsafe {
             let mut header = self.base.add(start_offset) as *const PerfEventHeader;
             let event_size = (*header).size as usize;
-            let capacity_remaining = self.mmap_size - start_offset;
+            let capacity_remaining = self.buffer_size - start_offset;
 
             if capacity_remaining < event_size {
                 // clear old data and reserve just enough for our event
