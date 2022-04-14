@@ -124,7 +124,7 @@ impl TryFrom<&[u8]> for MapDefinition {
         for (dst, src) in data.iter_mut().zip(raw) {
             *dst = *src;
         }
-        Ok(unsafe { std::ptr::read(data.as_ptr() as *const _) })
+        Ok(unsafe { std::ptr::read_unaligned(data.as_ptr() as *const _) })
     }
 }
 

@@ -344,7 +344,7 @@ impl Reloc {
             .iter()
             .find(|(index, _relocs)| *index == reloc_index)
             .map(|(_index, relocs)| relocs)
-            .ok_or_else(|| OxidebpfError::MissingRelocationSection(reloc_index as u32))?;
+            .ok_or(OxidebpfError::MissingRelocationSection(reloc_index as u32))?;
 
         Ok(reloc_section
             .iter()

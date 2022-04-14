@@ -19,6 +19,12 @@ pub struct ProgramGroup<'a> {
     polling_thread_policy: Option<SchedulingPolicy>,
 }
 
+impl<'a> Default for ProgramGroup<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> ProgramGroup<'a> {
     /// Create a program group that will manage multiple
     /// [`ProgramVersion`](struct@ProgramVersion)s.
