@@ -335,10 +335,7 @@ impl<'a> PerfEventIterator<'a> {
 
         #[cfg(feature = "metrics")]
         {
-            let labels = [
-                ("map_name", map.name.clone()),
-                ("cpu", map.cpuid.to_string()),
-            ];
+            let labels = [("map_name", map.name.clone())];
 
             let used = (data_head - data_tail) % buffer_size as u64;
             let pct_used = used as f64 / (buffer_size as f64 / 100_f64);
