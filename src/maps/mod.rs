@@ -475,7 +475,7 @@ impl BpfHashMap {
     /// the `BpfHashMap` behavior is undefined.
     ///
     /// # Examples
-    /// ```
+    /// ```no_run
     /// use oxidebpf::BpfHashMap;
     /// let map: BpfHashMap = unsafe {BpfHashMap::new(
     ///    "mymap",
@@ -726,7 +726,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// (e.g., with `#[repr(C)]`) that is being used in the map.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// use oxidebpf::{BpfHashMap, RWMap};
     ///
     /// // this is safe because we are reading and writing a u64, and the value_size we
@@ -793,7 +793,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// that is being used in the map.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// use oxidebpf::{BpfHashMap, RWMap};
     /// use std::process;
     ///
