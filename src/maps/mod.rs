@@ -335,10 +335,7 @@ impl<'a> PerfEventIterator<'a> {
 
         #[cfg(feature = "metrics")]
         {
-            let labels = [
-                ("map_name", map.name.clone()),
-                ("cpu", map.cpuid.to_string()),
-            ];
+            let labels = [("map_name", map.name.clone())];
 
             let used = (data_head - data_tail) % buffer_size as u64;
             let pct_used = used as f64 / (buffer_size as f64 / 100_f64);
@@ -478,7 +475,7 @@ impl BpfHashMap {
     /// the `BpfHashMap` behavior is undefined.
     ///
     /// # Examples
-    /// ```
+    /// ```no_run
     /// use oxidebpf::BpfHashMap;
     /// let map: BpfHashMap = unsafe {BpfHashMap::new(
     ///    "mymap",
@@ -729,7 +726,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// (e.g., with `#[repr(C)]`) that is being used in the map.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// use oxidebpf::{BpfHashMap, RWMap};
     ///
     /// // this is safe because we are reading and writing a u64, and the value_size we
@@ -796,7 +793,7 @@ impl<T, U> RWMap<T, U> for BpfHashMap {
     /// that is being used in the map.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// use oxidebpf::{BpfHashMap, RWMap};
     /// use std::process;
     ///
