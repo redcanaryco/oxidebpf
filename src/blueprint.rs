@@ -4,7 +4,7 @@ use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 
 use crate::LOGGER;
-use slog::info;
+use slog::{debug, info};
 
 use goblin::elf::{header, section_header, Elf, SectionHeader, Sym};
 use itertools::Itertools;
@@ -151,7 +151,7 @@ impl ProgramBlueprint {
         let mut blueprint = Self::default();
         let kernel_version = get_kernel_version(data, &elf)?;
 
-        info!(
+        debug!(
             LOGGER.0,
             "ProgramBlueprint::new(); Found kernel version: {}", kernel_version
         );
