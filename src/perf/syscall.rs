@@ -22,7 +22,7 @@ use crate::perf::constant::{
 use crate::perf::{PerfBpAddr, PerfBpLen, PerfEventAttr, PerfSample, PerfWakeup};
 use crate::ProgramType;
 use crate::LOGGER;
-use slog::info;
+use slog::{debug, info};
 use std::ffi::CString;
 
 // unsafe `ioctl( PERF_EVENT_IOC_SET_BPF )` function
@@ -114,7 +114,7 @@ pub(crate) fn perf_event_open_debugfs(
 
     let debugfs_path = mount_point().unwrap_or_else(|| "/sys/kernel/debug".to_string());
     let event_path = format!("{}/tracing/{}_events", debugfs_path, prefix);
-    info!(
+    debug!(
         LOGGER.0,
         "perf_event_open_debugfs(); event_path: {}", event_path
     );
@@ -219,7 +219,7 @@ pub(crate) fn perf_event_open(
     };
     if ret < 0 {
         let e = errno();
-        info!(
+        debug!(
             LOGGER.0,
             "perf_event_open(); error while calling SYS_perf_event_open; errno: {}", e
         );
@@ -227,15 +227,15 @@ pub(crate) fn perf_event_open(
         // check if the kernel is too paranoid
         let perf_paranoid_setting =
             std::fs::read_to_string((*PERF_PATH).as_path()).unwrap_or_else(|e| e.to_string());
-        info!(
+        debug!(
             LOGGER.0,
             "Perf paranoid settings: {}", perf_paranoid_setting
         );
 
         let (hdr, caps) = crate::get_capabilities()?;
-        info!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdr, caps);
+        debug!(LOGGER.0, "CapHeader: {:?}; CapData: {:x?}", hdr, caps);
 
-        info!(
+        debug!(
             LOGGER.0,
             "perf_event_open([{:#?}], {}, {}, {}, {})", attr, pid, cpu, group_fd, flags
         );
@@ -444,14 +444,14 @@ pub(crate) fn attach_kprobe_debugfs(
         attach_point,
     )?;
 
-    info!(
+    debug!(
         LOGGER.0,
         "attach_kprobe_debugfs(); event_path: {}; is_return: {}", event_path, is_return
     );
 
     match perf_attach_tracepoint_with_debugfs(fd, event_path.clone(), cpu) {
         Err(OxidebpfError::KretprobeNamingError) => {
-            info!(
+            debug!(
                 LOGGER.0,
                 "attach_kprobe_debugfs(); FileIOError - checking if retprobe"
             );
@@ -459,7 +459,7 @@ pub(crate) fn attach_kprobe_debugfs(
                 // depending on the kernel version, we may need to have either `kprobe`
                 // or `kretprobe` as the path
                 let new_path = event_path.replace("kretprobe", "kprobe");
-                info!(LOGGER.0, "attach_kprobe_debugfs(); new_path: {}", new_path);
+                debug!(LOGGER.0, "attach_kprobe_debugfs(); new_path: {}", new_path);
                 perf_attach_tracepoint_with_debugfs(fd, new_path, cpu)
             } else {
                 info!(
