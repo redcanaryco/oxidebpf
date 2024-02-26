@@ -25,7 +25,7 @@ commands:
 jobs:
   verify-purity:
     machine:
-      image: ubuntu-2004:202107-02
+      image: ubuntu-2004:current
     resource_class: medium
     environment:
       TZ: "/usr/share/zoneinfo/America/Denver"
@@ -46,7 +46,7 @@ jobs:
             cargo clippy
   build-and-test:
     machine:
-      image: ubuntu-2004:202107-02
+      image: ubuntu-2004:current
     resource_class: medium
     environment:
       TZ: "/usr/share/zoneinfo/America/Denver"
